@@ -54,25 +54,28 @@ Environment:
 
 Append --help to a command (e.g. nram migrate --help) for command-specific usage.`
 
-// printUsage writes the top-level help screen.
+// printUsage writes the top-level help screen. A failed write to the help
+// stream is not actionable, so the error is deliberately ignored (matching how
+// errcheck already treats os.Stderr help output elsewhere).
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, usageText)
+	_, _ = fmt.Fprintln(w, usageText)
 }
 
 // printVersion writes the build identity (semantic version, short commit, dirty
-// flag, and Go runtime) using the embedded VCS stamps.
+// flag, and Go runtime) using the embedded VCS stamps. Writes to the version
+// stream are best-effort, so the return values are deliberately ignored.
 func printVersion(w io.Writer) {
 	b := version.Get()
-	fmt.Fprintf(w, "nram %s\n", b.Version)
-	fmt.Fprintf(w, "  commit: %s", b.Commit)
+	_, _ = fmt.Fprintf(w, "nram %s\n", b.Version)
+	_, _ = fmt.Fprintf(w, "  commit: %s", b.Commit)
 	if b.Dirty {
-		fmt.Fprint(w, " (dirty)")
+		_, _ = fmt.Fprint(w, " (dirty)")
 	}
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	if b.Time != "" {
-		fmt.Fprintf(w, "  built:  %s\n", b.Time)
+		_, _ = fmt.Fprintf(w, "  built:  %s\n", b.Time)
 	}
-	fmt.Fprintf(w, "  go:     %s\n", b.Go)
+	_, _ = fmt.Fprintf(w, "  go:     %s\n", b.Go)
 }
 
 // hasHelpToken reports whether any of the given args is a help request.
@@ -105,12 +108,12 @@ func handleInfoFlags(args []string) bool {
 		return true
 	case "migrate":
 		if hasHelpToken(args[2:]) {
-			fmt.Fprintln(os.Stdout, migration.MigrateUsage)
+			_, _ = fmt.Fprintln(os.Stdout, migration.MigrateUsage)
 			return true
 		}
 	case "migrate-to-postgres":
 		if hasHelpToken(args[2:]) {
-			fmt.Fprintln(os.Stdout, migrateToPostgresUsage)
+			_, _ = fmt.Fprintln(os.Stdout, migrateToPostgresUsage)
 			return true
 		}
 	}

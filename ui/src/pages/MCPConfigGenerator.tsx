@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CopyButton } from "../components/CopyButton";
 import { getInstructions } from "../api/client";
 
@@ -45,6 +45,21 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 
 type Snippets = { claude: string; cursor: string; agents: string };
 
+// A single labeled snippet card within a System Prompt Snippet section: which
+// fetched flavor to show and the prose that frames it.
+type SnippetCardSpec = {
+  label: string;
+  description: ReactNode;
+  snippet: keyof Snippets;
+};
+
+// Per-tab content for the System Prompt Snippet section: the placement guidance
+// under the shared heading, plus one card per snippet the client needs.
+type SystemPromptSpec = {
+  description: ReactNode;
+  cards: SnippetCardSpec[];
+};
+
 // SnippetBlock renders a fetched instructions snippet, or a loading/error
 // placeholder while the fetch is in flight or has failed.
 function SnippetBlock({ code, error }: { code: string | undefined; error: string | null }) {
@@ -55,6 +70,54 @@ function SnippetBlock({ code, error }: { code: string | undefined; error: string
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
   return <CodeBlock code={code} />;
+}
+
+// A single labeled snippet card: a heading row (label + description) above the
+// fetched snippet. Used by SystemPromptSection; most tabs render one, the API
+// key tab renders several.
+function SnippetCard({ label, description, code, error }: {
+  label: string;
+  description: ReactNode;
+  code: string | undefined;
+  error: string | null;
+}) {
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div className="space-y-1">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+      <SnippetBlock code={code} error={error} />
+    </div>
+  );
+}
+
+// SystemPromptSection renders the "System Prompt Snippet" block for a tab: a
+// shared heading plus placement guidance, then one card per snippet the client
+// needs. The per-tab content lives in SYSTEM_PROMPT_SECTIONS so each client is
+// data, not copy-pasted markup.
+function SystemPromptSection({ spec, snippets, error }: {
+  spec: SystemPromptSpec;
+  snippets: Snippets | null;
+  error: string | null;
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-sm font-medium">System Prompt Snippet</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{spec.description}</p>
+      </div>
+      {spec.cards.map((card) => (
+        <SnippetCard
+          key={card.label}
+          label={card.label}
+          description={card.description}
+          code={snippets?.[card.snippet]}
+          error={error}
+        />
+      ))}
+    </div>
+  );
 }
 
 // HostedWebHttpsNote explains why the hosted web clients (ChatGPT, claude.ai, and
@@ -367,6 +430,110 @@ function ApiKeyTab({ serverUrl, apiKey, setApiKey }: {
 }
 
 // ---------------------------------------------------------------------------
+// System Prompt Snippet content
+// ---------------------------------------------------------------------------
+
+// Per-tab placement guidance for the System Prompt Snippet section. Each client
+// reads the instructions from a different place (a rules file vs. a preferences
+// UI), so the prose and the snippet flavor vary while the markup is shared. The
+// Record is keyed by ToolTab, so adding a tab forces adding its guidance here.
+const SYSTEM_PROMPT_SECTIONS: Record<ToolTab, SystemPromptSpec> = {
+  "claude-code": {
+    description:
+      "Add this snippet to your project's CLAUDE.md file to guide Claude on how to use nram effectively.",
+    cards: [
+      {
+        label: "For CLAUDE.md",
+        description:
+          "This provides detailed guidance for proactive memory usage. Place it in your project's CLAUDE.md or your global ~/.claude/CLAUDE.md file.",
+        snippet: "claude",
+      },
+    ],
+  },
+  "claude-desktop": {
+    description:
+      "Claude Desktop and Claude.ai do not read a CLAUDE.md file. Paste these instructions into your Claude preferences so they apply to your chats.",
+    cards: [
+      {
+        label: "For Claude personal preferences",
+        description: (
+          <>
+            Open <span className="font-medium">Settings &rarr; Profile</span> and paste this into{" "}
+            <span className="font-medium">&ldquo;What preferences should Claude consider in responses?&rdquo;</span>{" "}
+            to apply it to every conversation, or add it to a specific{" "}
+            <span className="font-medium">Project&apos;s instructions</span> to scope it to one project.
+          </>
+        ),
+        snippet: "claude",
+      },
+    ],
+  },
+  cursor: {
+    description:
+      "Add this snippet to your project's .cursorrules file to guide Cursor on how to use nram effectively.",
+    cards: [
+      {
+        label: "For .cursorrules",
+        description:
+          "A condensed version of the memory instructions suitable for Cursor's rule format.",
+        snippet: "cursor",
+      },
+    ],
+  },
+  codex: {
+    description:
+      "Add this snippet to your project's AGENTS.md file to guide Codex on how to use nram effectively.",
+    cards: [
+      {
+        label: "For AGENTS.md",
+        description:
+          "Place this in your project's AGENTS.md or your global ~/.codex/AGENTS.md file.",
+        snippet: "agents",
+      },
+    ],
+  },
+  opencode: {
+    description:
+      "Add this snippet to your project's AGENTS.md file to guide OpenCode on how to use nram effectively.",
+    cards: [
+      {
+        label: "For AGENTS.md",
+        description:
+          "Place this in your project's AGENTS.md or your global ~/.config/opencode/AGENTS.md file. OpenCode also reads CLAUDE.md as a fallback.",
+        snippet: "agents",
+      },
+    ],
+  },
+  chatgpt: {
+    description:
+      "ChatGPT does not read a rules file. Paste these instructions into your ChatGPT personalization settings so they apply to your chats.",
+    cards: [
+      {
+        label: "For ChatGPT custom instructions",
+        description: (
+          <>
+            Open{" "}
+            <span className="font-medium">Settings &rarr; Personalization &rarr; Custom instructions</span>{" "}
+            and paste this in; it fits within the 1,500-character limit. To scope it to one project
+            instead, add it to a <span className="font-medium">Project&apos;s instructions</span>.
+          </>
+        ),
+        snippet: "cursor",
+      },
+    ],
+  },
+  "api-key": {
+    description:
+      "If your MCP client supports a system prompt or rules file, add the appropriate snippet to instruct the model on how to use nram.",
+    cards: [
+      { label: "For CLAUDE.md", description: "Detailed guidance for Claude-based tools.", snippet: "claude" },
+      { label: "For .cursorrules", description: "Condensed version for Cursor-based tools.", snippet: "cursor" },
+      { label: "For AGENTS.md", description: "For OpenAI Codex-based tools.", snippet: "agents" },
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -466,112 +633,13 @@ function MCPConfigGenerator() {
         )}
       </div>
 
-      {/* System prompts: shown only for tools that have a system prompt file */}
-      {(activeTab === "claude-code" || activeTab === "claude-desktop") && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Add this snippet to your project&apos;s CLAUDE.md file to guide Claude on how to use
-              nram effectively.
-            </p>
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For CLAUDE.md</p>
-              <p className="text-sm text-muted-foreground">
-                This provides detailed guidance for proactive memory usage. Place it in
-                your project&apos;s CLAUDE.md or your global ~/.claude/CLAUDE.md file.
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.claude} error={snippetError} />
-          </div>
-        </div>
-      )}
-
-      {activeTab === "cursor" && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Add this snippet to your project&apos;s .cursorrules file to guide Cursor on how to
-              use nram effectively.
-            </p>
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For .cursorrules</p>
-              <p className="text-sm text-muted-foreground">
-                A condensed version of the memory instructions suitable for Cursor&apos;s
-                rule format.
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.cursor} error={snippetError} />
-          </div>
-        </div>
-      )}
-
-      {(activeTab === "codex" || activeTab === "opencode") && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Add this snippet to your project&apos;s AGENTS.md file to guide
-              {activeTab === "codex" ? " Codex" : " OpenCode"} on how to use nram effectively.
-            </p>
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For AGENTS.md</p>
-              <p className="text-sm text-muted-foreground">
-                {activeTab === "codex"
-                  ? "Place this in your project\u2019s AGENTS.md or your global ~/.codex/AGENTS.md file."
-                  : "Place this in your project\u2019s AGENTS.md or your global ~/.config/opencode/AGENTS.md file. OpenCode also reads CLAUDE.md as a fallback."}
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.agents} error={snippetError} />
-          </div>
-        </div>
-      )}
-
-      {activeTab === "api-key" && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-sm font-medium">System Prompt Snippet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              If your MCP client supports a system prompt or rules file, add the
-              appropriate snippet to instruct the model on how to use nram.
-            </p>
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For CLAUDE.md</p>
-              <p className="text-sm text-muted-foreground">
-                Detailed guidance for Claude-based tools.
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.claude} error={snippetError} />
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For .cursorrules</p>
-              <p className="text-sm text-muted-foreground">
-                Condensed version for Cursor-based tools.
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.cursor} error={snippetError} />
-          </div>
-          <div className="bg-card rounded-md border border-border p-4 space-y-4">
-            <div className="space-y-1">
-              <p className="text-sm font-medium">For AGENTS.md</p>
-              <p className="text-sm text-muted-foreground">
-                For OpenAI Codex-based tools.
-              </p>
-            </div>
-            <SnippetBlock code={snippets?.agents} error={snippetError} />
-          </div>
-        </div>
-      )}
+      {/* System prompts: per-tab placement guidance, driven by
+          SYSTEM_PROMPT_SECTIONS so each client is data, not copy-pasted markup. */}
+      <SystemPromptSection
+        spec={SYSTEM_PROMPT_SECTIONS[activeTab]}
+        snippets={snippets}
+        error={snippetError}
+      />
     </div>
   );
 }

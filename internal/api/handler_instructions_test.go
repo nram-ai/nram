@@ -66,6 +66,12 @@ func TestInstructionsHandler_Cursor(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "reasoning or justifying a skip is itself a violation") {
 		t.Fatal("cursor body is missing the anti-rationalization session-start clause")
 	}
+	// The condensed body is reused for ChatGPT's Custom instructions field, which
+	// hard-caps at 1500 characters and rejects input past the cap. Keep it under
+	// that limit so it stays pasteable there.
+	if len(cursor) > 1500 {
+		t.Fatalf("cursor body is %d chars, want <= 1500 to fit ChatGPT Custom instructions", len(cursor))
+	}
 }
 
 func TestInstructionsHandler_UnknownFormat(t *testing.T) {
