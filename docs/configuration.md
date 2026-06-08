@@ -50,7 +50,6 @@ YAML values support environment-variable interpolation: `${VAR_NAME:-default}`.
 | `NRAM_CONFIG` | Path to a config file (alternative to `--config`) |
 | `NRAM_ADMIN_EMAIL` | Headless bootstrap administrator email (first boot only) |
 | `NRAM_ADMIN_PASS` | Headless bootstrap administrator password (first boot only) |
-| `NRAM_ENABLE_ENRICHMENT_BACKFILL` | Set to `1` to run the enrichment backfill at startup without exiting |
 
 > **Removed surface (2026-04-30).** Provider, vector, and tuning settings are no longer accepted in bootstrap config. The YAML keys `embed.*`, `fact.*`, `entity.*`, `qdrant.*`, `hnsw.*`, and `enrichment_orphan_grace_seconds`, and the env vars `NRAM_EMBED_*`, `NRAM_FACT_*`, `NRAM_ENTITY_*`, `NRAM_ENRICHMENT_ORPHAN_GRACE_SECONDS`, and `NRAM_MCP_MAX_RESULT_TOKENS` now live exclusively at runtime in the DB-backed settings registry. The loader logs a WARN line for each deprecated key it sees and ignores the value. Manage them at `/admin/settings`.
 
@@ -106,7 +105,6 @@ Migrations run automatically on startup when `migrate_on_start: true` (the defau
 | `--backfill-enrichment` | Enqueue enrichment jobs for memories missing vectors, then exit. The worker skips fact/entity extraction for memories whose lineage/relationships already exist, so re-running is cheap. |
 | `--reembed-all-memories` | Force re-embed every live memory (e.g. after switching embedding models), then exit |
 | `--normalize-memory-tags` | Rewrite tags on all memory rows to the canonical normalized form, then exit |
-| `migrate up` / `migrate down` / `migrate version` | Migration CLI commands (run before normal startup) |
-| `NRAM_ENABLE_ENRICHMENT_BACKFILL=1` | Run the enrichment backfill at startup without forcing an exit |
+| `migrate up` / `migrate down` / `migrate status` / `migrate create <name>` | Migration CLI commands (run before normal startup) |
 
 The `backfill-audit` operator binary is documented in [operations.md](operations.md#draining-the-novelty-audit-backlog).

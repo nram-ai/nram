@@ -56,8 +56,8 @@ func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) 
 
 // EnqueueUncoveredMemories enqueues a priority-(-1) enrichment job for
 // every live memory that does not already have a pending or in-flight job.
-// Idempotent. Exposed via NRAM_ENABLE_ENRICHMENT_BACKFILL=1 (startup) and
-// --backfill-enrichment (CLI). The worker skips fact/entity extraction
+// Idempotent. Exposed via the --backfill-enrichment CLI flag. The worker skips
+// fact/entity extraction
 // when prior lineage/relationship rows already exist for the memory, so
 // re-running this against fully-enriched memories costs only the embed
 // call.

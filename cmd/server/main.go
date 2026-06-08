@@ -85,6 +85,12 @@ func configureLogger(level string) {
 }
 
 func main() {
+	// Answer --help/-h, --version/-v, and per-subcommand help before touching
+	// the config file or database, so they work in any environment.
+	if handleInfoFlags(os.Args) {
+		return
+	}
+
 	// Determine config file path from --config flag if provided.
 	var configPath string
 	for i, arg := range os.Args[1:] {
@@ -118,7 +124,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "migrate-to-postgres" {
 		_, targetURL, perr := migration.ParseMigrateArgs(os.Args)
 		if perr != nil || targetURL == "" {
-			log.Fatalf("usage: nram migrate-to-postgres --database-url <url>")
+			log.Fatalf("%s", migrateToPostgresUsage)
 		}
 		status, merr := adminstore.NewDatabaseAdminStore(db, nil).TriggerMigration(context.Background(), targetURL)
 		if merr != nil {
@@ -178,14 +184,6 @@ func main() {
 			log.Printf("normalize-memory-tags: rewrote tags on %d memory rows", n)
 			return
 		}
-	}
-
-	if os.Getenv("NRAM_ENABLE_ENRICHMENT_BACKFILL") == "1" {
-		n, err := storage.EnqueueUncoveredMemories(context.Background(), db)
-		if err != nil {
-			log.Fatalf("startup enrichment backfill failed: %v", err)
-		}
-		log.Printf("backfill: enqueued %d enrichment jobs at startup (NRAM_ENABLE_ENRICHMENT_BACKFILL=1)", n)
 	}
 
 	// Create repositories.

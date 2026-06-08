@@ -2,6 +2,7 @@ package migration
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,19 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
+
+// migrateUsageLine is the one-line synopsis shared by the parse-error messages
+// and the first line of MigrateUsage, so they never drift.
+const migrateUsageLine = "usage: nram migrate <up|down|status|create> [name]"
+
+// MigrateUsage is the full help text for the `migrate` subcommand, printed by
+// the top-level CLI help dispatcher when the operator runs `nram migrate --help`.
+const MigrateUsage = migrateUsageLine + `
+
+  up               apply all pending migrations
+  down             roll back one migration step
+  status           print the current migration version and dirty flag
+  create <name>    scaffold a new up/down SQL migration pair (in migrations/sqlite and migrations/postgres)`
 
 // RunCLI processes migration CLI commands.
 // Returns true if a CLI command was handled (caller should exit), false if not a migration command.
@@ -30,7 +44,7 @@ func RunCLI(args []string, db *sql.DB, backend string) (bool, error) {
 
 func handleMigrate(args []string, db *sql.DB, backend string) (bool, error) {
 	if len(args) < 3 {
-		return true, fmt.Errorf("usage: nram migrate <up|down|status|create> [name]")
+		return true, errors.New(migrateUsageLine)
 	}
 
 	switch args[2] {
@@ -79,7 +93,7 @@ func handleMigrate(args []string, db *sql.DB, backend string) (bool, error) {
 		return true, createMigrationFiles(name)
 
 	default:
-		return true, fmt.Errorf("unknown migrate command: %s\nusage: nram migrate <up|down|status|create> [name]", args[2])
+		return true, fmt.Errorf("unknown migrate command: %s\n%s", args[2], migrateUsageLine)
 	}
 }
 
