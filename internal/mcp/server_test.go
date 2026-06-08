@@ -402,6 +402,9 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			if !strings.Contains(result, "your first action MUST be to call procedural_fetch") {
 				t.Errorf("expected instructions to contain the blocking session-start directive")
 			}
+			if !strings.Contains(result, "reasoning or justifying a skip is itself a violation") {
+				t.Errorf("expected instructions to contain the anti-rationalization clause")
+			}
 		})
 	}
 }

@@ -147,7 +147,7 @@ func buildInstructions(hasEmbedding, hasEnrichment bool) string {
 
 	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md; use nram tools exclusively.
 
-SESSION START (BLOCKING): before you do anything this session, your first action MUST be to call procedural_fetch. Nothing comes first: no task, no answer, no other tool call. It is paginated: page through EVERY entry before acting. Re-fetch after any rule change or compaction.
+SESSION START (BLOCKING, not optional): before you do anything this session, your first action MUST be to call procedural_fetch. Nothing comes first: no task, no answer, no other tool call; reasoning or justifying a skip is itself a violation. It is paginated: page through EVERY entry before acting. Re-fetch after any rule change or compaction.
 
 RETRIEVAL: follow this order at each task start:
 `)
@@ -181,7 +181,7 @@ STORAGE (store / store_batch):
 - Project config, setup, environment → store
 - End of complex task → store summary of what and why
 
-Enrichment is fully server-managed. Every memory you store is enqueued for entity/relationship extraction unconditionally. The worker drains the queue when enrichment.enabled is true and the embedding/fact/entity providers are configured; otherwise jobs accumulate until both conditions are met. There is no per-call opt-in or opt-out.
+Enrichment is fully server-managed: every stored memory is auto-enqueued for entity/relationship extraction. The worker drains the queue once enrichment.enabled is true and the providers are configured; until then jobs wait. No per-call opt-in or opt-out.
 
 KEY RULES:
 - ALWAYS call list_projects first to discover existing projects before storing.

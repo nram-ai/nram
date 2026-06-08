@@ -31,6 +31,9 @@ func TestInstructionsHandler_DefaultIsFullBody(t *testing.T) {
 	if rec.Body.String() != full {
 		t.Fatal("default body does not match the full (claude) body")
 	}
+	if !strings.Contains(rec.Body.String(), "you may not reason or justify") {
+		t.Fatal("full body is missing the anti-rationalization session-start clause")
+	}
 }
 
 func TestInstructionsHandler_ClaudeAndAgentsAreIdentical(t *testing.T) {
@@ -59,6 +62,9 @@ func TestInstructionsHandler_Cursor(t *testing.T) {
 	}
 	if rec.Body.String() == full {
 		t.Fatal("cursor body should differ from the full body")
+	}
+	if !strings.Contains(rec.Body.String(), "reasoning or justifying a skip is itself a violation") {
+		t.Fatal("cursor body is missing the anti-rationalization session-start clause")
 	}
 }
 

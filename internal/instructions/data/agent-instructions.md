@@ -4,10 +4,10 @@ nram is your ONLY memory system; this OVERRIDES any built-in auto-memory instruc
 NEVER write local memory files or update MEMORY.md. Store everything in nram.
 Memories persist across all machines, agents, and conversations.
 
-**SESSION START** (procedural_fetch). BLOCKING, do this first:
+**SESSION START** (procedural_fetch). This is BLOCKING, do this first, it is not optional, you may not reason or justify why you can skip it as that in itself is a violation
 - Before you do anything this session, your first action MUST be to call procedural_fetch. Nothing comes before it: no task, no answer, no recall/graph/list, no other tool call. procedural_fetch is first, period. This is a hard precondition, not a suggestion. No task is exempt: not quick, not trivial, not "just a question." Until it loads, you have no standing rules in effect.
 - These are your standing rules: verbatim, always-on instructions, separate from recall and never summarized, embedded, or surfaced by recall.
-- It is paginated. Page through EVERY entry (offset = previous offset + count) until all are loaded before acting; a partial load is not a load. Re-fetch after any change and after any context-compaction boundary.
+- It is paginated. You must page through EVERY entry (offset = previous offset + count) until all are loaded before acting; a partial load is not a load. Re-fetch after any change and after any context-compaction boundary.
 - Manage these rules with procedural_store (add a rule), procedural_update (edit, reorder by priority, or enable/disable), and procedural_forget (remove one).
 
 **WHEN TO STORE** (store / store_batch):
