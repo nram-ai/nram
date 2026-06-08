@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -11,7 +12,9 @@ import (
 type DatabaseAdminStore interface {
 	GetDatabaseInfo(ctx context.Context) (*DatabaseInfo, error)
 	TestConnection(ctx context.Context, url string) (*ConnectionTestResult, error)
-	TriggerMigration(ctx context.Context, url string) (*MigrationStatus, error)
+	// StartMigration launches a SQLite-to-Postgres migration in the background;
+	// progress streams over /v1/events under the db-migration scope.
+	StartMigration(ctx context.Context, url string) error
 	Preflight(ctx context.Context, url string) (*PreflightReport, error)
 	ResetTarget(ctx context.Context, url, mode string) (*ResetResult, error)
 	MigrationAudit(ctx context.Context) (*MigrationAudit, error)
@@ -256,13 +259,18 @@ func handleTriggerMigration(w http.ResponseWriter, r *http.Request, cfg Database
 		return
 	}
 
-	status, err := cfg.Store.TriggerMigration(r.Context(), body.URL)
-	if err != nil {
-		WriteError(w, ErrInternal(err.Error()))
+	// The migration runs in the background; progress and the terminal result
+	// stream over /v1/events under the db-migration scope.
+	if err := cfg.Store.StartMigration(r.Context(), body.URL); err != nil {
+		if errors.Is(err, ErrMigrationInProgress) {
+			WriteError(w, ErrConflict(err.Error()))
+			return
+		}
+		WriteError(w, ErrBadRequest(err.Error()))
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, status)
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "started"})
 }
 
 // handlePreflight handles POST /database/preflight: runs pre-migration checks against a target URL.

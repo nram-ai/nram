@@ -38,6 +38,9 @@ import {
   type TestProviderResult,
   type ExtractionTestResult,
   type AugmentationBackfillResponse,
+  type VectorMigrationResult,
+  type VectorMigrationDirection,
+  type MigrationStartAck,
   type GraphHealth,
   type GraphRepairResult,
   type MemoryAugmentPreviewResponse,
@@ -1224,6 +1227,27 @@ export function useBackfillAugmentation() {
         qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
       }
     },
+  });
+}
+
+export function useVectorMigrationDryRun() {
+  return useMutation<
+    VectorMigrationResult,
+    Error,
+    { direction: VectorMigrationDirection }
+  >({
+    mutationFn: ({ direction }) => adminAPI.vectorMigrationDryRun(direction),
+  });
+}
+
+export function useStartVectorMigration() {
+  return useMutation<
+    MigrationStartAck,
+    Error,
+    { direction: VectorMigrationDirection; batch_size?: number }
+  >({
+    mutationFn: ({ direction, batch_size }) =>
+      adminAPI.startVectorMigration(direction, batch_size),
   });
 }
 

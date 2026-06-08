@@ -21,6 +21,7 @@ import Switch from "../components/Switch";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
+import { VectorMigrationBlock } from "../components/VectorMigrationBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCheck, faXmark, faCircleQuestion, faSpinner, faMagnifyingGlass } from "../lib/icons";
 
@@ -641,11 +642,12 @@ function InlineSettingEditor({
 // the block never depends on whether the group happened to flatten; a group
 // with a single unlabeled subsection takes the flat path, and omitting the
 // block there is what hid GraphMaintenanceBlock under Lifecycle Sweep.
-const TRAILING_BLOCK_CATEGORIES = new Set(["enrichment_query_augment", "lifecycle"]);
+const TRAILING_BLOCK_CATEGORIES = new Set(["enrichment_query_augment", "lifecycle", "qdrant"]);
 
 function CategoryTrailingBlock({ category }: { category: string }) {
   if (category === "enrichment_query_augment") return <QueryAugmentBackfillBlock />;
   if (category === "lifecycle") return <GraphMaintenanceBlock />;
+  if (category === "qdrant") return <VectorMigrationBlock />;
   return null;
 }
 

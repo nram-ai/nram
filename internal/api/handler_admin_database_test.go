@@ -17,7 +17,6 @@ type mockDatabaseAdminStore struct {
 	infoErr      error
 	testRes      *ConnectionTestResult
 	testErr      error
-	migrateRes   *MigrationStatus
 	migrateErr   error
 	preflightRes *PreflightReport
 	preflightErr error
@@ -43,9 +42,9 @@ func (m *mockDatabaseAdminStore) TestConnection(_ context.Context, url string) (
 	return m.testRes, m.testErr
 }
 
-func (m *mockDatabaseAdminStore) TriggerMigration(_ context.Context, url string) (*MigrationStatus, error) {
+func (m *mockDatabaseAdminStore) StartMigration(_ context.Context, url string) error {
 	m.migrateURL = url
-	return m.migrateRes, m.migrateErr
+	return m.migrateErr
 }
 
 func (m *mockDatabaseAdminStore) Preflight(_ context.Context, url string) (*PreflightReport, error) {
@@ -320,12 +319,7 @@ func TestAdminDatabaseTestConnectionStoreError(t *testing.T) {
 }
 
 func TestAdminDatabaseTriggerMigrationSuccess(t *testing.T) {
-	store := &mockDatabaseAdminStore{
-		migrateRes: &MigrationStatus{
-			Status:  "started",
-			Message: "migration initiated",
-		},
-	}
+	store := &mockDatabaseAdminStore{}
 
 	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
 	body := `{"url":"postgres://user:pass@localhost:5432/nram"}`
@@ -338,19 +332,32 @@ func TestAdminDatabaseTriggerMigrationSuccess(t *testing.T) {
 		t.Fatalf("expected 202, got %d; body: %s", w.Code, w.Body.String())
 	}
 
-	var resp MigrationStatus
+	var resp struct {
+		Status string `json:"status"`
+	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-
 	if resp.Status != "started" {
 		t.Errorf("expected status started, got %q", resp.Status)
 	}
-	if resp.Message != "migration initiated" {
-		t.Errorf("expected message 'migration initiated', got %q", resp.Message)
-	}
 	if store.migrateURL != "postgres://user:pass@localhost:5432/nram" {
 		t.Errorf("expected URL postgres://user:pass@localhost:5432/nram, got %q", store.migrateURL)
+	}
+}
+
+func TestAdminDatabaseTriggerMigrationInProgress(t *testing.T) {
+	store := &mockDatabaseAdminStore{migrateErr: ErrMigrationInProgress}
+
+	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+	body := `{"url":"postgres://user:pass@localhost:5432/nram"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/database/migrate", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
 	}
 }
 
@@ -379,7 +386,7 @@ func TestAdminDatabaseTriggerMigrationMissingURL(t *testing.T) {
 
 func TestAdminDatabaseTriggerMigrationStoreError(t *testing.T) {
 	store := &mockDatabaseAdminStore{
-		migrateErr: errors.New("migration failed: table already exists"),
+		migrateErr: errors.New("migration is only supported from SQLite; current backend is already postgres"),
 	}
 
 	h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
@@ -389,16 +396,19 @@ func TestAdminDatabaseTriggerMigrationStoreError(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", w.Code)
+	// StartMigration's synchronous errors are precondition failures (wrong
+	// backend), mapped to 400. Real migration failures surface asynchronously
+	// over SSE, not on this response.
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 
 	var resp errorEnvelope
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Error.Code != "internal_error" {
-		t.Errorf("expected code internal_error, got %q", resp.Error.Code)
+	if resp.Error.Code != "bad_request" {
+		t.Errorf("expected code bad_request, got %q", resp.Error.Code)
 	}
 }
 

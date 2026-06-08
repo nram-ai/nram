@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.1.2
+  version: 0.1.3
   license:
     name: MIT
 
@@ -2264,6 +2264,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MigrationStatus"
+
+  /v1/admin/vector-migration:
+    post:
+      operationId: adminVectorMigration
+      tags: [Admin - Database]
+      summary: Migrate memory and entity vectors between the SQL store and Qdrant
+      description: |
+        Copies memory and entity vectors in the requested direction. dry_run
+        counts source vectors without writing. Reads are read-only and writes
+        are upsert-only (never deletes), so the operation is safe to re-run.
+        Requires qdrant.addr to be configured.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [direction]
+              properties:
+                direction:
+                  type: string
+                  enum: [to_qdrant, from_qdrant]
+                dry_run:
+                  type: boolean
+                batch_size:
+                  type: integer
+      responses:
+        "200":
+          description: Migration result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  direction:
+                    type: string
+                  dry_run:
+                    type: boolean
+                  memory_count:
+                    type: integer
+                  entity_count:
+                    type: integer
+                  mismatch:
+                    type: boolean
+                  verify:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                        dimension:
+                          type: integer
+                        source_count:
+                          type: integer
+                        dest_count:
+                          type: integer
 
   # ── Admin: OAuth ───────────────────────────────────────────────────────
   /v1/admin/oauth/clients:

@@ -213,8 +213,8 @@ func (s *rrDatabaseStore) TestConnection(_ context.Context, _ string) (*api.Conn
 	return nil, fmt.Errorf("not implemented in test")
 }
 
-func (s *rrDatabaseStore) TriggerMigration(_ context.Context, _ string) (*api.MigrationStatus, error) {
-	return nil, fmt.Errorf("not implemented in test")
+func (s *rrDatabaseStore) StartMigration(_ context.Context, _ string) error {
+	return fmt.Errorf("not implemented in test")
 }
 
 func (s *rrDatabaseStore) Preflight(_ context.Context, _ string) (*api.PreflightReport, error) {

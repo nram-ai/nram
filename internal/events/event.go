@@ -46,6 +46,28 @@ const (
 	// Emitted by the StuckJobSweeper when it auto-requeues a presumed-dead
 	// worker's job. Payload is built in internal/enrichment/sweeper.go.
 	EnrichmentJobRequeued = "enrichment.job.requeued"
+
+	// Vector migration progress events. The admin vector migration (to/from
+	// Qdrant) runs in the background and streams progress so the UI does not
+	// hold a multi-minute request open. Scope: EventScopeVectorMigration.
+	VectorMigrationStarted   = "vector_migration.started"
+	VectorMigrationProgress  = "vector_migration.progress"
+	VectorMigrationCompleted = "vector_migration.completed"
+	VectorMigrationFailed    = "vector_migration.failed"
+
+	// SQLite-to-Postgres data migration progress events. Same rationale:
+	// the migration runs in the background and streams per-table progress.
+	// Scope: EventScopeDBMigration.
+	DBMigrationStarted   = "db_migration.started"
+	DBMigrationProgress  = "db_migration.progress"
+	DBMigrationCompleted = "db_migration.completed"
+	DBMigrationFailed    = "db_migration.failed"
+)
+
+// Scope constants for background admin operations the UI subscribes to.
+const (
+	EventScopeVectorMigration = "vector-migration"
+	EventScopeDBMigration     = "db-migration"
 )
 
 // Event represents a single event in the system.

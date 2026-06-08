@@ -167,11 +167,10 @@ var settingsGroups = []api.SettingGroup{
 		SubSections: []api.SettingSubSection{{Category: "auth"}},
 	},
 	{
-		ID:              "vector_db",
-		Label:           "Vector Database",
-		Description:     "Connection settings for the Qdrant vector database.",
-		RequiresBackend: []string{"postgres"},
-		SubSections:     []api.SettingSubSection{{Category: "qdrant"}},
+		ID:          "vector_db",
+		Label:       "Vector Database",
+		Description: "Connection settings for the Qdrant vector database. When an address is set, Qdrant takes precedence over the built-in vector index (pgvector on Postgres, HNSW on SQLite). Shown on every backend so vectors can be migrated into or back out of Qdrant from either store.",
+		SubSections: []api.SettingSubSection{{Category: "qdrant"}},
 	},
 	{
 		ID:              "hnsw",

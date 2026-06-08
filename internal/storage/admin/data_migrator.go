@@ -57,6 +57,10 @@ type DataMigrator struct {
 	// resetStuck["table"] = number of rows whose transient state was normalized
 	// by finalizeStuckJobs (e.g. processing→pending, running→failed).
 	resetStuck map[string]int
+
+	// onProgress, when set, is called once per table task as Run advances so a
+	// caller can stream progress. step is 1-based, total is the task count.
+	onProgress func(step, total int, table string)
 }
 
 // markInserted records that (table, id) was successfully written to Postgres.
@@ -371,7 +375,10 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"memories:superseded_by_pass2", m.migrateMemoriesSupersededByPass2},
 	}
 
-	for _, t := range tasks {
+	for i, t := range tasks {
+		if m.onProgress != nil {
+			m.onProgress(i+1, len(tasks), t.name)
+		}
 		if err := t.fn(ctx); err != nil {
 			return fmt.Errorf("migrate %s: %w", t.name, err)
 		}

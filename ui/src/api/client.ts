@@ -24,8 +24,27 @@ export class APIError extends Error {
     public status: number,
     public body: unknown,
   ) {
-    super(`API error ${status}`);
+    super(APIError.deriveMessage(status, body));
     this.name = "APIError";
+  }
+
+  // Surface the server's descriptive message when present so callers that show
+  // err.message get "qdrant is not configured…" instead of a bare "API error
+  // 400". Handles nram's standard envelope ({error:{code,message}}), a
+  // string-valued error field, and a top-level message; falls back to the
+  // generic status string for opaque/non-JSON bodies.
+  private static deriveMessage(status: number, body: unknown): string {
+    if (body && typeof body === "object") {
+      const err = (body as { error?: unknown }).error;
+      if (typeof err === "string" && err) return err;
+      if (err && typeof err === "object") {
+        const m = (err as { message?: unknown }).message;
+        if (typeof m === "string" && m) return m;
+      }
+      const msg = (body as { message?: unknown }).message;
+      if (typeof msg === "string" && msg) return msg;
+    }
+    return `API error ${status}`;
   }
 }
 
@@ -1124,6 +1143,30 @@ export interface MigrationStatus {
   stats?: MigrationStats;
 }
 
+// MigrationStartAck is the 202 response when a background migration is kicked
+// off. The real result arrives over SSE, not on this response.
+export interface MigrationStartAck {
+  status: string;
+}
+
+export type VectorMigrationDirection = "to_qdrant" | "from_qdrant";
+
+export interface VectorMigrationDimStat {
+  kind: string;
+  dimension: number;
+  source_count: number;
+  dest_count: number;
+}
+
+export interface VectorMigrationResult {
+  direction: VectorMigrationDirection;
+  dry_run: boolean;
+  memory_count: number;
+  entity_count: number;
+  mismatch: boolean;
+  verify: VectorMigrationDimStat[];
+}
+
 export interface PreflightCheck {
   name: string;
   status: "ok" | "warn" | "error";
@@ -1714,8 +1757,32 @@ export const adminAPI = {
     request<ResetResult>("POST", "/admin/database/reset", { url, mode }),
   migrationAudit: () =>
     request<MigrationAudit>("GET", "/admin/database/migration-audit"),
+  // Starts the SQLite->Postgres migration in the background; returns
+  // immediately. Progress and the terminal result stream over /v1/events
+  // under the "db-migration" scope.
   triggerMigration: (url: string) =>
-    request<MigrationStatus>("POST", "/admin/database/migrate", { url }),
+    request<MigrationStartAck>("POST", "/admin/database/migrate", { url }),
+
+  // Vector migration dry run. Counts the memory + entity vectors a migration in
+  // the given direction would copy, without writing. Requires qdrant.addr.
+  vectorMigrationDryRun: (direction: VectorMigrationDirection) =>
+    request<VectorMigrationResult>("POST", "/admin/vector-migration", {
+      direction,
+      dry_run: true,
+    }),
+
+  // Starts a real vector migration in the background; returns immediately.
+  // Progress and the terminal result stream over /v1/events under the
+  // "vector-migration" scope. Reads/writes are upsert-only and re-runnable.
+  startVectorMigration: (
+    direction: VectorMigrationDirection,
+    batchSize?: number,
+  ) =>
+    request<MigrationStartAck>("POST", "/admin/vector-migration", {
+      direction,
+      dry_run: false,
+      ...(typeof batchSize === "number" ? { batch_size: batchSize } : {}),
+    }),
 
   // Dreaming
   getDreamingStatus: () =>

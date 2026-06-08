@@ -246,6 +246,113 @@ func (s *QdrantStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem)
 	return nil
 }
 
+// IterateVectors scrolls every point in the (kind, dimension) collection and
+// invokes fn with the point's UUID, its namespace_id payload, and a copy of the
+// dense vector. It is read-only and used by the vector migrator to copy data
+// out of Qdrant without exposing the gRPC client. A missing collection is
+// treated as empty (fn is never called). Any point missing a parseable
+// namespace_id payload or a dense vector is a hard error rather than a silent
+// skip, so a corrupt copy cannot pass unnoticed.
+func (s *QdrantStore) IterateVectors(ctx context.Context, kind VectorKind, dimension int, batchSize int, fn func(id, namespaceID uuid.UUID, vec []float32) error) error {
+	collection, err := qdrantCollectionName(kind, dimension)
+	if err != nil {
+		return err
+	}
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	exists, err := s.client.CollectionExists(ctx, collection)
+	if err != nil {
+		return fmt.Errorf("qdrant: probe collection %s: %w", collection, err)
+	}
+	if !exists {
+		return nil
+	}
+
+	limit := uint32(batchSize)
+	var offset *qdrant.PointId
+	for {
+		points, err := s.client.Scroll(ctx, &qdrant.ScrollPoints{
+			CollectionName: collection,
+			Limit:          &limit,
+			Offset:         offset,
+			WithVectors:    qdrant.NewWithVectors(true),
+			WithPayload:    qdrant.NewWithPayload(true),
+		})
+		if err != nil {
+			return fmt.Errorf("qdrant: scroll %s failed: %w", collection, err)
+		}
+		if len(points) == 0 {
+			break
+		}
+		for _, pt := range points {
+			id, err := pointIDToUUID(pt.GetId())
+			if err != nil {
+				return fmt.Errorf("qdrant: invalid point ID in %s: %w", collection, err)
+			}
+			nsStr := pt.GetPayload()["namespace_id"].GetStringValue()
+			nsID, err := uuid.Parse(nsStr)
+			if err != nil {
+				return fmt.Errorf("qdrant: point %s in %s has invalid namespace_id payload %q: %w", id, collection, nsStr, err)
+			}
+			vec := pt.GetVectors().GetVector().GetDenseVector().GetData()
+			if len(vec) == 0 {
+				return fmt.Errorf("qdrant: point %s in %s has no dense vector", id, collection)
+			}
+			cp := make([]float32, len(vec))
+			copy(cp, vec)
+			if err := fn(id, nsID, cp); err != nil {
+				return err
+			}
+		}
+		if len(points) < batchSize {
+			break
+		}
+		offset = points[len(points)-1].GetId()
+	}
+	return nil
+}
+
+// CountVectors returns the exact number of points in the (kind, dimension)
+// collection, or 0 if the collection does not exist. Used for migration
+// verification so a partial copy is detectable.
+func (s *QdrantStore) CountVectors(ctx context.Context, kind VectorKind, dimension int) (int, error) {
+	collection, err := qdrantCollectionName(kind, dimension)
+	if err != nil {
+		return 0, err
+	}
+	exists, err := s.client.CollectionExists(ctx, collection)
+	if err != nil {
+		return 0, fmt.Errorf("qdrant: probe collection %s: %w", collection, err)
+	}
+	if !exists {
+		return 0, nil
+	}
+	count, err := s.client.Count(ctx, &qdrant.CountPoints{
+		CollectionName: collection,
+		Exact:          qdrant.PtrOf(true),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("qdrant: count %s failed: %w", collection, err)
+	}
+	return int(count), nil
+}
+
+// TotalMemoryVectors sums the memory-vector point counts across every supported
+// dimension. Used by the startup activation guard to detect a Qdrant store that
+// is active but empty.
+func (s *QdrantStore) TotalMemoryVectors(ctx context.Context) (int, error) {
+	total := 0
+	for _, dim := range OrderedVectorDimensions {
+		n, err := s.CountVectors(ctx, VectorKindMemory, dim)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
 // Search finds the nearest vectors within a namespace using cosine similarity.
 // Filters by namespace_id payload field. The caller is responsible for soft-delete exclusion.
 func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]VectorSearchResult, error) {

@@ -6,6 +6,7 @@ import {
   useResetDatabase,
   useTriggerMigration,
 } from "../hooks/useApi";
+import { useEventStream } from "../hooks/useEventStream";
 import type {
   MigrationAudit,
   MigrationStats,
@@ -156,7 +157,11 @@ function parseMigrationError(raw: string): FriendlyError {
   };
 }
 
-function MigratingIndicator() {
+function MigratingIndicator({
+  progress,
+}: {
+  progress?: { step: number; total: number; table: string } | null;
+}) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -180,7 +185,9 @@ function MigratingIndicator() {
             Migration in progress...
           </p>
           <p className="text-xs text-muted-foreground">
-            Transferring data from SQLite to PostgreSQL. Do not close this page.
+            {progress
+              ? `Step ${progress.step} of ${progress.total}: ${progress.table}`
+              : "Transferring data from SQLite to PostgreSQL. Do not close this page."}
           </p>
         </div>
         <span className="ml-auto text-xs font-mono text-muted-foreground">
@@ -188,7 +195,16 @@ function MigratingIndicator() {
         </span>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-muted">
-        <div className="h-full animate-pulse rounded-full bg-primary" />
+        {progress && progress.total > 0 ? (
+          <div
+            className="h-full rounded-full bg-primary transition-all"
+            style={{
+              width: `${Math.min(100, Math.round((progress.step / progress.total) * 100))}%`,
+            }}
+          />
+        ) : (
+          <div className="h-full animate-pulse rounded-full bg-primary" />
+        )}
       </div>
       {elapsed > 30 && (
         <p className="text-xs text-muted-foreground">
@@ -258,6 +274,45 @@ function SQLiteView({
   const [migrationStats, setMigrationStats] = useState<MigrationStats | null>(
     null,
   );
+  const [migrationProgress, setMigrationProgress] = useState<{
+    step: number;
+    total: number;
+    table: string;
+  } | null>(null);
+
+  // The migration runs in the background; progress and the terminal result
+  // stream over SSE under the "db-migration" scope. Only subscribed while a
+  // migration is actively running.
+  useEventStream({
+    scope: "db-migration",
+    enabled: step === "migrating",
+    onEvent: (evt) => {
+      const data = (evt.data ?? {}) as Record<string, unknown>;
+      switch (evt.type) {
+        case "db_migration.progress":
+          setMigrationProgress({
+            step: (data.step as number) ?? 0,
+            total: (data.total as number) ?? 0,
+            table: String(data.table ?? ""),
+          });
+          break;
+        case "db_migration.completed":
+          setMigrationStats((data.stats as MigrationStats) ?? null);
+          setMigrationProgress(null);
+          setStep("complete");
+          break;
+        case "db_migration.failed":
+          setMigrationError(
+            String(data.message ?? "Migration failed"),
+          );
+          setMigrationProgress(null);
+          setStep("audit");
+          break;
+        default:
+          break;
+      }
+    },
+  });
 
   const preflightMutation = usePreflightDatabase();
   const resetMutation = useResetDatabase();
@@ -335,17 +390,12 @@ function SQLiteView({
   const handleStartMigration = useCallback(() => {
     setMigrationError(null);
     setMigrationStats(null);
+    setMigrationProgress(null);
     setStep("migrating");
+    // The POST only starts the migration (202). Completion and progress arrive
+    // over SSE (handled by the useEventStream above). A synchronous error here
+    // means the request to start was rejected (e.g. wrong backend).
     migrateMutation.mutate(dbUrl, {
-      onSuccess: (data) => {
-        setMigrationStats(data.stats ?? null);
-        if (data.status === "complete") {
-          setStep("complete");
-        } else {
-          setMigrationError(data.message || "Migration failed");
-          setStep("audit");
-        }
-      },
       onError: (error) => {
         setMigrationError(
           error instanceof Error ? error.message : "Migration failed",
@@ -631,7 +681,9 @@ function SQLiteView({
           )}
 
           {/* Step 4: Migrating */}
-          {step === "migrating" && <MigratingIndicator />}
+          {step === "migrating" && (
+            <MigratingIndicator progress={migrationProgress} />
+          )}
 
           {/* Step 5: Complete */}
           {step === "complete" && (

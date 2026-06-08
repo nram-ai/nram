@@ -9,17 +9,23 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver
 	"github.com/nram-ai/nram/internal/api"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
 // DatabaseAdminStore implements api.DatabaseAdminStore using the DB interface.
 type DatabaseAdminStore struct {
-	db storage.DB
+	db  storage.DB
+	bus events.EventBus
+
+	guard singleFlight
 }
 
-// NewDatabaseAdminStore creates a new DatabaseAdminStore.
-func NewDatabaseAdminStore(db storage.DB) *DatabaseAdminStore {
-	return &DatabaseAdminStore{db: db}
+// NewDatabaseAdminStore creates a new DatabaseAdminStore. bus may be nil (e.g.
+// for the migrate-to-postgres CLI path, which runs synchronously and does not
+// stream progress).
+func NewDatabaseAdminStore(db storage.DB, bus events.EventBus) *DatabaseAdminStore {
+	return &DatabaseAdminStore{db: db, bus: bus}
 }
 
 func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.DatabaseInfo, error) {
@@ -45,27 +51,9 @@ func (s *DatabaseAdminStore) GetDatabaseInfo(ctx context.Context) (*api.Database
 		}
 	}
 
-	// Vector counts: SQLite has a single memory_vectors table; Postgres has per-dimension tables.
-	if s.db.Backend() == storage.BackendSQLite {
-		row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM memory_vectors")
-		if err := row.Scan(&info.DataCounts.Vectors); err != nil {
-			info.DataCounts.Vectors = 0
-		}
-	} else {
-		pgVectorTables := []string{
-			"memory_vectors_384", "memory_vectors_512", "memory_vectors_768",
-			"memory_vectors_1024", "memory_vectors_1536", "memory_vectors_3072",
-		}
-		var total int
-		for _, vt := range pgVectorTables {
-			var count int
-			row := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM "+vt)
-			if row.Scan(&count) == nil {
-				total += count
-			}
-		}
-		info.DataCounts.Vectors = total
-	}
+	// Vector counts: SQLite has a single memory_vectors table; Postgres has
+	// per-dimension tables. Shared with the startup activation guard.
+	info.DataCounts.Vectors = storage.MemoryVectorCount(ctx, s.db)
 
 	if s.db.Backend() == storage.BackendSQLite {
 		// SQLite version.
@@ -149,14 +137,61 @@ func (s *DatabaseAdminStore) TestConnection(ctx context.Context, url string) (*a
 	}, nil
 }
 
-// TriggerMigration runs a full SQLite-to-Postgres data migration.
-// It rejects the request if the current backend is already Postgres.
+// TriggerMigration runs a full SQLite-to-Postgres data migration synchronously
+// and returns the final status. Used by the migrate-to-postgres CLI. The admin
+// HTTP path uses StartMigration instead, which runs in the background and
+// streams progress over SSE.
 func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (*api.MigrationStatus, error) {
+	return s.runMigration(ctx, url, nil), nil
+}
+
+// StartMigration launches a SQLite-to-Postgres migration in the background and
+// returns immediately. Progress and the terminal result stream over the event
+// bus under EventScopeDBMigration. Returns an error if the current backend is
+// not SQLite or a migration is already running.
+func (s *DatabaseAdminStore) StartMigration(_ context.Context, url string) error {
+	if s.db.Backend() != storage.BackendSQLite {
+		return fmt.Errorf("migration is only supported from SQLite; current backend is already postgres")
+	}
+
+	if !s.guard.tryAcquire() {
+		return api.ErrMigrationInProgress
+	}
+
+	go func() {
+		bg := context.Background()
+		defer s.guard.release()
+
+		events.Emit(bg, s.bus, events.DBMigrationStarted, events.EventScopeDBMigration, map[string]any{})
+
+		onProgress := func(step, total int, table string) {
+			events.Emit(bg, s.bus, events.DBMigrationProgress, events.EventScopeDBMigration, map[string]any{
+				"step":  step,
+				"total": total,
+				"table": table,
+			})
+		}
+
+		status := s.runMigration(bg, url, onProgress)
+		if status.Status != "complete" {
+			events.Emit(bg, s.bus, events.DBMigrationFailed, events.EventScopeDBMigration, status)
+			return
+		}
+		events.Emit(bg, s.bus, events.DBMigrationCompleted, events.EventScopeDBMigration, status)
+	}()
+
+	return nil
+}
+
+// runMigration performs the SQLite-to-Postgres data migration and returns its
+// status. It rejects the request if the current backend is already Postgres.
+// onProgress, when set, is invoked per table task during the copy.
+func (s *DatabaseAdminStore) runMigration(ctx context.Context, url string, onProgress func(step, total int, table string)) *api.MigrationStatus {
 	if s.db.Backend() != storage.BackendSQLite {
 		return &api.MigrationStatus{
 			Status:  "error",
 			Message: "migration is only supported from SQLite; current backend is already postgres",
-		}, nil
+		}
 	}
 
 	dm, err := newDataMigrator(ctx, s.db.DB(), url)
@@ -164,8 +199,9 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 		return &api.MigrationStatus{
 			Status:  "error",
 			Message: fmt.Sprintf("failed to initialize migration: %v", err),
-		}, nil
+		}
 	}
+	dm.onProgress = onProgress
 	defer func() { _ = dm.Close() }()
 
 	if err := dm.Run(ctx); err != nil {
@@ -179,7 +215,7 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 				SkippedUpdates: stats.SkippedUpdates,
 				ResetStuck:     stats.ResetStuck,
 			},
-		}, nil
+		}
 	}
 
 	stats := dm.Stats()
@@ -195,5 +231,5 @@ func (s *DatabaseAdminStore) TriggerMigration(ctx context.Context, url string) (
 			SkippedOrphans: stats.SkippedOrphans,
 			SkippedUpdates: stats.SkippedUpdates,
 		},
-	}, nil
+	}
 }

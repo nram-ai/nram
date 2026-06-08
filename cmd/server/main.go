@@ -120,7 +120,7 @@ func main() {
 		if perr != nil || targetURL == "" {
 			log.Fatalf("usage: nram migrate-to-postgres --database-url <url>")
 		}
-		status, merr := adminstore.NewDatabaseAdminStore(db).TriggerMigration(context.Background(), targetURL)
+		status, merr := adminstore.NewDatabaseAdminStore(db, nil).TriggerMigration(context.Background(), targetURL)
 		if merr != nil {
 			log.Fatalf("migrate-to-postgres failed: %v", merr)
 		}
@@ -339,14 +339,34 @@ func main() {
 		KeepAliveTimeout: uint(settingsSvc.ResolveIntWithDefault(bootCtx, service.SettingQdrantKeepAliveTimeout, "global")),
 	}
 
+	// buildHNSWConfig resolves the deployment's HNSW tuning from settings. Used
+	// both to construct the live SQLite vector store and the migration store's
+	// reverse-write target, so they stay in lockstep.
+	buildHNSWConfig := func() storage.HNSWConfig {
+		return storage.HNSWConfig{
+			M:                settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWM, "global"),
+			EfConstruction:   settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfConstruction, "global"),
+			EfSearch:         settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfSearch, "global"),
+			MaxLoadedIndexes: settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWMaxLoadedIndexes, "global"),
+		}
+	}
+
 	// Create vector store.
 	// Priority: Qdrant (if configured) > PgVector (if Postgres) > HNSWStore (if SQLite).
 	var vectorStore storage.VectorStore
 	var hnswStore *storage.HNSWStore
+	var qdrantStore *storage.QdrantStore
 	if qdrantCfg.Addr != "" {
-		vectorStore, err = storage.NewQdrantStore(qdrantCfg)
-		if err != nil {
-			log.Printf("warning: qdrant connection failed (vector search disabled): %v", err)
+		// Only adopt Qdrant on a successful construction; assigning the
+		// (nil, err) return straight into the interface would leave a non-nil
+		// interface wrapping a typed-nil store and suppress the pgvector/HNSW
+		// fallback below.
+		qs, qerr := storage.NewQdrantStore(qdrantCfg)
+		if qerr != nil {
+			log.Printf("warning: qdrant connection failed (vector search disabled): %v", qerr)
+		} else {
+			vectorStore = qs
+			qdrantStore = qs
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
@@ -359,17 +379,27 @@ func main() {
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
-		hnswCfg := storage.HNSWConfig{
-			M:                settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWM, "global"),
-			EfConstruction:   settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfConstruction, "global"),
-			EfSearch:         settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWEfSearch, "global"),
-			MaxLoadedIndexes: settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingHNSWMaxLoadedIndexes, "global"),
-		}
+		hnswCfg := buildHNSWConfig()
 		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
 		defer func() { _ = hnswStore.Close() }()
 		log.Printf("hnsw vector store initialized (SQLite backend; M=%d ef_construction=%d ef_search=%d max_loaded=%d)",
 			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
+	}
+
+	// Activation guard: if Qdrant is the active store but holds no memory
+	// vectors while the SQL store still does, the operator most likely set
+	// qdrant.addr and restarted without migrating. Recall is degraded until a
+	// migration runs, so warn loudly rather than fail silently.
+	if qdrantStore != nil {
+		// Check the SQL side first (one cheap query): only probe Qdrant when
+		// there are vectors that would actually need migrating, so a fresh
+		// deployment skips the per-dimension Qdrant round trips at startup.
+		if sqlCount := storage.MemoryVectorCount(bootCtx, db); sqlCount > 0 {
+			if qCount, err := qdrantStore.TotalMemoryVectors(bootCtx); err == nil && qCount == 0 {
+				log.Printf("warning: Qdrant is the active vector store but its memory collections are empty while the SQL store holds %d memory vectors; recall will be degraded until you migrate (Admin -> Settings -> Vector Database -> Migrate)", sqlCount)
+			}
+		}
 	}
 
 	// Wrap the vector store with metrics instrumentation so every Search
@@ -583,7 +613,17 @@ func main() {
 	usageStore := adminstore.NewUsageStore(db)
 	aggregatesStore := adminstore.NewAggregatesStore(db)
 	auditStore := adminstore.NewAuditStore(db)
-	databaseAdminStore := adminstore.NewDatabaseAdminStore(db)
+	databaseAdminStore := adminstore.NewDatabaseAdminStore(db, eventBus)
+	vectorMigrationStore := adminstore.NewVectorMigrationAdminStore(db, cfg.Database.URL, buildHNSWConfig(), func(ctx context.Context) storage.QdrantConfig {
+		return storage.QdrantConfig{
+			Addr:             service.ResolveOrDefault(ctx, settingsSvc, service.SettingQdrantAddr, "global"),
+			APIKey:           service.ResolveOrDefault(ctx, settingsSvc, service.SettingQdrantAPIKey, "global"),
+			UseTLS:           settingsSvc.ResolveBool(ctx, service.SettingQdrantUseTLS, "global"),
+			PoolSize:         uint(settingsSvc.ResolveIntWithDefault(ctx, service.SettingQdrantPoolSize, "global")),
+			KeepAliveTime:    settingsSvc.ResolveIntWithDefault(ctx, service.SettingQdrantKeepAliveTime, "global"),
+			KeepAliveTimeout: uint(settingsSvc.ResolveIntWithDefault(ctx, service.SettingQdrantKeepAliveTimeout, "global")),
+		}
+	}, eventBus)
 	namespaceAdminStore := adminstore.NewNamespaceAdminStore(db)
 	providerAdminStore := adminstore.NewProviderAdminStore(adminstore.ProviderAdminDeps{
 		Registry:     registry,
@@ -1030,13 +1070,14 @@ func main() {
 				return resp.CandidateCount, resp.Enqueued, nil
 			},
 		}),
-		AdminOAuth:      api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
-		AdminWebhooks:   api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),
-		AdminAnalytics:  api.NewAdminAnalyticsHandler(api.AnalyticsConfig{Store: analyticsStore}),
-		AdminUsage:      api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
-		UsageCostRates:  api.NewUsageCostRatesHandler(api.CostRatesConfig{Store: settingsAdminStore}),
-		AdminNamespaces: api.NewAdminNamespacesHandler(api.NamespaceAdminConfig{Store: namespaceAdminStore}),
-		AdminDatabase:   api.NewAdminDatabaseHandler(api.DatabaseAdminConfig{Store: databaseAdminStore}),
+		AdminOAuth:           api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
+		AdminWebhooks:        api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),
+		AdminAnalytics:       api.NewAdminAnalyticsHandler(api.AnalyticsConfig{Store: analyticsStore}),
+		AdminUsage:           api.NewAdminUsageHandler(api.UsageConfig{Store: usageStore}),
+		UsageCostRates:       api.NewUsageCostRatesHandler(api.CostRatesConfig{Store: settingsAdminStore}),
+		AdminNamespaces:      api.NewAdminNamespacesHandler(api.NamespaceAdminConfig{Store: namespaceAdminStore}),
+		AdminDatabase:        api.NewAdminDatabaseHandler(api.DatabaseAdminConfig{Store: databaseAdminStore}),
+		AdminVectorMigration: api.NewAdminVectorMigrationHandler(api.VectorMigrationAdminConfig{Store: vectorMigrationStore}),
 		AdminGraph: api.NewAdminGraphHandler(api.GraphAdminConfig{
 			Projects:      projectRepo,
 			Entities:      entityRepo,

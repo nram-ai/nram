@@ -184,6 +184,7 @@ type Handlers struct {
 	UsageCostRates        http.HandlerFunc
 	AdminNamespaces       http.HandlerFunc
 	AdminDatabase         http.HandlerFunc
+	AdminVectorMigration  http.HandlerFunc
 	AdminGraph            http.HandlerFunc
 	AdminGraphMaintenance http.HandlerFunc
 	AdminDreaming         http.HandlerFunc
@@ -569,6 +570,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/webhooks/*", handler(handlers.AdminWebhooks))
 			r.HandleFunc("/database", handler(handlers.AdminDatabase))
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
+			r.HandleFunc("/vector-migration", handler(handlers.AdminVectorMigration))
 			r.HandleFunc("/graph/*", handler(handlers.AdminGraphMaintenance))
 
 			// Tier-C (system-aggregate) data views: admin-only by virtue
