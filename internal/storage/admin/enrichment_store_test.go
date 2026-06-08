@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -85,6 +86,48 @@ func TestEnrichment_SelfQueueStatus_PopulatesProjectFields(t *testing.T) {
 		if item.ProjectName != projectName {
 			t.Errorf("item[%d].ProjectName: got %q want %q", i, item.ProjectName, projectName)
 		}
+	}
+}
+
+// TestEnrichment_SetPaused_InvalidatesResolverCache guards the production
+// wiring gap: workers and the SSE tick read enrichment.paused through the
+// cached SettingsService resolver, but SetPaused writes via settingsRepo
+// directly. Without an explicit cache eviction the resolver would keep serving
+// the stale value until the TTL (~30s) elapsed, so pause/resume would visibly
+// lag. The test primes the cache the way a worker's first poll would, flips
+// the flag, and asserts the resolver observes it immediately.
+func TestEnrichment_SetPaused_InvalidatesResolverCache(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+
+	queueRepo := storage.NewEnrichmentQueueRepo(db)
+	settingsRepo := storage.NewSettingsRepo(db)
+	settingsSvc := service.NewSettingsService(settingsRepo)
+	store := NewEnrichmentAdminStore(queueRepo, settingsRepo, settingsSvc, db)
+
+	// Prime the resolver cache with the unset (false) value.
+	if settingsSvc.ResolveBool(ctx, service.SettingEnrichmentPaused, "global") {
+		t.Fatal("precondition: enrichment.paused should resolve false when unset")
+	}
+
+	if err := store.SetPaused(ctx, true); err != nil {
+		t.Fatalf("SetPaused(true): %v", err)
+	}
+	if !settingsSvc.ResolveBool(ctx, service.SettingEnrichmentPaused, "global") {
+		t.Error("resolver still reports unpaused after SetPaused(true): cache not invalidated")
+	}
+	if paused, err := store.IsPaused(ctx); err != nil {
+		t.Fatalf("IsPaused: %v", err)
+	} else if !paused {
+		t.Error("IsPaused = false after SetPaused(true)")
+	}
+
+	// Resume path has the same invalidation requirement.
+	if err := store.SetPaused(ctx, false); err != nil {
+		t.Fatalf("SetPaused(false): %v", err)
+	}
+	if settingsSvc.ResolveBool(ctx, service.SettingEnrichmentPaused, "global") {
+		t.Error("resolver still reports paused after SetPaused(false): cache not invalidated")
 	}
 }
 

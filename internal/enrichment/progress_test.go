@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // captureBus is a minimal events.EventBus that records every Publish for
@@ -146,7 +147,11 @@ func TestProgressTrackerJobCompletedOnError(t *testing.T) {
 
 func TestProgressTrackerEmitTickReportsInFlightStateAndOldest(t *testing.T) {
 	bus := &captureBus{}
-	tracker := newProgressTracker(bus, nil)
+	settingsSvc := service.NewSettingsService(newTestSettingsRepo())
+	if err := settingsSvc.Set(context.Background(), service.SettingEnrichmentPaused, "true", "global", nil); err != nil {
+		t.Fatalf("set paused: %v", err)
+	}
+	tracker := newProgressTracker(bus, settingsSvc)
 
 	older := &model.EnrichmentJob{ID: uuid.New(), MemoryID: uuid.New(), NamespaceID: uuid.New()}
 	newer := &model.EnrichmentJob{ID: uuid.New(), MemoryID: uuid.New(), NamespaceID: uuid.New()}
@@ -164,7 +169,6 @@ func TestProgressTrackerEmitTickReportsInFlightStateAndOldest(t *testing.T) {
 		stage: StageEmbed,
 	})
 
-	tracker.SetPaused(true)
 	tracker.EmitTick(context.Background())
 
 	ticks := bus.byType(events.EnrichmentPoolTick)
@@ -187,6 +191,23 @@ func TestProgressTrackerEmitTickReportsInFlightStateAndOldest(t *testing.T) {
 	}
 	if int(stages[StagePreEmbed].(float64)) != 1 || int(stages[StageEmbed].(float64)) != 1 {
 		t.Errorf("by_stage = %v, want pre_embed:1 embed:1", stages)
+	}
+}
+
+func TestProgressTrackerEmitTickPausedDefaultsFalseWhenUnset(t *testing.T) {
+	bus := &captureBus{}
+	// Real settings service with enrichment.paused never set: ResolveBool
+	// must report false (unpaused), so the tick payload reads false.
+	tracker := newProgressTracker(bus, service.NewSettingsService(newTestSettingsRepo()))
+
+	tracker.EmitTick(context.Background())
+
+	ticks := bus.byType(events.EnrichmentPoolTick)
+	if len(ticks) != 1 {
+		t.Fatalf("expected 1 pool.tick, got %d", len(ticks))
+	}
+	if data := decode(t, ticks[0]); data["paused"] != false {
+		t.Errorf("paused = %v, want false", data["paused"])
 	}
 }
 

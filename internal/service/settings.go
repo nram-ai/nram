@@ -36,7 +36,12 @@ const (
 	SettingEntityKey         = "provider.entity.key"
 	SettingEntityModel       = "provider.entity.model"
 	SettingEnrichmentEnabled = "enrichment.enabled"
-	SettingDedupThreshold    = "enrichment.dedup_threshold"
+	// SettingEnrichmentPaused is the operator pause control for the worker
+	// pool. It is a runtime control flag, not an operator-config knob, so it
+	// is intentionally absent from settingDefaults and the UI settings schema;
+	// ResolveBool returns false (unpaused) when it is unset.
+	SettingEnrichmentPaused = "enrichment.paused"
+	SettingDedupThreshold   = "enrichment.dedup_threshold"
 	SettingFactPrompt        = "enrichment.fact_prompt"
 	SettingEntityPrompt      = "enrichment.entity_prompt"
 

@@ -56,9 +56,6 @@ type progressTracker struct {
 	settings *service.SettingsService
 
 	jobs sync.Map // map[uuid.UUID]*inFlightJob
-
-	mu     sync.Mutex
-	paused bool
 }
 
 func newProgressTracker(bus events.EventBus, settings *service.SettingsService) *progressTracker {
@@ -159,25 +156,6 @@ func (t *progressTracker) JobCompleted(
 	events.Emit(ctx, t.bus, events.EnrichmentJobCompleted, jobScope(namespaceID), payload)
 }
 
-// SetPaused records the worker-pool paused state for the next tick.
-func (t *progressTracker) SetPaused(paused bool) {
-	if t == nil {
-		return
-	}
-	t.mu.Lock()
-	t.paused = paused
-	t.mu.Unlock()
-}
-
-func (t *progressTracker) snapshotPaused() bool {
-	if t == nil {
-		return false
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.paused
-}
-
 // EmitTick publishes one enrichment.pool.tick event. Called from the
 // pool-level ticker goroutine.
 func (t *progressTracker) EmitTick(ctx context.Context) {
@@ -202,7 +180,7 @@ func (t *progressTracker) EmitTick(ctx context.Context) {
 	payload := map[string]any{
 		"in_flight": inFlight,
 		"by_stage":  byStage,
-		"paused":    t.snapshotPaused(),
+		"paused":    t.settings != nil && t.settings.ResolveBool(ctx, service.SettingEnrichmentPaused, "global"),
 		"timestamp": time.Now().UTC(),
 	}
 	if !oldest.IsZero() {

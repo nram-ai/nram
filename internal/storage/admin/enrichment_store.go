@@ -607,15 +607,27 @@ func (s *EnrichmentAdminStore) RetryFailed(ctx context.Context, ids []uuid.UUID)
 func (s *EnrichmentAdminStore) SetPaused(ctx context.Context, paused bool) error {
 	value, _ := json.Marshal(paused)
 	setting := &model.Setting{
-		Key:   "enrichment.paused",
+		Key:   service.SettingEnrichmentPaused,
 		Value: json.RawMessage(value),
 		Scope: "global",
 	}
-	return s.settingsRepo.Set(ctx, setting)
+	if err := s.settingsRepo.Set(ctx, setting); err != nil {
+		return err
+	}
+	// The worker run loop and the SSE pool tick read enrichment.paused through
+	// the cached SettingsService resolver. Writing via settingsRepo directly
+	// (rather than SettingsService.Set) skips that cache's own invalidation, so
+	// without this eviction the change would not reach readers until the entry's
+	// cache TTL elapsed (~30s) — pause/resume would visibly lag. Mirrors the
+	// invalidation SettingsAdminStore.UpdateSetting performs for the same reason.
+	if s.settingsSvc != nil {
+		s.settingsSvc.InvalidateCache(service.SettingEnrichmentPaused, "global")
+	}
+	return nil
 }
 
 func (s *EnrichmentAdminStore) IsPaused(ctx context.Context) (bool, error) {
-	setting, err := s.settingsRepo.Get(ctx, "enrichment.paused", "global")
+	setting, err := s.settingsRepo.Get(ctx, service.SettingEnrichmentPaused, "global")
 	if err != nil {
 		return false, nil // not set = not paused
 	}

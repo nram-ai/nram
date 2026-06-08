@@ -249,6 +249,21 @@ func (m *mockQueueClaimer) Enqueue(_ context.Context, item *model.EnrichmentJob)
 	return true, nil
 }
 
+// jobCount and completedCount are mutex-guarded reads used by tests that run
+// the pool concurrently (the worker goroutine mutates these under m.mu, so
+// direct field reads would race under -race).
+func (m *mockQueueClaimer) jobCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.jobs)
+}
+
+func (m *mockQueueClaimer) completedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.completed)
+}
+
 func (m *mockQueueClaimer) ClaimNext(_ context.Context, _ string) (*model.EnrichmentJob, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2496,6 +2511,67 @@ func TestWorkerPool_StartStop(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	h.pool.Stop()
 	// If we reach here without panic or hang, the test passes.
+}
+
+// waitFor polls cond until it is true or the timeout elapses. Used by
+// concurrency tests to await a worker-goroutine state transition without a
+// fixed sleep that would be either flaky (too short) or slow (too long).
+func waitFor(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return cond()
+}
+
+// TestWorkerPool_PauseStopsClaiming verifies the run loop honors the
+// enrichment.paused setting end to end: a paused pool leaves queued jobs
+// unclaimed, and clearing the flag lets the worker drain the queue. This is
+// the operator "Pause Workers" control's actual enforcement point — without
+// the run-loop check the button only flipped a flag the workers never read.
+func TestWorkerPool_PauseStopsClaiming(t *testing.T) {
+	h := newTestHarness(noopFactLLM(), noopEntityLLM(), noopEmbed())
+
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	h.queue.jobs = []*model.EnrichmentJob{testJob(mem.ID, mem.NamespaceID)}
+
+	if err := h.settings.Set(context.Background(), service.SettingEnrichmentPaused, "true", "global", nil); err != nil {
+		t.Fatalf("set paused: %v", err)
+	}
+
+	h.pool.Start()
+	defer h.pool.Stop()
+
+	// The worker polls, sees paused, and backs off: IsIdle flips true on the
+	// pause branch. Reaching idle proves the loop ran while paused.
+	if !waitFor(500*time.Millisecond, h.pool.IsIdle) {
+		t.Fatal("worker never went idle while paused")
+	}
+
+	// Paused: the job must remain unclaimed and uncompleted.
+	if got := h.queue.jobCount(); got != 1 {
+		t.Fatalf("paused worker claimed jobs: queue len = %d, want 1", got)
+	}
+	if got := h.queue.completedCount(); got != 0 {
+		t.Fatalf("paused worker completed jobs: %d, want 0", got)
+	}
+
+	// Resume: Set invalidates the cache key immediately, so the next poll
+	// claims and processes the job.
+	if err := h.settings.Set(context.Background(), service.SettingEnrichmentPaused, "false", "global", nil); err != nil {
+		t.Fatalf("clear paused: %v", err)
+	}
+
+	if !waitFor(2*time.Second, func() bool { return h.queue.completedCount() == 1 }) {
+		t.Fatalf("resumed worker did not process the job; completed = %d", h.queue.completedCount())
+	}
+	if got := h.queue.jobCount(); got != 0 {
+		t.Fatalf("resumed worker left jobs unclaimed: queue len = %d, want 0", got)
+	}
 }
 
 // TestProcessBatch_SingleSharedEmbed verifies the batched path runs ONE embed

@@ -595,6 +595,20 @@ func (wp *WorkerPool) run(ctx context.Context, workerID string) {
 			continue
 		}
 
+		// Operator pause (enrichment.paused, global). Stops claiming new jobs
+		// while paused; jobs already claimed in a prior iteration finish via
+		// processBatch before the loop re-checks here, so in-flight work drains
+		// cleanly and resume picks up the existing queue. Mirrors the
+		// enrichment.enabled idle path. Read each iteration so pause/resume
+		// propagates within the settings cache TTL without a worker restart.
+		if wp.settings.ResolveBool(ctx, service.SettingEnrichmentPaused, "global") {
+			emptyPolls++
+			wp.idleWorkers.Add(1)
+			wp.sleepWithBackoff(ctx, emptyPolls, maxBackoff)
+			wp.idleWorkers.Add(-1)
+			continue
+		}
+
 		// Idle without claiming when any LLM slot is unconfigured; jobs
 		// stay pending and resume on the next poll once the admin
 		// configures the missing slot.
