@@ -923,8 +923,8 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingGraphDefaultMinWeight: "0.1",
 	SettingGraphMaxEdges:         "2000",
 	SettingGraphCenterGravity:    "0.75",
-	SettingGraphChargeStrength:   "-15",
-	SettingGraphLinkDistance:     "15",
+	SettingGraphChargeStrength:   "-100",
+	SettingGraphLinkDistance:     "100",
 
 	SettingAPIBatchStoreMaxItems: "1000",
 

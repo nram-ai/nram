@@ -2072,6 +2072,21 @@ export interface MeRankingWeightDefault {
   step?: number;
 }
 
+// MeSettingDefault is one row in the response of GET /v1/me/setting-defaults.
+// `value` is the effective global-scope value (operator override if set,
+// schema default otherwise); general-user pages use it as the live default for
+// the matching control (graph layout sliders, dedup-threshold placeholder).
+// `default_value` is the registered schema default; min/max/step come from the
+// schema entry. Mirrors MeRankingWeightDefault.
+export interface MeSettingDefault {
+  key: string;
+  value: number;
+  default_value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 export type Theme = "light" | "dark";
 
 export interface MeProfilePatchRequest {
@@ -2177,6 +2192,14 @@ export const meAPI = {
   // /admin/settings. Authentication required, no role gate.
   getRankingWeightDefaults: () =>
     request<{ data: MeRankingWeightDefault[] }>("GET", "/me/ranking-weights/defaults"),
+
+  // Self-tier read of allow-listed numeric setting defaults (graph layout
+  // keys + dedup threshold) with their effective global-scope values. Powers
+  // the graph visualization layout controls and the dedup-threshold
+  // placeholders for non-admin owners who cannot read /admin/settings.
+  // Authentication required, no role gate.
+  getSettingDefaults: () =>
+    request<{ data: MeSettingDefault[] }>("GET", "/me/setting-defaults"),
 
   listPasskeys: () =>
     request<{ data: Passkey[] }>("GET", "/me/passkeys").then((r) => r.data),

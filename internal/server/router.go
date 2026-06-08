@@ -83,6 +83,12 @@ type Handlers struct {
 	// placeholders on the per-project edit panel for non-admin owners
 	// who cannot read /v1/admin/settings.
 	MeRankingWeightsDefaults http.HandlerFunc
+	// Self-tier read of an allow-listed set of numeric setting defaults
+	// (graph layout + dedup threshold) with their effective global-scope
+	// values. Drives the graph visualization layout controls and the
+	// dedup-threshold placeholders for non-admin owners who cannot read
+	// /v1/admin/settings.
+	MeSettingDefaults http.HandlerFunc
 
 	// Self-tier export job pipeline. Replaced the truncation-bound MCP
 	// export tool: large multi-project exports run asynchronously, the
@@ -464,6 +470,13 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			// /v1/admin/settings; this is the narrow read surface that lets
 			// them populate placeholders without an admin gate.
 			r.Get("/ranking-weights/defaults", handler(handlers.MeRankingWeightsDefaults))
+
+			// Self-tier read of allow-listed numeric setting defaults
+			// (graph layout keys + dedup threshold) with their effective
+			// global-scope values. Lets general-user pages render against
+			// operator-configured defaults without an admin gate, the same
+			// way ranking-weights/defaults serves the weights editor.
+			r.Get("/setting-defaults", handler(handlers.MeSettingDefaults))
 
 			// Self-tier export jobs. List/create at the root; per-job
 			// status and delete at {job_id}; artifact download under

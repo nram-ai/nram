@@ -51,6 +51,7 @@ import {
   type UpdateIdPConfigRequest,
   type WebhookTestResult,
   type MeCreateProjectRequest,
+  type MeSettingDefault,
   type CreateProceduralRequest,
   type UpdateProceduralRequest,
   type ProceduralExportData,
@@ -580,7 +581,10 @@ const SYSTEM_RANKING_WEIGHT_KEYS = {
   mmr_lambda: "ranking.weight.mmr_lambda",
 } as const;
 
-function coerceWeight(raw: unknown): number | null {
+// coerceFiniteNumber accepts a number or numeric string and returns a finite
+// number, or null when the value is neither. Shared by the ranking-weight
+// resolver and the admin settings numeric controls.
+export function coerceFiniteNumber(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string") {
     const n = Number(raw);
@@ -631,12 +635,12 @@ export function resolveSystemRankingWeights(
     keyof SystemRankingWeights,
     string,
   ][]) {
-    const fromSetting = coerceWeight(settingByKey.get(key));
+    const fromSetting = coerceFiniteNumber(settingByKey.get(key));
     if (fromSetting !== null) {
       resolved[field] = fromSetting;
       continue;
     }
-    const fromSchema = coerceWeight(defaultByKey.get(key));
+    const fromSchema = coerceFiniteNumber(defaultByKey.get(key));
     if (fromSchema !== null) {
       resolved[field] = fromSchema;
       continue;
@@ -731,6 +735,51 @@ export function useSystemRankingWeights(): SystemRankingWeightsResolution {
     const resolution = resolveSystemRankingWeights(configured, schema);
     return { ...resolution, isLoading: false, isError: false };
   }, [query.data, query.isPending, query.isError]);
+}
+
+// SettingDefaultsResolution is the result of useSettingDefaults. `byKey` maps
+// each allow-listed setting key to its effective default row; consumers read
+// `byKey["graph.link_distance"].value` etc. `isLoading` is true while the
+// query is in flight (consumers should defer applying values until then so a
+// missing entry is not mistaken for "no default"); `isError` is true on a
+// failed fetch.
+export interface SettingDefaultsResolution {
+  byKey: Record<string, MeSettingDefault>;
+  isLoading: boolean;
+  isError: boolean;
+}
+
+// useSettingDefaults returns the operator-effective defaults for the
+// allow-listed numeric settings (graph layout keys + dedup threshold) to any
+// authenticated caller via the self-tier /v1/me/setting-defaults endpoint.
+// General-user pages (GraphVisualization, the per-project / per-user override
+// editors) read from here instead of /admin/settings so non-admin owners can
+// render against the real operator defaults without 403-ing.
+export function useSettingDefaults(): SettingDefaultsResolution {
+  const query = useQuery({
+    queryKey: ["me", "setting-defaults"],
+    queryFn: meAPI.getSettingDefaults,
+  });
+  return useMemo(() => {
+    const byKey: Record<string, MeSettingDefault> = {};
+    for (const row of query.data?.data ?? []) byKey[row.key] = row;
+    return {
+      byKey,
+      isLoading: query.isPending,
+      isError: query.isError,
+    };
+  }, [query.data, query.isPending, query.isError]);
+}
+
+// formatSystemDefaultPlaceholder renders the operator-effective default as the
+// placeholder for an override input ("system: 0.92"), or a neutral label while
+// the value is still loading. Shared by the per-project and per-user override
+// editors so the formatting lives in one place.
+export function formatSystemDefaultPlaceholder(
+  value: number | undefined,
+  decimals = 2,
+): string {
+  return value !== undefined ? `system: ${value.toFixed(decimals)}` : "system default";
 }
 
 export function useUpdateSetting() {

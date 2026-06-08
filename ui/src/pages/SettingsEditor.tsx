@@ -7,8 +7,11 @@ import {
   useSettingGroups,
   useSetupStatus,
   useUpdateSetting,
+  coerceFiniteNumber,
 } from "../hooks/useApi";
 import { useEnrichmentAvailable } from "../hooks/useEnrichmentAvailable";
+import { useDebounce } from "../hooks/useDebounce";
+import { SliderRow } from "../components/LayoutSlider";
 import type { SettingSchema, SettingGroup } from "../api/client";
 import {
   buildCategoryIndex,
@@ -362,6 +365,97 @@ function renderValueInput({
 }
 
 // ---------------------------------------------------------------------------
+// Graph layout slider gauge
+// ---------------------------------------------------------------------------
+
+// Graph layout d3-force settings that render as a live slider gauge in the
+// admin editor, identical to the per-project Layout drawer. signFlip presents
+// charge_strength as a positive "Repulsion" value (persisted as the negative
+// charge it actually is), removing the "negative means more repulsion"
+// ambiguity of a raw number input.
+const GRAPH_LAYOUT_SLIDERS: Record<string, { label: string; signFlip: boolean }> = {
+  "graph.center_gravity": { label: "Gravity", signFlip: false },
+  "graph.charge_strength": { label: "Repulsion", signFlip: true },
+  "graph.link_distance": { label: "Link distance", signFlip: false },
+};
+
+const SLIDER_SAVE_DEBOUNCE_MS = 300;
+const SLIDER_DIRTY_GUARD_MS = 1500;
+
+// GraphLayoutSliderEditor is a live, auto-saving slider matching the graph
+// page's Layout drawer. It debounces the persist so a drag does not spam the
+// settings PUT, and holds off external resync briefly after a drag so a
+// refetch from its own save does not clobber the in-flight value. Exported for
+// direct unit testing of the repulsion sign-flip.
+export function GraphLayoutSliderEditor({
+  schema,
+  currentValue,
+  label,
+  signFlip,
+  onSave,
+}: {
+  schema: SettingSchema;
+  currentValue: unknown;
+  label: string;
+  signFlip: boolean;
+  onSave: (key: string, value: unknown) => void;
+}) {
+  // stored is the signed value as persisted; display is positive for repulsion.
+  const stored =
+    coerceFiniteNumber(currentValue) ?? coerceFiniteNumber(schema.default_value) ?? 0;
+  const toDisplay = (s: number) => (signFlip ? -s : s);
+  const toStored = (d: number) => (signFlip ? -d : d);
+
+  const [display, setDisplay] = useState(toDisplay(stored));
+  const dirtyUntilRef = useRef(0);
+  const userEditedRef = useRef(false);
+
+  // Resync from the persisted value when it changes externally, unless the
+  // user is mid-drag (guarded window) so our own save's refetch cannot snap
+  // the slider back.
+  useEffect(() => {
+    if (Date.now() < dirtyUntilRef.current) return;
+    setDisplay(toDisplay(stored));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stored, signFlip]);
+
+  const debounced = useDebounce(display, SLIDER_SAVE_DEBOUNCE_MS);
+  useEffect(() => {
+    // Gated on a real interaction so neither the initial mount nor an external
+    // update triggers a redundant PUT of the unchanged value.
+    if (!userEditedRef.current) return;
+    const target = toStored(debounced);
+    if (Math.abs(target - stored) < 1e-9) return;
+    onSave(schema.key, target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debounced]);
+
+  const min = coerceFiniteNumber(schema.min) ?? 0;
+  const max = coerceFiniteNumber(schema.max) ?? 100;
+  const stepRaw = coerceFiniteNumber(schema.step);
+  const step = stepRaw && stepRaw > 0 ? stepRaw : 1;
+  // For repulsion the slider runs 0..100 instead of the stored -100..0.
+  const range = signFlip ? { min: -max, max: -min, step } : { min, max, step };
+
+  return (
+    <SliderRow
+      spec={{
+        label,
+        description: "",
+        value: display,
+        range,
+        onChange: (v) => {
+          dirtyUntilRef.current = Date.now() + SLIDER_DIRTY_GUARD_MS;
+          userEditedRef.current = true;
+          setDisplay(v);
+        },
+        isOverride: false,
+      }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Inline Setting Editor
 // ---------------------------------------------------------------------------
 
@@ -484,6 +578,40 @@ function InlineSettingEditor({
           disabled={saving}
           onChange={(v) => onSave(schema.key, v)}
         />
+      </div>
+    );
+  }
+
+  // Graph layout d3-force settings: live slider gauge that auto-saves on
+  // change, matching the per-project Layout drawer. charge_strength reads as a
+  // positive "Repulsion" slider instead of a raw negative number.
+  const graphSlider = GRAPH_LAYOUT_SLIDERS[schema.key];
+  if (graphSlider) {
+    return (
+      <div className={`py-3 ${rowAccent}`}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">{headerRow}</div>
+          {differsFromDefault && (
+            <button
+              type="button"
+              onClick={() => onReset(schema.key)}
+              disabled={resetting}
+              className="flex-shrink-0 rounded-md border border-input px-2.5 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Reset this setting to its registered default"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+        <div className="mt-3 max-w-sm">
+          <GraphLayoutSliderEditor
+            schema={schema}
+            currentValue={currentValue}
+            label={graphSlider.label}
+            signFlip={graphSlider.signFlip}
+            onSave={onSave}
+          />
+        </div>
       </div>
     );
   }

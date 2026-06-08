@@ -44,6 +44,7 @@ vi.mock("../../hooks/useApi", async () => {
     useDeleteProject: vi.fn(),
     useSchemaRange: vi.fn(),
     useSystemRankingWeights: vi.fn(),
+    useSettingDefaults: vi.fn(),
   };
 });
 
@@ -54,6 +55,7 @@ const useUpdateProjectMock = vi.mocked(useApi.useUpdateProject);
 const useDeleteProjectMock = vi.mocked(useApi.useDeleteProject);
 const useSchemaRangeMock = vi.mocked(useApi.useSchemaRange);
 const useSystemRankingWeightsMock = vi.mocked(useApi.useSystemRankingWeights);
+const useSettingDefaultsMock = vi.mocked(useApi.useSettingDefaults);
 
 const PROJECT_ID = "p1";
 
@@ -132,6 +134,20 @@ beforeEach(() => {
       mmr_lambda: 0.5,
     },
     missingKeys: [],
+    isLoading: false,
+    isError: false,
+  });
+  useSettingDefaultsMock.mockReturnValue({
+    byKey: {
+      "enrichment.dedup_threshold": {
+        key: "enrichment.dedup_threshold",
+        value: 0.92,
+        default_value: 0.92,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+    },
     isLoading: false,
     isError: false,
   });

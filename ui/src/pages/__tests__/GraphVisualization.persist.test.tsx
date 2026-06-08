@@ -50,16 +50,46 @@ vi.mock("../../hooks/useApi", async () => {
     useMeProjects: vi.fn(),
     useGraph: vi.fn(),
     useUpdateProject: vi.fn(),
-    useSchemaRange: vi.fn(),
+    useSettingDefaults: vi.fn(),
   };
 });
 
 const useMeProjectsMock = vi.mocked(useApi.useMeProjects);
 const useGraphMock = vi.mocked(useApi.useGraph);
 const useUpdateProjectMock = vi.mocked(useApi.useUpdateProject);
-const useSchemaRangeMock = vi.mocked(useApi.useSchemaRange);
+const useSettingDefaultsMock = vi.mocked(useApi.useSettingDefaults);
 
 const PROJECT_ID = "p1";
+
+// Operator-effective layout defaults the component now sources from
+// /me/setting-defaults. These are the new system defaults (link/charge at the
+// repulsion maximum); a project without overrides renders these.
+function settingDefaultsStub(): ReturnType<typeof useApi.useSettingDefaults> {
+  return {
+    byKey: {
+      "graph.center_gravity": { key: "graph.center_gravity", value: 0.75, default_value: 0.75, min: 0, max: 3, step: 0.05 },
+      "graph.charge_strength": { key: "graph.charge_strength", value: -100, default_value: -100, min: -100, max: 0, step: 1 },
+      "graph.link_distance": { key: "graph.link_distance", value: 100, default_value: 100, min: 5, max: 100, step: 1 },
+    },
+    isLoading: false,
+    isError: false,
+  };
+}
+
+function projectWithoutOverrides() {
+  return {
+    id: PROJECT_ID,
+    namespace_id: "ns-p1",
+    owner_namespace_id: "ns1",
+    name: "Test Project",
+    slug: "test-project",
+    description: "",
+    default_tags: [],
+    settings: {},
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
 
 function projectWithOverrides() {
   return {
@@ -80,6 +110,22 @@ function projectWithOverrides() {
   };
 }
 
+function reservedProject() {
+  return {
+    id: PROJECT_ID,
+    namespace_id: "ns-global",
+    owner_namespace_id: "ns1",
+    name: "global",
+    slug: "global",
+    description: "",
+    default_tags: [],
+    settings: {},
+    reserved: true,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function queryStub<T>(data: T, isLoading = false): any {
   return {
@@ -91,10 +137,6 @@ function queryStub<T>(data: T, isLoading = false): any {
   };
 }
 
-function rangeStub(min: number, max: number, step: number) {
-  return { min, max, step };
-}
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -102,12 +144,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  useSchemaRangeMock.mockImplementation((key, fallback) => {
-    if (key === "graph.center_gravity") return rangeStub(0, 3, 0.05);
-    if (key === "graph.charge_strength") return rangeStub(-100, 0, 1);
-    if (key === "graph.link_distance") return rangeStub(5, 100, 1);
-    return fallback;
-  });
+  useSettingDefaultsMock.mockReturnValue(settingDefaultsStub());
   // At least one entity is required for the page to render the canvas
   // branch, which is the only branch that mounts the LayoutDrawer. The
   // ForceGraph3D component itself is mocked at module scope above, so no
@@ -301,5 +338,108 @@ describe("GraphVisualization layout persistence", () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(mutate).toHaveBeenCalledTimes(resetCalls);
+  });
+
+  it("renders the operator default for a project without overrides (symptom A: global default applies)", async () => {
+    // A project with no per-project overrides must render the operator
+    // default sourced from /me/setting-defaults, NOT a hardcoded constant.
+    // The store default link distance is 100; the old bug rendered 15.
+    useUpdateProjectMock.mockReturnValue({
+      mutate: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([projectWithoutOverrides()]) as ReturnType<
+        typeof useApi.useMeProjects
+      >,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
+    const sliders = screen.getAllByRole("slider") as HTMLInputElement[];
+    expect(sliders.length).toBe(3);
+    // Gravity 0.75, Repulsion 100 (charge -100 shown positive), Link 100.
+    expect(sliders[0].value).toBe("0.75");
+    expect(sliders[1].value).toBe("100");
+    expect(sliders[2].value).toBe("100");
+  });
+
+  it("persists a per-project value equal to the OLD hardcoded default (symptom B: it sticks)", async () => {
+    // The old resolve-against-constant logic treated link distance 15 as
+    // "equal to the default" and dropped the override, so it reverted on
+    // reload. Now the default comes from the store (100), so 15 is a real
+    // divergence and must persist as an explicit override.
+    const mutate = vi.fn();
+    useUpdateProjectMock.mockReturnValue({
+      mutate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([projectWithoutOverrides()]) as ReturnType<
+        typeof useApi.useMeProjects
+      >,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
+    // Sliders: [0] Gravity, [1] Repulsion, [2] Link distance.
+    const linkSlider = screen.getAllByRole("slider")[2];
+    fireEvent.change(linkSlider, { target: { value: "15" } });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const call = mutate.mock.calls[0][0] as {
+      data: { settings: Record<string, unknown> };
+    };
+    // The dragged value persists as an override instead of being dropped.
+    expect(call.data.settings.graph_link_distance).toBeCloseTo(15, 5);
+    // The untouched sliders sit at the system default, so they carry no
+    // override (undefined => the project tracks the system default).
+    expect(call.data.settings.graph_center_gravity).toBeUndefined();
+    expect(call.data.settings.graph_charge_strength).toBeUndefined();
+  });
+
+  it("hides the Layout control for a reserved project (overrides cannot be saved)", async () => {
+    // Reserved projects reject settings writes, so the per-project Layout
+    // control must not be offered (its save would 400). The graph still
+    // renders them with the system defaults.
+    const mutate = vi.fn();
+    useUpdateProjectMock.mockReturnValue({
+      mutate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([reservedProject()]) as ReturnType<typeof useApi.useMeProjects>,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // No Layout button is rendered for a reserved project.
+    expect(screen.queryByRole("button", { name: /Layout/i })).toBeNull();
+    // And nothing was persisted.
+    expect(mutate).not.toHaveBeenCalled();
   });
 });

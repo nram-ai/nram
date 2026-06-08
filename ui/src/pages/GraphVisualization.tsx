@@ -5,18 +5,26 @@ import {
   useMeProjects,
   useGraph,
   useUpdateProject,
-  useSchemaRange,
+  useSettingDefaults,
 } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
 import { useSelectedProject, useEnsureValidSelectedProject } from "../context/ProjectContext";
-import type { GraphEntity, Project, ProjectSettings } from "../api/client";
+import { SliderRow, type SliderSpec } from "../components/LayoutSlider";
+import type { GraphEntity, Project, ProjectSettings, MeSettingDefault } from "../api/client";
 
-// Must stay in sync with the backend defaults registered in
-// internal/service/settings.go (graph.* keys); used when the schema endpoint
-// hasn't yet loaded.
-const GRAPH_DEFAULT_GRAVITY = 0.75;
-const GRAPH_DEFAULT_CHARGE = -15;
-const GRAPH_DEFAULT_LINK_DISTANCE = 15;
+// Setting keys for the d3-force layout defaults. The effective values come
+// from the operator-configured settings store via /me/setting-defaults; never
+// hardcode the default values here.
+const GRAVITY_KEY = "graph.center_gravity";
+const CHARGE_KEY = "graph.charge_strength";
+const LINK_DISTANCE_KEY = "graph.link_distance";
+
+// Range (min/max/step) fallbacks used only as a bootstrap while
+// /me/setting-defaults is still loading; the live ranges come from the same
+// endpoint. These are control bounds, not default values.
+const GRAVITY_RANGE_FALLBACK = { min: 0, max: 3, step: 0.05 };
+const CHARGE_RANGE_FALLBACK = { min: -100, max: 0, step: 1 };
+const LINK_DISTANCE_RANGE_FALLBACK = { min: 5, max: 100, step: 1 };
 
 // Debounce window for persisting slider changes; held longer (DIRTY_GUARD_MS)
 // after each drag so React Query refetches from our own writes don't clobber
@@ -24,14 +32,36 @@ const GRAPH_DEFAULT_LINK_DISTANCE = 15;
 const PERSIST_DEBOUNCE_MS = 300;
 const DIRTY_GUARD_MS = 1500;
 
+// resolveLayoutValue prefers a per-project override; otherwise it falls back to
+// the operator default sourced from the settings store. storeDefault is
+// undefined until /me/setting-defaults loads, so value is likewise undefined
+// during that window and callers must defer applying it (see defaultsLoaded).
 function resolveLayoutValue(
   override: number | undefined,
-  schemaDefault: number,
-): { value: number; hasOverride: boolean } {
+  storeDefault: number | undefined,
+): { value: number | undefined; hasOverride: boolean } {
   if (typeof override === "number" && Number.isFinite(override)) {
     return { value: override, hasOverride: true };
   }
-  return { value: schemaDefault, hasOverride: false };
+  return { value: storeDefault, hasOverride: false };
+}
+
+// resolveRange reads the operator-tunable {min,max,step} from a setting-default
+// row, falling back to the supplied bootstrap bounds per field while the
+// endpoint is still loading or a constraint is unset.
+function resolveRange(
+  entry: MeSettingDefault | undefined,
+  fallback: { min: number; max: number; step: number },
+): { min: number; max: number; step: number } {
+  if (!entry) return fallback;
+  return {
+    min: typeof entry.min === "number" && Number.isFinite(entry.min) ? entry.min : fallback.min,
+    max: typeof entry.max === "number" && Number.isFinite(entry.max) ? entry.max : fallback.max,
+    step:
+      typeof entry.step === "number" && Number.isFinite(entry.step) && entry.step > 0
+        ? entry.step
+        : fallback.step,
+  };
 }
 
 // Retoned to live in the cyan-blue luminance band of the neural-network
@@ -250,15 +280,6 @@ function LegendPanel() {
   );
 }
 
-interface SliderSpec {
-  label: string;
-  description: string;
-  value: number;
-  range: { min: number; max: number; step: number };
-  onChange: (v: number) => void;
-  isOverride: boolean;
-}
-
 interface LayoutDrawerProps {
   sliders: SliderSpec[];
   onReset: () => void;
@@ -312,41 +333,6 @@ function LayoutDrawer({ sliders, onReset, onClose }: LayoutDrawerProps) {
   );
 }
 
-function SliderRow({ spec }: { spec: SliderSpec }) {
-  const { label, description, value, range, onChange, isOverride } = spec;
-  // Match readout precision to slider step so step=1 controls don't show
-  // floating-point noise.
-  const decimals = range.step >= 1 ? 0 : range.step >= 0.1 ? 1 : 2;
-
-  return (
-    <div>
-      <div className="flex items-baseline justify-between mb-1">
-        <label className="text-sm font-medium">
-          {label}
-          {isOverride && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-blue-400">
-              custom
-            </span>
-          )}
-        </label>
-        <span className="text-xs font-mono text-muted-foreground">
-          {value.toFixed(decimals)}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={range.min}
-        max={range.max}
-        step={range.step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full accent-blue-500"
-      />
-      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-    </div>
-  );
-}
-
 // Create a text sprite for node labels
 function createTextSprite(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -389,9 +375,31 @@ function GraphVisualization() {
   const observerRef = useRef<ResizeObserver | null>(null);
   const graphRef = useRef<ForceGraphMethods | undefined>();
 
-  const gravityRange = useSchemaRange("graph.center_gravity", { min: 0, max: 3, step: 0.05 });
-  const chargeRange = useSchemaRange("graph.charge_strength", { min: -100, max: 0, step: 1 });
-  const linkDistanceRange = useSchemaRange("graph.link_distance", { min: 5, max: 100, step: 1 });
+  // Operator-effective layout defaults + control ranges, sourced from the
+  // settings store via the self-tier endpoint (works for non-admin owners too,
+  // unlike the admin-only /admin/settings schema). Until this loads the
+  // default values are undefined and we defer applying them.
+  const settingDefaults = useSettingDefaults();
+  const gravityDefault = settingDefaults.byKey[GRAVITY_KEY]?.value;
+  const chargeDefault = settingDefaults.byKey[CHARGE_KEY]?.value;
+  const linkDistanceDefault = settingDefaults.byKey[LINK_DISTANCE_KEY]?.value;
+  const defaultsLoaded =
+    typeof gravityDefault === "number" &&
+    typeof chargeDefault === "number" &&
+    typeof linkDistanceDefault === "number";
+
+  const gravityRange = useMemo(
+    () => resolveRange(settingDefaults.byKey[GRAVITY_KEY], GRAVITY_RANGE_FALLBACK),
+    [settingDefaults.byKey],
+  );
+  const chargeRange = useMemo(
+    () => resolveRange(settingDefaults.byKey[CHARGE_KEY], CHARGE_RANGE_FALLBACK),
+    [settingDefaults.byKey],
+  );
+  const linkDistanceRange = useMemo(
+    () => resolveRange(settingDefaults.byKey[LINK_DISTANCE_KEY], LINK_DISTANCE_RANGE_FALLBACK),
+    [settingDefaults.byKey],
+  );
   // Repulsion is the UI-positive presentation of charge; flip min/max signs.
   const repulsionRange = useMemo(
     () => ({
@@ -407,23 +415,32 @@ function GraphVisualization() {
     [projects, selectedProjectId],
   );
   const projectSettings: ProjectSettings | undefined = currentProject?.settings;
+  // Reserved projects (global, about_me) are managed by nram and reject
+  // settings writes (PUT /me/projects/{id} returns 400), so a per-project
+  // layout override cannot be saved for them. Hide the Layout control entirely
+  // rather than offer a slider whose save silently fails; the graph still
+  // renders these projects with the system defaults.
+  const isReservedProject = currentProject?.reserved === true;
 
   const resolvedGravity = resolveLayoutValue(
     projectSettings?.graph_center_gravity,
-    GRAPH_DEFAULT_GRAVITY,
+    gravityDefault,
   );
   const resolvedCharge = resolveLayoutValue(
     projectSettings?.graph_charge_strength,
-    GRAPH_DEFAULT_CHARGE,
+    chargeDefault,
   );
   const resolvedLinkDistance = resolveLayoutValue(
     projectSettings?.graph_link_distance,
-    GRAPH_DEFAULT_LINK_DISTANCE,
+    linkDistanceDefault,
   );
 
-  const [gravity, setGravity] = useState(resolvedGravity.value);
-  const [charge, setCharge] = useState(resolvedCharge.value);
-  const [linkDistance, setLinkDistance] = useState(resolvedLinkDistance.value);
+  // Seed at 0 before the store defaults load; the sync effect below replaces
+  // these the moment resolved values become defined (and forces are not
+  // applied until defaultsLoaded, so the seed is never rendered).
+  const [gravity, setGravity] = useState(resolvedGravity.value ?? 0);
+  const [charge, setCharge] = useState(resolvedCharge.value ?? 0);
+  const [linkDistance, setLinkDistance] = useState(resolvedLinkDistance.value ?? 0);
 
   // dirtyUntilRef holds off backend->local sync while the user is dragging,
   // so React Query refetches from our own writes don't clobber in-flight
@@ -438,6 +455,16 @@ function GraphVisualization() {
   // override with the default value.
   const userEditedRef = useRef(false);
   useEffect(() => {
+    // Defer until the store defaults have loaded; otherwise resolved values
+    // (for a project without overrides) are undefined and there is nothing
+    // meaningful to seed yet.
+    if (
+      resolvedGravity.value === undefined ||
+      resolvedCharge.value === undefined ||
+      resolvedLinkDistance.value === undefined
+    ) {
+      return;
+    }
     const projectChanged = lastSyncedProjectRef.current !== selectedProjectId;
     if (!projectChanged && Date.now() < dirtyUntilRef.current) return;
     if (projectChanged) {
@@ -470,6 +497,13 @@ function GraphVisualization() {
   useEffect(() => {
     if (!currentProject) return;
     if (!userEditedRef.current) return;
+    // Reserved projects reject settings writes; never attempt a save for them
+    // (the Layout control is hidden, so this is purely defensive).
+    if (isReservedProject) return;
+    // The store defaults gate the drop-override comparison below; without them
+    // resolved.value is undefined and we cannot tell whether the slider equals
+    // the default. Persist only once they are known.
+    if (!defaultsLoaded) return;
     const fields = [
       { resolved: resolvedGravity, debounced: debouncedGravity, stored: projectSettings?.graph_center_gravity, key: "graph_center_gravity" as const },
       { resolved: resolvedCharge, debounced: debouncedCharge, stored: projectSettings?.graph_charge_strength, key: "graph_charge_strength" as const },
@@ -479,7 +513,11 @@ function GraphVisualization() {
     const targets: Partial<Record<typeof fields[number]["key"], number | undefined>> = {};
     let changed = false;
     for (const f of fields) {
-      const wants = Math.abs(f.debounced - f.resolved.value) > 1e-9 || f.resolved.hasOverride;
+      // resolved.value is the effective default (or the existing override);
+      // when the slider matches it and no override exists, target=undefined so
+      // the override is dropped and the project tracks the system default.
+      const rv = f.resolved.value;
+      const wants = rv === undefined || Math.abs(f.debounced - rv) > 1e-9 || f.resolved.hasOverride;
       const target = wants ? f.debounced : undefined;
       targets[f.key] = target;
       if (f.stored !== target) changed = true;
@@ -512,6 +550,15 @@ function GraphVisualization() {
   const handleLinkDistanceChange = useCallback((v: number) => { markDirty(); setLinkDistance(v); }, [markDirty]);
   const handleResetLayout = useCallback(() => {
     if (!currentProject) return;
+    // Need the store defaults to snap the sliders back to; bail if they have
+    // not loaded (the Reset button is disabled without an override anyway).
+    if (
+      gravityDefault === undefined ||
+      chargeDefault === undefined ||
+      linkDistanceDefault === undefined
+    ) {
+      return;
+    }
     dirtyUntilRef.current = 0;
     // Drop the edit latch so a still-in-flight debounce from the user's
     // last drag cannot trail the direct reset mutation and resurrect an
@@ -521,14 +568,21 @@ function GraphVisualization() {
     delete nextSettings.graph_center_gravity;
     delete nextSettings.graph_charge_strength;
     delete nextSettings.graph_link_distance;
-    setGravity(GRAPH_DEFAULT_GRAVITY);
-    setCharge(GRAPH_DEFAULT_CHARGE);
-    setLinkDistance(GRAPH_DEFAULT_LINK_DISTANCE);
+    setGravity(gravityDefault);
+    setCharge(chargeDefault);
+    setLinkDistance(linkDistanceDefault);
     updateProjectMut.mutate({
       id: currentProject.id,
       data: { settings: nextSettings },
     });
-  }, [currentProject, projectSettings, updateProjectMut]);
+  }, [
+    currentProject,
+    projectSettings,
+    updateProjectMut,
+    gravityDefault,
+    chargeDefault,
+    linkDistanceDefault,
+  ]);
 
   // Callback ref, fires when the container div mounts/unmounts
   const containerRef = useCallback((el: HTMLDivElement | null) => {
@@ -680,6 +734,10 @@ function GraphVisualization() {
   const reheatPendingRef = useRef(false);
   useEffect(() => {
     if (!graphRef.current) return;
+    // Hold off until the store defaults have loaded so the simulation is never
+    // seeded with the placeholder 0s; the sync effect installs the real values
+    // and this effect re-runs once defaultsLoaded flips true.
+    if (!defaultsLoaded) return;
     const fg = graphRef.current;
 
     const chargeForce = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
@@ -698,7 +756,7 @@ function GraphVisualization() {
       const reheat = (fg as unknown as { d3ReheatSimulation?: () => void }).d3ReheatSimulation;
       reheat?.call(fg);
     });
-  }, [graph3dData, gravity, charge, linkDistance]);
+  }, [graph3dData, gravity, charge, linkDistance, defaultsLoaded]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
@@ -729,14 +787,16 @@ function GraphVisualization() {
               </option>
             ))}
           </select>
-          <button
-            onClick={() => setLayoutDrawerOpen((v) => !v)}
-            disabled={!selectedProjectId}
-            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Adjust graph layout forces"
-          >
-            Layout
-          </button>
+          {!isReservedProject && (
+            <button
+              onClick={() => setLayoutDrawerOpen((v) => !v)}
+              disabled={!selectedProjectId}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Adjust graph layout forces"
+            >
+              Layout
+            </button>
+          )}
         </div>
       </div>
 
@@ -845,7 +905,7 @@ function GraphVisualization() {
               />
             )}
 
-            {layoutDrawerOpen && currentProject && (
+            {layoutDrawerOpen && currentProject && !isReservedProject && (
               <LayoutDrawer
                 sliders={[
                   {

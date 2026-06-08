@@ -7,6 +7,8 @@ import {
   useDeleteProject,
   useSchemaRange,
   useSystemRankingWeights,
+  useSettingDefaults,
+  formatSystemDefaultPlaceholder,
 } from "../hooks/useApi";
 import { useDebounce } from "../hooks/useDebounce";
 import { useAuth } from "../context/AuthContext";
@@ -401,6 +403,12 @@ function ProjectDetailPanel({
     max: 1,
     step: 0.01,
   });
+  // Operator-effective dedup threshold default, sourced from the settings
+  // store instead of a hardcoded literal, for the override input placeholder.
+  const settingDefaults = useSettingDefaults();
+  const dedupPlaceholder = formatSystemDefaultPlaceholder(
+    settingDefaults.byKey["enrichment.dedup_threshold"]?.value,
+  );
 
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -706,7 +714,7 @@ function ProjectDetailPanel({
                   step={dedupRange.step}
                   className="w-32 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={editDedupThreshold ?? ""}
-                  placeholder="system: 0.92"
+                  placeholder={dedupPlaceholder}
                   onChange={(e) => {
                     const v = e.target.value;
                     setEditDedupThreshold(v === "" ? undefined : parseFloat(v));

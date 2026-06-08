@@ -943,6 +943,9 @@ func main() {
 		MeRankingWeightsDefaults: api.NewMeRankingWeightsDefaultsHandler(api.MeRankingWeightsDefaultsConfig{
 			Store: settingsAdminStore,
 		}),
+		MeSettingDefaults: api.NewMeSettingDefaultsHandler(api.MeSettingDefaultsConfig{
+			Store: settingsAdminStore,
+		}),
 
 		// Self-service exports: caller-only. No admin equivalent (the
 		// codebase's privacy invariant test in internal/server keeps
