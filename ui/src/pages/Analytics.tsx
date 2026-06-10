@@ -540,7 +540,7 @@ function UsageBarChart({
           <BarChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
             <XAxis dataKey="key" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 12 }} tickFormatter={formatNumber} />
             <Tooltip
               contentStyle={{
                 backgroundColor: "hsl(var(--card))",
