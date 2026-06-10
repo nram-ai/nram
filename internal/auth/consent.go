@@ -679,6 +679,12 @@ func (s *OAuthServer) handleAuthorizeComplete(w http.ResponseWriter, r *http.Req
 // errAuthorizeNeedsLogin so the caller can route to login (form) or return a
 // login_required error (loopback JSON).
 func (s *OAuthServer) completeAccountAuthorize(r *http.Request, params authorizeRequestParams) (authorizeOutcome, error) {
+	// Per-share connector URLs (/mcp/{share_id}) belong to the share-paste flow.
+	// An account-holder token must target the bare /mcp endpoint, so reject a
+	// per-share resource here even though validateResource accepts the syntax.
+	if params.Resource != "" && params.Resource != baseURLFromRequest(r)+"/mcp" {
+		return authorizeOutcome{}, &redirectError{Code: "invalid_target", Description: "account authorization must target the base /mcp endpoint"}
+	}
 	uid := s.resolveUserIDFromRequest(r)
 	if uid == uuid.Nil {
 		return authorizeOutcome{}, errAuthorizeNeedsLogin
@@ -704,6 +710,17 @@ func (s *OAuthServer) completeShareAuthorize(r *http.Request, params authorizeRe
 	share, _, err := s.shareTokens.Resolve(r.Context(), secret)
 	if err != nil {
 		return authorizeOutcome{}, &redirectError{Code: "access_denied", Description: fmt.Sprintf("share token rejected: %v", err)}
+	}
+
+	// When a resource indicator is supplied it must address either the bare
+	// /mcp endpoint or this share's own per-share URL. Reject a resource that
+	// names a different share (e.g. the recipient pasted share A's secret while
+	// connecting through share B's URL).
+	if params.Resource != "" {
+		base := baseURLFromRequest(r)
+		if params.Resource != base+"/mcp" && params.Resource != base+"/mcp/"+share.ID.String() {
+			return authorizeOutcome{}, &redirectError{Code: "invalid_target", Description: "resource does not match this share's MCP URL"}
+		}
 	}
 
 	if err := s.oauthRepo.BindClientToShare(r.Context(), params.ClientID, share.ID); err != nil {
@@ -785,17 +802,41 @@ func (s *OAuthServer) validateClientAndRedirect(ctx context.Context, params auth
 }
 
 // validateResource enforces RFC 8707 §2 for the consent flow: when a
-// resource parameter is supplied it must identify this server's MCP
-// endpoint.
+// resource parameter is supplied it must identify this server's MCP endpoint,
+// either the bare {base}/mcp (own-account or unscoped) or a per-share connector
+// URL {base}/mcp/{share_id}. The per-share segment must parse as a UUID for an
+// active share; the share-consent path additionally asserts the id matches the
+// share actually being bound (see completeShareAuthorize).
 func (s *OAuthServer) validateResource(r *http.Request, resource string) (string, bool) {
 	if resource == "" {
 		return "", true
 	}
 	base := baseURLFromRequest(r)
-	if resource != base+"/mcp" {
-		return fmt.Sprintf("resource parameter must be %s/mcp", base), false
+	if resource == base+"/mcp" {
+		return "", true
 	}
-	return "", true
+	suffix, ok := strings.CutPrefix(resource, base)
+	if shareID, isShare := shareIDFromMCPPath(suffix); ok && isShare {
+		if _, active := s.activeShareByID(r.Context(), shareID); !active {
+			return "resource parameter references an unknown or inactive share", false
+		}
+		return "", true
+	}
+	return fmt.Sprintf("resource parameter must be %[1]s/mcp or %[1]s/mcp/{share_id}", base), false
+}
+
+// activeShareByID resolves a share by id and reports whether it exists and is
+// currently active. Centralizes the shareTokens-nil / GetByID / Active(now)
+// sequence used by resource validation and protected-resource discovery.
+func (s *OAuthServer) activeShareByID(ctx context.Context, id uuid.UUID) (*model.ShareToken, bool) {
+	if s.shareTokens == nil {
+		return nil, false
+	}
+	share, err := s.shareTokens.GetByID(ctx, id)
+	if err != nil || share == nil || !share.Active(time.Now().UTC()) {
+		return nil, false
+	}
+	return share, true
 }
 
 // ShareAcceptHandler serves GET /v1/share/accept?token=<raw secret>. The
@@ -832,6 +873,11 @@ func (s *OAuthServer) ShareAcceptHandler() http.HandlerFunc {
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
+
+		// Hand the recipient this share's own per-share connector URL so it
+		// registers as a distinct connector in their MCP client, separate from
+		// any other share or their own-account connection at the bare /mcp.
+		resp.MCPServerURL = baseURLFromRequest(r) + "/mcp/" + share.ID.String()
 
 		owner, err := s.userRepo.GetByID(r.Context(), share.OwnerUserID)
 		if err == nil {

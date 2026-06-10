@@ -310,6 +310,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Use(CORSMiddleware)
 		r.HandleFunc("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
 		r.HandleFunc("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
+		// Per-share connector URLs (/mcp/{share_id}) discover via path-scoped
+		// metadata per RFC 9728 §3.1 path-insertion.
+		r.HandleFunc("/.well-known/oauth-protected-resource/mcp/*", handler(handlers.OAuthProtectedResource))
 		// /authorize: GET serves the React consent SPA shell, POST
 		// receives the user's decision and 302-redirects to the OAuth
 		// client. Chi's method routing returns 405 for unmatched

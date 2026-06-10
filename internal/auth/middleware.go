@@ -254,6 +254,19 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 			return
 		}
 
+		// Per-share connector URLs (/mcp/{share_id}) must be served only with
+		// the matching share credential. The audience check binds OAuth-issued
+		// tokens to their path, but bearer-direct share tokens (nram_s_) and API
+		// keys skip audience validation, so enforce the path/credential match
+		// explicitly: a non-share credential on a per-share URL, or a share
+		// credential whose id differs from the path segment, is rejected.
+		if shareID, ok := mcpPathShareID(r); ok {
+			if ac.ShareTokenID == nil || *ac.ShareTokenID != shareID {
+				writeUnauthorized(w, r, "share URL does not match the presented credential")
+				return
+			}
+		}
+
 		if refreshed != "" {
 			w.Header().Set(SessionRefreshHeader, refreshed)
 		}
@@ -268,8 +281,15 @@ func (m *AuthMiddleware) Handler(next http.Handler) http.Handler {
 func writeUnauthorized(w http.ResponseWriter, r *http.Request, msg string) {
 	base := baseURLFromRequest(r)
 	if base != "" {
+		metaURL := base + "/.well-known/oauth-protected-resource"
+		// RFC 9728 §3.1 path-insertion: a per-share resource (/mcp/{id})
+		// advertises path-scoped metadata so the client discovers the matching
+		// per-share `resource`. The bare /mcp path keeps the unscoped doc.
+		if p := strings.TrimSuffix(r.URL.Path, "/"); strings.HasPrefix(p, "/mcp/") {
+			metaURL += p
+		}
 		w.Header().Set("WWW-Authenticate",
-			fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, base))
+			fmt.Sprintf(`Bearer resource_metadata="%s"`, metaURL))
 	}
 	http.Error(w, msg, http.StatusUnauthorized)
 }
@@ -294,6 +314,49 @@ func baseURLFromRequest(r *http.Request) string {
 		scheme = fwd
 	}
 	return scheme + "://" + r.Host
+}
+
+// mcpAudiencePath returns the MCP endpoint path used to derive the expected
+// token audience. A per-share connector URL (/mcp/{share_id}) yields that exact
+// path so tokens bind to it; the bare /mcp path and every non-MCP route guarded
+// by this middleware keep the legacy "/mcp" expectation, preserving prior
+// behavior for own-account and API-key requests.
+func mcpAudiencePath(r *http.Request) string {
+	if r == nil {
+		return "/mcp"
+	}
+	p := strings.TrimSuffix(r.URL.Path, "/")
+	if p == "/mcp" || strings.HasPrefix(p, "/mcp/") {
+		return p
+	}
+	return "/mcp"
+}
+
+// shareIDFromMCPPath extracts a share id from a path of the form "/mcp/{uuid}"
+// (a trailing slash is tolerated). ok is false for the bare /mcp path, a deeper
+// sub-path, or a non-UUID segment. This is the single grammar for a per-share
+// connector URL; the audience check, the bearer path guard, resource validation,
+// and discovery all key off it, so it lives in one place to avoid drift.
+func shareIDFromMCPPath(mcpPath string) (uuid.UUID, bool) {
+	rest, found := strings.CutPrefix(strings.TrimSuffix(mcpPath, "/"), "/mcp/")
+	if !found || rest == "" || strings.Contains(rest, "/") {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(rest)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// mcpPathShareID reports the per-share id encoded in the request's MCP path.
+// Used to enforce that a /mcp/{id} URL is served only with the matching share
+// credential.
+func mcpPathShareID(r *http.Request) (uuid.UUID, bool) {
+	if r == nil {
+		return uuid.Nil, false
+	}
+	return shareIDFromMCPPath(r.URL.Path)
 }
 
 func (m *AuthMiddleware) validateAPIKey(ctx context.Context, rawKey string) (*AuthContext, error) {
@@ -382,13 +445,19 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 
 	// RFC 8707 / MCP spec: "MCP servers MUST validate that access tokens were
 	// issued specifically for them as the intended audience."
-	// Derive expected audience from the request Host header.
+	// Derive expected audience from the Host header plus the MCP endpoint
+	// path so a per-share connector URL (/mcp/{share_id}) binds its token to
+	// that exact path; a token minted for one share cannot be replayed at
+	// another share's URL.
 	base := baseURLFromRequest(r)
 	if base != "" {
-		expectedAudience := base + "/mcp"
-		aud, _ := claims.GetAudience()
-		if len(aud) > 0 && !containsAudience(aud, expectedAudience) {
-			return nil, "", fmt.Errorf("token audience %v does not include this server (%s)", aud, expectedAudience)
+		// Only build the expected audience when the token actually carries one;
+		// session JWTs (the common UI case) have no aud and skip the check.
+		if aud, _ := claims.GetAudience(); len(aud) > 0 {
+			expectedAudience := base + mcpAudiencePath(r)
+			if !containsAudience(aud, expectedAudience) {
+				return nil, "", fmt.Errorf("token audience %v does not include this server (%s)", aud, expectedAudience)
+			}
 		}
 	}
 

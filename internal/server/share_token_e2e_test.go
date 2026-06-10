@@ -232,69 +232,10 @@ func newShareE2EEnv(t *testing.T) *shareE2EEnv {
 }
 
 // driveShareConsent drives the full consent + token exchange flow with a
-// share-paste, returning the resulting access JWT.
+// share-paste (no resource indicator), returning the resulting access JWT.
 func driveShareConsent(t *testing.T, env *shareE2EEnv, secret string) string {
 	t.Helper()
-	client := e2eNoRedirectClient()
-
-	codeVerifier := "share-e2e-verifier-" + uuid.New().String()[:20] + "-padding-to-rfc7636-min-43chars"
-	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
-
-	form := url.Values{}
-	form.Set("client_id", env.OAuthClient.ClientID)
-	form.Set("redirect_uri", "https://example.com/cb")
-	form.Set("response_type", "code")
-	form.Set("code_challenge", codeChallenge)
-	form.Set("code_challenge_method", "S256")
-	form.Set("share_token", secret)
-	form.Set("auth_mode", "share")
-	form.Set("decision", "approve")
-
-	req, _ := http.NewRequest(http.MethodPost, env.Server.URL+"/authorize", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("consent: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("consent: expected 302, got %d; body: %s", resp.StatusCode, body)
-	}
-
-	loc, _ := url.Parse(resp.Header.Get("Location"))
-	code := loc.Query().Get("code")
-	if code == "" {
-		t.Fatalf("consent: no code in redirect: %s", resp.Header.Get("Location"))
-	}
-
-	tokenForm := url.Values{}
-	tokenForm.Set("grant_type", "authorization_code")
-	tokenForm.Set("code", code)
-	tokenForm.Set("redirect_uri", "https://example.com/cb")
-	tokenForm.Set("client_id", env.OAuthClient.ClientID)
-	tokenForm.Set("code_verifier", codeVerifier)
-
-	resp, err = client.PostForm(env.Server.URL+"/token", tokenForm)
-	if err != nil {
-		t.Fatalf("token: %v", err)
-	}
-	body, _ = io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("token: expected 200, got %d; body: %s", resp.StatusCode, body)
-	}
-
-	var tokResp struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(body, &tokResp); err != nil {
-		t.Fatalf("decode token: %v", err)
-	}
-	if tokResp.AccessToken == "" {
-		t.Fatal("token: empty access_token")
-	}
-	return tokResp.AccessToken
+	return driveShareConsentWithResource(t, env, secret, "")
 }
 
 // initializeMCPSession runs the MCP initialize handshake and returns the
@@ -762,5 +703,228 @@ func TestShareE2E_BearerDirect_RestRejected(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("/v1/me/profile must reject share-bearer with 403, got %d", resp.StatusCode)
+	}
+}
+
+// mcpPostTo posts a JSON-RPC request to an explicit MCP URL (used to target a
+// per-share /mcp/{share_id} endpoint, which the e2eMCPPost helper cannot reach
+// because it always appends "/mcp").
+func mcpPostTo(t *testing.T, mcpURL, token string, rpcReq e2eJSONRPCRequest, sessionID string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		t.Fatalf("marshal rpc: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, mcpURL, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("mcp post to %s: %v", mcpURL, err)
+	}
+	return resp
+}
+
+// recallAtURL runs initialize + recall against an explicit MCP URL and returns
+// (statusCode, succeeded, message). A 401 at the initialize step short-circuits
+// (the auth middleware rejects before the MCP transport runs).
+func recallAtURL(t *testing.T, mcpURL, token, projectSlug string) (int, bool, string) {
+	t.Helper()
+
+	initReq := e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "per-share-e2e", "version": "1.0"},
+		},
+	}
+	resp := mcpPostTo(t, mcpURL, token, initReq, "")
+	if resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		return http.StatusUnauthorized, false, "unauthorized"
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("initialize at %s: status %d, body: %s", mcpURL, resp.StatusCode, b)
+	}
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+	_ = resp.Body.Close()
+
+	notif := e2eJSONRPCRequest{JSONRPC: "2.0", Method: "notifications/initialized"}
+	_ = mcpPostTo(t, mcpURL, token, notif, sessionID).Body.Close()
+
+	args := map[string]any{"query": "anything"}
+	if projectSlug != "" {
+		args["project"] = projectSlug
+	}
+	rpcReq := e2eJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/call",
+		Params:  map[string]any{"name": "recall", "arguments": args},
+	}
+	resp = mcpPostTo(t, mcpURL, token, rpcReq, sessionID)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return http.StatusUnauthorized, false, "unauthorized"
+	}
+	rpc := e2eParseJSONRPC(t, resp)
+	if rpc.Error != nil {
+		return resp.StatusCode, false, rpc.Error.Message
+	}
+	var toolResult struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(rpc.Result, &toolResult); err != nil {
+		t.Fatalf("decode tool result: %v (raw: %s)", err, string(rpc.Result))
+	}
+	text := ""
+	if len(toolResult.Content) > 0 {
+		text = toolResult.Content[0].Text
+	}
+	if toolResult.IsError {
+		return resp.StatusCode, false, text
+	}
+	return resp.StatusCode, true, text
+}
+
+// driveShareConsentWithResource is driveShareConsent with an RFC 8707 resource
+// indicator threaded through both the authorize and token requests, so the
+// minted access token is audience-bound to the per-share URL.
+func driveShareConsentWithResource(t *testing.T, env *shareE2EEnv, secret, resource string) string {
+	t.Helper()
+	client := e2eNoRedirectClient()
+
+	codeVerifier := "share-e2e-verifier-" + uuid.New().String()[:20] + "-padding-to-rfc7636-min-43chars"
+	codeChallenge := e2eComputeCodeChallenge(codeVerifier)
+
+	form := url.Values{}
+	form.Set("client_id", env.OAuthClient.ClientID)
+	form.Set("redirect_uri", "https://example.com/cb")
+	form.Set("response_type", "code")
+	form.Set("code_challenge", codeChallenge)
+	form.Set("code_challenge_method", "S256")
+	form.Set("share_token", secret)
+	form.Set("auth_mode", "share")
+	form.Set("decision", "approve")
+	if resource != "" {
+		form.Set("resource", resource)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, env.Server.URL+"/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("consent: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("consent: expected 302, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatalf("consent: no code in redirect: %s", resp.Header.Get("Location"))
+	}
+
+	tokenForm := url.Values{}
+	tokenForm.Set("grant_type", "authorization_code")
+	tokenForm.Set("code", code)
+	tokenForm.Set("redirect_uri", "https://example.com/cb")
+	tokenForm.Set("client_id", env.OAuthClient.ClientID)
+	tokenForm.Set("code_verifier", codeVerifier)
+	if resource != "" {
+		tokenForm.Set("resource", resource)
+	}
+
+	resp, err = client.PostForm(env.Server.URL+"/token", tokenForm)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token: expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var tokResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &tokResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokResp.AccessToken == "" {
+		t.Fatal("token: empty access_token")
+	}
+	return tokResp.AccessToken
+}
+
+// TestShareE2E_PerShareURL_OAuthRoundTrip exercises the full per-share connector
+// URL path: path-scoped discovery, consent bound to the per-share resource, an
+// MCP tool call at /mcp/{share_id}, and rejection of that token at both the bare
+// /mcp and a different share's URL.
+func TestShareE2E_PerShareURL_OAuthRoundTrip(t *testing.T) {
+	env := newShareE2EEnv(t)
+
+	result, err := env.ShareSvc.Create(context.Background(), service.CreateShareRequest{
+		OwnerUserID: env.User.ID,
+		Name:        "per-share-url share",
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		Grants: []model.ShareTokenGrant{{
+			ProjectID:  env.ProjectA.ID,
+			Permission: model.SharePermissionRead,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create share: %v", err)
+	}
+	shareID := result.Share.ID
+	perShareURL := env.Server.URL + "/mcp/" + shareID.String()
+
+	// 1. Path-scoped discovery advertises the per-share resource.
+	metaResp, err := http.Get(env.Server.URL + "/.well-known/oauth-protected-resource/mcp/" + shareID.String())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	var meta struct {
+		Resource string `json:"resource"`
+	}
+	_ = json.NewDecoder(metaResp.Body).Decode(&meta)
+	_ = metaResp.Body.Close()
+	if meta.Resource != perShareURL {
+		t.Fatalf("discovery resource = %q, want %q", meta.Resource, perShareURL)
+	}
+
+	// 2. Consent bound to the per-share resource yields an audience-bound token.
+	token := driveShareConsentWithResource(t, env, result.RawSecret, perShareURL)
+
+	// 3. recall on the allowlisted project at the per-share URL succeeds.
+	if code, ok, msg := recallAtURL(t, perShareURL, token, env.ProjectA.Slug); !ok {
+		t.Fatalf("recall at per-share URL failed (code %d): %s", code, msg)
+	}
+
+	// 4. The same token is rejected at the bare /mcp (audience mismatch)...
+	if code, _, _ := recallAtURL(t, env.Server.URL+"/mcp", token, env.ProjectA.Slug); code != http.StatusUnauthorized {
+		t.Fatalf("per-share token at bare /mcp: code %d, want 401", code)
+	}
+	// ...and at a different share's URL.
+	otherURL := env.Server.URL + "/mcp/" + uuid.New().String()
+	if code, _, _ := recallAtURL(t, otherURL, token, env.ProjectA.Slug); code != http.StatusUnauthorized {
+		t.Fatalf("per-share token at another share URL: code %d, want 401", code)
 	}
 }

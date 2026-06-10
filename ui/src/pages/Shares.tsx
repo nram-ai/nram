@@ -54,7 +54,7 @@ function permissionLabel(p: SharePermission): string {
 // the codebase's preference for in-flow panels over overlays.
 // ---------------------------------------------------------------------------
 
-function CreateSharePanel({
+export function CreateSharePanel({
   open,
   onClose,
 }: {
@@ -154,6 +154,9 @@ function CreateSharePanel({
   const projects = projectsQuery.data ?? [];
   const projectsByID = new Map(projects.map((p) => [p.id, p]));
 
+  const createdMcpUrl = created ? `${window.location.origin}/mcp/${created.share.id}` : "";
+  const createdMagicLink = created ? `${window.location.origin}/share/accept?token=${created.secret}` : "";
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={handleClose} />
@@ -173,23 +176,39 @@ function CreateSharePanel({
                   One-shot shares can only be redeemed through the OAuth consent flow. The bearer-token URL is intentionally not offered; paste the magic link to the recipient.
                 </p>
                 <CopyButton
-                  text={`${window.location.origin}/share/accept?token=${created.secret}`}
+                  text={createdMagicLink}
                   label="Copy magic link"
                   className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                 />
               </div>
             ) : (
-              <div className="mb-4 flex gap-2">
-                <CopyButton
-                  text={created.secret}
-                  label="Copy token"
-                  className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                />
-                <CopyButton
-                  text={`${window.location.origin}/share/accept?token=${created.secret}`}
-                  label="Copy magic link"
-                  className="rounded border border-input bg-background px-4 py-2 text-sm hover:bg-muted"
-                />
+              <div className="mb-4 space-y-3">
+                <div>
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">MCP server URL</p>
+                  <div className="rounded border border-input bg-muted p-3 font-mono text-sm break-all">
+                    {createdMcpUrl}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This per-share URL registers as its own connector, so the recipient can add it alongside other shares or their own account.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <CopyButton
+                    text={createdMcpUrl}
+                    label="Copy URL"
+                    className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                  />
+                  <CopyButton
+                    text={created.secret}
+                    label="Copy token"
+                    className="rounded border border-input bg-background px-4 py-2 text-sm hover:bg-muted"
+                  />
+                  <CopyButton
+                    text={createdMagicLink}
+                    label="Copy magic link"
+                    className="rounded border border-input bg-background px-4 py-2 text-sm hover:bg-muted"
+                  />
+                </div>
               </div>
             )}
             <button
@@ -377,6 +396,7 @@ function ShareDetailPanel({ shareID, onClose }: { shareID: string; onClose: () =
   if (!share) return null;
 
   const status = shareStatus(share);
+  const mcpUrl = `${window.location.origin}/mcp/${share.id}`;
 
   return (
     <div className="surface-elevated mt-3 rounded p-4">
@@ -418,6 +438,20 @@ function ShareDetailPanel({ shareID, onClose }: { shareID: string; onClose: () =
         </div>
         <div>
           <span className="text-muted-foreground">One-shot:</span> {share.is_one_shot ? "yes" : "no"}
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <p className="mb-1 text-xs font-medium text-muted-foreground">MCP server URL</p>
+        <div className="rounded border border-input bg-muted p-2 font-mono text-xs break-all">
+          {mcpUrl}
+        </div>
+        <div className="mt-2">
+          <CopyButton
+            text={mcpUrl}
+            label="Copy URL"
+            className="rounded border border-input bg-background px-3 py-1.5 text-xs hover:bg-muted"
+          />
         </div>
       </div>
 

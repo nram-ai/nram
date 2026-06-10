@@ -604,8 +604,10 @@ func TestShareAcceptHandler_JSONResponse(t *testing.T) {
 	if resp.ShareToken != f.rawSecret {
 		t.Fatalf("share_token not echoed; got %q", resp.ShareToken)
 	}
-	if !strings.HasSuffix(resp.MCPServerURL, "/mcp") {
-		t.Fatalf("mcp_server_url should end in /mcp, got %q", resp.MCPServerURL)
+	// The accept page hands the recipient this share's per-share connector URL
+	// (/mcp/{share_id}) so it registers as a distinct connector.
+	if want := "/mcp/" + f.share.ID.String(); !strings.HasSuffix(resp.MCPServerURL, want) {
+		t.Fatalf("mcp_server_url should end in %q, got %q", want, resp.MCPServerURL)
 	}
 }
 

@@ -275,6 +275,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/OAuthProtectedResourceMetadata"
 
+  /.well-known/oauth-protected-resource/mcp/{share_id}:
+    get:
+      operationId: getProtectedResourceMetadataForShare
+      tags: [OAuth]
+      summary: Path-scoped OAuth Protected Resource Metadata for a per-share connector URL
+      description: |
+        RFC 9728 §3.1 path-insertion variant. A per-share connector URL
+        (`/mcp/{share_id}`) discovers its metadata here; the returned `resource`
+        is the per-share URL so the MCP client binds its token to that exact
+        path. An unknown or inactive share id returns 404.
+      security: []
+      parameters:
+        - name: share_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Protected resource metadata for the per-share connector URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthProtectedResourceMetadata"
+        "404":
+          description: No active share with this id
+
   /authorize:
     post:
       operationId: oauthAuthorizeDecision

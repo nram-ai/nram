@@ -603,14 +603,34 @@ type protectedResourceMetadata struct {
 }
 
 // ProtectedResourceHandler returns RFC 9728 OAuth Protected Resource Metadata.
-// Served at GET /.well-known/oauth-protected-resource.
-// The `resource` field is the canonical MCP server URI (the endpoint the
-// client uses tokens against), not the authorization server URL.
+// Served at GET /.well-known/oauth-protected-resource and, via RFC 9728 §3.1
+// path-insertion, at /.well-known/oauth-protected-resource/mcp/{share_id} for
+// per-share connector URLs. The `resource` field is the canonical MCP server
+// URI the client binds tokens against, not the authorization server URL. A
+// path-scoped request for an unknown or inactive share is a 404 (we do not
+// advertise a resource for a share that cannot be used).
 func (s *OAuthServer) ProtectedResourceHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		base := baseURLFromRequest(r)
+		resource := base + "/mcp"
+
+		// A path-scoped request (the /mcp/{share_id} wildcard route) must name a
+		// valid active share; the bare route has no suffix and keeps base/mcp.
+		if suffix := strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource"); suffix != "" {
+			shareID, ok := shareIDFromMCPPath(suffix)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			if _, active := s.activeShareByID(r.Context(), shareID); !active {
+				http.NotFound(w, r)
+				return
+			}
+			resource = base + "/mcp/" + shareID.String()
+		}
+
 		meta := protectedResourceMetadata{
-			Resource:               base + "/mcp",
+			Resource:               resource,
 			AuthorizationServers:   []string{base},
 			BearerMethodsSupported: []string{"header"},
 		}
