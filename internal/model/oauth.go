@@ -18,6 +18,7 @@ type OAuthClient struct {
 	AutoRegistered bool       `json:"auto_registered"`
 	ShareTokenID   *uuid.UUID `json:"share_token_id,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
 }
 
 type OAuthAuthorizationCode struct {

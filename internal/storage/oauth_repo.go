@@ -220,7 +220,7 @@ func (r *OAuthRepo) reloadClient(ctx context.Context, client *model.OAuthClient)
 	return nil
 }
 
-const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, share_token_id, created_at`
+const selectOAuthClientColumns = `SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id, user_id, auto_registered, share_token_id, created_at, last_used_at`
 
 func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var client model.OAuthClient
@@ -231,16 +231,17 @@ func (r *OAuthRepo) scanClient(row *sql.Row) (*model.OAuthClient, error) {
 	var shareIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
+	var lastUsedAtStr sql.NullString
 
 	err := row.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr, &lastUsedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr, lastUsedAtStr)
 }
 
 func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, error) {
@@ -252,16 +253,17 @@ func (r *OAuthRepo) scanClientFromRows(rows *sql.Rows) (*model.OAuthClient, erro
 	var shareIDStr sql.NullString
 	var autoReg bool
 	var createdAtStr string
+	var lastUsedAtStr sql.NullString
 
 	err := rows.Scan(
 		&idStr, &client.ClientID, &client.ClientSecret, &client.Name,
-		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr,
+		&redirectStr, &grantStr, &orgIDStr, &userIDStr, &autoReg, &shareIDStr, &createdAtStr, &lastUsedAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("oauth client scan rows: %w", err)
 	}
 
-	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr)
+	return r.populateClient(&client, idStr, redirectStr, grantStr, orgIDStr, userIDStr, shareIDStr, autoReg, createdAtStr, lastUsedAtStr)
 }
 
 func (r *OAuthRepo) scanClients(rows *sql.Rows) ([]model.OAuthClient, error) {
@@ -285,6 +287,7 @@ func (r *OAuthRepo) populateClient(
 	orgIDStr, userIDStr, shareIDStr sql.NullString,
 	autoReg bool,
 	createdAtStr string,
+	lastUsedAtStr sql.NullString,
 ) (*model.OAuthClient, error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -341,7 +344,36 @@ func (r *OAuthRepo) populateClient(
 		return nil, fmt.Errorf("oauth client parse created_at: %w", err)
 	}
 
+	if lastUsedAtStr.Valid {
+		t, err := time.Parse(time.RFC3339, lastUsedAtStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("oauth client parse last_used_at: %w", err)
+		}
+		client.LastUsedAt = &t
+	}
+
 	return client, nil
+}
+
+// TouchClientLastUsed records that the given client was just used, stamping
+// last_used_at to at. The write is throttled in SQL: it only fires when the
+// stored value is null or older than ~60s, bounding writes to roughly once a
+// minute per client so the request hot path stays cheap. Best-effort; callers
+// ignore the returned error so usage tracking never affects request outcomes.
+func (r *OAuthRepo) TouchClientLastUsed(ctx context.Context, clientID string, at time.Time) error {
+	now := at.UTC()
+	nowStr := now.Format(time.RFC3339)
+	thresholdStr := now.Add(-60 * time.Second).Format(time.RFC3339)
+
+	query := `UPDATE oauth_clients SET last_used_at = ? WHERE client_id = ? AND (last_used_at IS NULL OR last_used_at < ?)`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE oauth_clients SET last_used_at = $1 WHERE client_id = $2 AND (last_used_at IS NULL OR last_used_at < $3)`
+	}
+
+	if _, err := r.db.Exec(ctx, query, nowStr, clientID, thresholdStr); err != nil {
+		return fmt.Errorf("oauth client touch last_used: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

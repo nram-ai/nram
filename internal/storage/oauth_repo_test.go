@@ -828,3 +828,103 @@ func TestOAuthRepo_DeleteIdP(t *testing.T) {
 		}
 	})
 }
+
+// TestOAuthRepo_TouchClientLastUsed verifies usage stamping: a fresh client has
+// no last_used_at, the first touch records it, a second touch inside the ~60s
+// throttle window is a no-op, and a touch past the window advances it.
+func TestOAuthRepo_TouchClientLastUsed(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewOAuthRepo(db)
+		user := createTestUser(t, ctx, db)
+		client := newTestOAuthClient(t, ctx, repo, user)
+
+		// Fresh client: never used.
+		got, err := repo.GetClientByID(ctx, client.ClientID)
+		if err != nil {
+			t.Fatalf("GetClientByID: %v", err)
+		}
+		if got.LastUsedAt != nil {
+			t.Fatalf("expected nil LastUsedAt on fresh client, got %v", got.LastUsedAt)
+		}
+
+		// First touch records last_used_at.
+		t0 := time.Now().UTC().Truncate(time.Second)
+		if err := repo.TouchClientLastUsed(ctx, client.ClientID, t0); err != nil {
+			t.Fatalf("TouchClientLastUsed (first): %v", err)
+		}
+		got, err = repo.GetClientByID(ctx, client.ClientID)
+		if err != nil {
+			t.Fatalf("GetClientByID after first touch: %v", err)
+		}
+		if got.LastUsedAt == nil || !got.LastUsedAt.Equal(t0) {
+			t.Fatalf("expected LastUsedAt %v, got %v", t0, got.LastUsedAt)
+		}
+
+		// Second touch within the throttle window (+10s) is a no-op.
+		if err := repo.TouchClientLastUsed(ctx, client.ClientID, t0.Add(10*time.Second)); err != nil {
+			t.Fatalf("TouchClientLastUsed (throttled): %v", err)
+		}
+		got, err = repo.GetClientByID(ctx, client.ClientID)
+		if err != nil {
+			t.Fatalf("GetClientByID after throttled touch: %v", err)
+		}
+		if got.LastUsedAt == nil || !got.LastUsedAt.Equal(t0) {
+			t.Fatalf("expected throttled touch to leave LastUsedAt at %v, got %v", t0, got.LastUsedAt)
+		}
+
+		// Touch past the throttle window (+2m) advances it.
+		t1 := t0.Add(2 * time.Minute)
+		if err := repo.TouchClientLastUsed(ctx, client.ClientID, t1); err != nil {
+			t.Fatalf("TouchClientLastUsed (advance): %v", err)
+		}
+		got, err = repo.GetClientByID(ctx, client.ClientID)
+		if err != nil {
+			t.Fatalf("GetClientByID after advance: %v", err)
+		}
+		if got.LastUsedAt == nil || !got.LastUsedAt.Equal(t1) {
+			t.Fatalf("expected LastUsedAt advanced to %v, got %v", t1, got.LastUsedAt)
+		}
+	})
+}
+
+// TestOAuthRepo_LastUsedBackfill verifies the 000050 backfill logic: setting
+// last_used_at to MAX(oauth_refresh_tokens.created_at) per client. Two tokens
+// with controlled created_at are inserted; the backfill must pick the latest.
+func TestOAuthRepo_LastUsedBackfill(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewOAuthRepo(db)
+		user := createTestUser(t, ctx, db)
+		client := newTestOAuthClient(t, ctx, repo, user)
+
+		older := "2026-01-01T00:00:00Z"
+		newer := "2026-03-15T12:30:00Z"
+		insert := `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, created_at) VALUES (?, ?, ?, '', ?)`
+		if db.Backend() == BackendPostgres {
+			insert = `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, created_at) VALUES ($1, $2, $3, '', $4)`
+		}
+		for _, ts := range []string{older, newer} {
+			if _, err := db.Exec(ctx, insert, "hash-"+ts, client.ClientID, user.ID.String(), ts); err != nil {
+				t.Fatalf("seed refresh token: %v", err)
+			}
+		}
+
+		// Exact backfill statement from migration 000050.
+		backfill := `UPDATE oauth_clients
+			SET last_used_at = (SELECT MAX(rt.created_at) FROM oauth_refresh_tokens rt
+			                    WHERE rt.client_id = oauth_clients.client_id)`
+		if _, err := db.Exec(ctx, backfill); err != nil {
+			t.Fatalf("run backfill: %v", err)
+		}
+
+		got, err := repo.GetClientByID(ctx, client.ClientID)
+		if err != nil {
+			t.Fatalf("GetClientByID: %v", err)
+		}
+		want, _ := time.Parse(time.RFC3339, newer)
+		if got.LastUsedAt == nil || !got.LastUsedAt.Equal(want) {
+			t.Fatalf("backfill: expected LastUsedAt %v (max of refresh tokens), got %v", want, got.LastUsedAt)
+		}
+	})
+}

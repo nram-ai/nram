@@ -1467,10 +1467,16 @@ export interface OAuthClient {
   id: string;
   name: string;
   client_id: string;
-  type: "auto" | "manual";
-  client_type: "public" | "confidential";
+  // type/client_type are emitted by the admin endpoint (GET /admin/oauth/clients).
+  // The self-service endpoint (GET /me/oauth-clients) instead emits auto_registered
+  // and last_used_at. The two endpoints share this type, so the differing fields
+  // are optional.
+  type?: "auto" | "manual";
+  client_type?: "public" | "confidential";
+  auto_registered?: boolean;
   redirect_uris: string[];
   created_at: string;
+  last_used_at?: string | null;
 }
 
 export interface OAuthClientCreated extends OAuthClient {

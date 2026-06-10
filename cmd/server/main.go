@@ -1142,7 +1142,8 @@ func main() {
 	// and stale-after windows are read once from settings; runtime changes
 	// require server restart.
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings).
-		WithShareTokens(shareTokenSvc, shareTokenRepo)
+		WithShareTokens(shareTokenSvc, shareTokenRepo).
+		WithClientUsage(oauthRepo)
 	rateLimiter := auth.NewRateLimiter(10, 20,
 		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
 			service.SettingAPIRateLimitCleanupSeconds, "global"),

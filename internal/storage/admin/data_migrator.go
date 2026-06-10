@@ -325,6 +325,10 @@ var migratedTables = []string{
 	"enrichment_queue",
 	"webhooks",
 	"token_usage",
+	"export_jobs",
+	"audit_events",
+	"share_tokens",
+	"share_token_grants",
 	"oauth_clients",
 	"oauth_authorization_codes",
 	"oauth_refresh_tokens",
@@ -355,6 +359,7 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"procedural_entries", m.migrateProceduralEntries},
 		{"memory_vectors", m.migrateMemoryVectors},
 		{"entities", m.migrateEntities},
+		{"entity_vectors", m.migrateEntityVectors},
 		{"entity_aliases", m.migrateEntityAliases},
 		{"relationships", m.migrateRelationships},
 		{"memory_lineage", m.migrateMemoryLineage},
@@ -362,6 +367,10 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"enrichment_queue", m.migrateEnrichmentQueue},
 		{"webhooks", m.migrateWebhooks},
 		{"token_usage", m.migrateTokenUsage},
+		{"export_jobs", m.migrateExportJobs},
+		{"audit_events", m.migrateAuditEvents},
+		{"share_tokens", m.migrateShareTokens},
+		{"share_token_grants", m.migrateShareTokenGrants},
 		{"oauth_clients", m.migrateOAuthClients},
 		{"oauth_authorization_codes", m.migrateOAuthAuthorizationCodes},
 		{"oauth_refresh_tokens", m.migrateOAuthRefreshTokens},
@@ -438,33 +447,52 @@ func (m *DataMigrator) validateCounts(ctx context.Context) error {
 		}
 	}
 
-	// Validate vector counts: SQLite memory_vectors → sum of Postgres memory_vectors_* tables,
-	// plus any orphan skips (memory_id pointed at a skipped memory) or unsupported-dimension skips.
-	var srcVectors int
-	if err := m.src.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_vectors").Scan(&srcVectors); err != nil {
-		srcVectors = 0
+	// A single SQLite vector table is sharded into per-dimension Postgres tables,
+	// so the count must sum across them plus any orphan/unsupported-dimension skips.
+	if err := m.validateShardedVectorCounts(ctx, "memory_vectors", vectorDimensionTables); err != nil {
+		return err
 	}
-	if srcVectors > 0 {
-		var dstVectors int
-		for _, table := range vectorDimensionTables {
-			var count int
-			if err := m.dst.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
-				return fmt.Errorf("count %s in postgres: %w", table, err)
-			}
-			dstVectors += count
+	if err := m.validateShardedVectorCounts(ctx, "entity_vectors", entityVectorDimensionTables); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateShardedVectorCounts checks that a SQLite vector table's row count
+// equals the sum of its per-dimension Postgres shard tables plus the rows the
+// migrator skipped (orphans / unsupported dimensions, recorded under
+// "<srcTable>.*"). A zero source count short-circuits, so deployments without
+// the pgvector shard tables are not probed.
+func (m *DataMigrator) validateShardedVectorCounts(ctx context.Context, srcTable string, dimTables []string) error {
+	var srcCount int
+	if err := m.src.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+srcTable).Scan(&srcCount); err != nil {
+		srcCount = 0
+	}
+	if srcCount == 0 {
+		return nil
+	}
+
+	var dstCount int
+	for _, table := range dimTables {
+		var count int
+		if err := m.dst.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+			return fmt.Errorf("count %s in postgres: %w", table, err)
 		}
-		var skippedVectors int
-		for key, n := range m.skipped {
-			if strings.HasPrefix(key, "memory_vectors.") {
-				skippedVectors += n
-			}
-		}
-		if dstVectors+skippedVectors != srcVectors {
-			return fmt.Errorf("row count mismatch for memory_vectors: sqlite=%d postgres(sum)=%d skipped=%d",
-				srcVectors, dstVectors, skippedVectors)
+		dstCount += count
+	}
+
+	var skipped int
+	for key, n := range m.skipped {
+		if strings.HasPrefix(key, srcTable+".") {
+			skipped += n
 		}
 	}
 
+	if dstCount+skipped != srcCount {
+		return fmt.Errorf("row count mismatch for %s: sqlite=%d postgres(sum)=%d skipped=%d",
+			srcTable, srcCount, dstCount, skipped)
+	}
 	return nil
 }
 
@@ -472,11 +500,12 @@ func (m *DataMigrator) validateCounts(ctx context.Context) error {
 // storage.SupportedVectorDimensions so adding a new dimension in one place
 // automatically flows through migration, validation, and reset.
 var (
-	vectorDimensionTables     = buildVectorDimensionTables()
-	supportedVectorDimensions = buildSupportedVectorDimensions()
+	vectorDimensionTables       = buildVectorDimensionTables("memory_vectors")
+	entityVectorDimensionTables = buildVectorDimensionTables("entity_vectors")
+	supportedVectorDimensions   = buildSupportedVectorDimensions()
 )
 
-func buildVectorDimensionTables() []string {
+func buildVectorDimensionTables(prefix string) []string {
 	dims := make([]int, 0, len(storage.SupportedVectorDimensions))
 	for d := range storage.SupportedVectorDimensions {
 		dims = append(dims, d)
@@ -484,7 +513,7 @@ func buildVectorDimensionTables() []string {
 	sort.Ints(dims)
 	out := make([]string, len(dims))
 	for i, d := range dims {
-		out[i] = fmt.Sprintf("memory_vectors_%d", d)
+		out[i] = fmt.Sprintf("%s_%d", prefix, d)
 	}
 	return out
 }
@@ -1166,6 +1195,96 @@ func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
 	return nil
 }
 
+// migrateEntityVectors copies entity embeddings, sharding the single SQLite
+// entity_vectors table into the per-dimension Postgres entity_vectors_<dim>
+// tables, exactly as migrateMemoryVectors does for memory embeddings.
+func (m *DataMigrator) migrateEntityVectors(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT entity_id, namespace_id, dimension, embedding FROM entity_vectors
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type vectorRow struct {
+		entityID string
+		floats   []float32
+	}
+	byTable := make(map[string][]vectorRow)
+	var skipped int
+
+	for rows.Next() {
+		var (
+			entityID    string
+			namespaceID string
+			dimension   int
+			embedding   []byte
+		)
+		if err := rows.Scan(&entityID, &namespaceID, &dimension, &embedding); err != nil {
+			return err
+		}
+
+		// Orphan check: entity_id must reference an entity we inserted, else the
+		// Postgres entity_vectors_*.entity_id FK would fail.
+		if !m.hasInserted("entities", entityID) {
+			m.skipOrphan("entity_vectors", "entity_id")
+			continue
+		}
+
+		if _, ok := supportedVectorDimensions[dimension]; !ok {
+			log.Printf("migrateEntityVectors: skipping entity %s with unsupported dimension %d", entityID, dimension)
+			m.skipOrphan("entity_vectors", "unsupported_dimension")
+			skipped++
+			continue
+		}
+
+		floats, err := hnsw.DecodeVector(embedding)
+		if err != nil {
+			return fmt.Errorf("decode vector for entity %s: %w", entityID, err)
+		}
+
+		table := fmt.Sprintf("entity_vectors_%d", dimension)
+		byTable[table] = append(byTable[table], vectorRow{entityID: entityID, floats: floats})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if skipped > 0 {
+		log.Printf("migrateEntityVectors: skipped %d vectors with unsupported dimensions", skipped)
+	}
+
+	for table, vectors := range byTable {
+		tx, err := m.dst.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback() //nolint:errcheck
+
+		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
+			INSERT INTO %s (entity_id, embedding) VALUES ($1, $2)
+			ON CONFLICT (entity_id) DO UPDATE SET embedding = EXCLUDED.embedding
+		`, table))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+
+		for _, v := range vectors {
+			if _, err := stmt.ExecContext(ctx, v.entityID, pgvector.NewVector(v.floats)); err != nil {
+				return fmt.Errorf("insert vector into %s for entity %s: %w", table, v.entityID, err)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit vectors for %s: %w", table, err)
+		}
+	}
+
+	return nil
+}
+
 func (m *DataMigrator) migrateEntities(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT id, namespace_id, name, canonical, entity_type, embedding_dim, properties,
@@ -1694,10 +1813,254 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 	return tx.Commit()
 }
 
+// migrateAuditEvents copies the audit trail. audit_events deliberately carries
+// no enforced foreign keys (actor_user_id / target_id / target_org_id are bare
+// columns) so the trail survives deletion of the subjects it references; rows
+// are therefore copied verbatim with no orphan checks.
+func (m *DataMigrator) migrateAuditEvents(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, occurred_at, actor_user_id, actor_role, action, target_type,
+		       target_id, target_org_id, source_ip, user_agent, details
+		FROM audit_events
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO audit_events (id, occurred_at, actor_user_id, actor_role, action,
+		                          target_type, target_id, target_org_id, source_ip,
+		                          user_agent, details)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var (
+			id, occurredAt, action                                                         string
+			actorUserID, actorRole, targetType, targetID, targetOrgID, sourceIP, userAgent sql.NullString
+			details                                                                        sql.NullString
+		)
+		if err := rows.Scan(&id, &occurredAt, &actorUserID, &actorRole, &action,
+			&targetType, &targetID, &targetOrgID, &sourceIP, &userAgent, &details); err != nil {
+			return err
+		}
+		pgDetails, err := textToJSONB(details)
+		if err != nil {
+			return fmt.Errorf("encode details for audit_event %s: %w", id, err)
+		}
+		if _, err := stmt.ExecContext(ctx,
+			id, occurredAt,
+			nullStringToInterface(actorUserID), nullStringToInterface(actorRole), action,
+			nullStringToInterface(targetType), nullStringToInterface(targetID),
+			nullStringToInterface(targetOrgID), nullStringToInterface(sourceIP),
+			nullStringToInterface(userAgent), pgDetails,
+		); err != nil {
+			return fmt.Errorf("insert audit_event %s: %w", id, err)
+		}
+		m.markInsertedAnon("audit_events")
+	}
+	return tx.Commit()
+}
+
+// migrateExportJobs copies export job records. user_id is a required FK (skip
+// the row if its owner was not migrated); project_id is a nullable FK (null it
+// out on orphan, preserving the row).
+func (m *DataMigrator) migrateExportJobs(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, user_id, scope, project_id, format, include_superseded, status,
+		       artifact_path, artifact_bytes, artifact_sha256, error, claimed_by,
+		       claimed_at, started_at, completed_at, expires_at, created_at, updated_at
+		FROM export_jobs
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO export_jobs (id, user_id, scope, project_id, format, include_superseded,
+		                         status, artifact_path, artifact_bytes, artifact_sha256, error,
+		                         claimed_by, claimed_at, started_at, completed_at, expires_at,
+		                         created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var (
+			id, userID, scope, format, status               string
+			projectID                                       sql.NullString
+			includeSuperseded                               int
+			artifactPath, artifactSHA256, errMsg, claimedBy sql.NullString
+			artifactBytes                                   sql.NullInt64
+			claimedAt, startedAt, completedAt, expiresAt    sql.NullString
+			createdAt, updatedAt                            string
+		)
+		if err := rows.Scan(&id, &userID, &scope, &projectID, &format, &includeSuperseded, &status,
+			&artifactPath, &artifactBytes, &artifactSHA256, &errMsg, &claimedBy,
+			&claimedAt, &startedAt, &completedAt, &expiresAt, &createdAt, &updatedAt); err != nil {
+			return err
+		}
+		if !m.hasInserted("users", userID) {
+			m.skipOrphan("export_jobs", "user_id")
+			continue
+		}
+		if projectID.Valid && !m.hasInserted("projects", projectID.String) {
+			projectID = sql.NullString{}
+			m.skipOrphanUpdate("export_jobs", "project_id")
+		}
+		if _, err := stmt.ExecContext(ctx,
+			id, userID, scope,
+			nullStringToInterface(projectID), format, includeSuperseded != 0, status,
+			nullStringToInterface(artifactPath), nullInt64ToInterface(artifactBytes),
+			nullStringToInterface(artifactSHA256), nullStringToInterface(errMsg),
+			nullStringToInterface(claimedBy), nullStringToInterface(claimedAt),
+			nullStringToInterface(startedAt), nullStringToInterface(completedAt),
+			nullStringToInterface(expiresAt), createdAt, updatedAt,
+		); err != nil {
+			return fmt.Errorf("insert export_job %s: %w", id, err)
+		}
+		m.markInsertedAnon("export_jobs")
+	}
+	return tx.Commit()
+}
+
+func (m *DataMigrator) migrateShareTokens(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, owner_user_id, token_hash, token_prefix, name, description, is_one_shot,
+		       expires_at, consumed_at, created_at, last_used_at, use_count, revoked_at
+		FROM share_tokens
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO share_tokens (id, owner_user_id, token_hash, token_prefix, name, description,
+		                          is_one_shot, expires_at, consumed_at, created_at, last_used_at,
+		                          use_count, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var (
+			id, ownerUserID, tokenHash, tokenPrefix, name string
+			description                                   sql.NullString
+			isOneShot                                     int
+			expiresAt, createdAt                          string
+			consumedAt, lastUsedAt, revokedAt             sql.NullString
+			useCount                                      int
+		)
+		if err := rows.Scan(&id, &ownerUserID, &tokenHash, &tokenPrefix, &name, &description,
+			&isOneShot, &expiresAt, &consumedAt, &createdAt, &lastUsedAt, &useCount, &revokedAt); err != nil {
+			return err
+		}
+		if !m.hasInserted("users", ownerUserID) {
+			m.skipOrphan("share_tokens", "owner_user_id")
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx,
+			id, ownerUserID, tokenHash, tokenPrefix, name,
+			nullStringToInterface(description),
+			isOneShot != 0, expiresAt,
+			nullStringToInterface(consumedAt),
+			createdAt,
+			nullStringToInterface(lastUsedAt),
+			useCount,
+			nullStringToInterface(revokedAt),
+		); err != nil {
+			return fmt.Errorf("insert share_token %s: %w", id, err)
+		}
+		m.markInserted("share_tokens", id)
+	}
+	return tx.Commit()
+}
+
+func (m *DataMigrator) migrateShareTokenGrants(ctx context.Context) error {
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT share_token_id, project_id, permission
+		FROM share_token_grants
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO share_token_grants (share_token_id, project_id, permission)
+		VALUES ($1, $2, $3)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var shareTokenID, projectID, permission string
+		if err := rows.Scan(&shareTokenID, &projectID, &permission); err != nil {
+			return err
+		}
+		if !m.hasInserted("share_tokens", shareTokenID) {
+			m.skipOrphan("share_token_grants", "share_token_id")
+			continue
+		}
+		if !m.hasInserted("projects", projectID) {
+			m.skipOrphan("share_token_grants", "project_id")
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, shareTokenID, projectID, permission); err != nil {
+			return fmt.Errorf("insert share_token_grant %s/%s: %w", shareTokenID, projectID, err)
+		}
+		m.markInsertedAnon("share_token_grants")
+	}
+	return tx.Commit()
+}
+
 func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT id, client_id, client_secret, name, redirect_uris, grant_types, org_id,
-		       auto_registered, created_at
+		       auto_registered, created_at, user_id, share_token_id, last_used_at
 		FROM oauth_clients
 	`)
 	if err != nil {
@@ -1713,8 +2076,8 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris, grant_types,
-		                           org_id, auto_registered, created_at)
-		VALUES ($1, $2, $3, $4, $5::text[], $6::text[], $7, $8, $9)
+		                           org_id, auto_registered, created_at, user_id, share_token_id, last_used_at)
+		VALUES ($1, $2, $3, $4, $5::text[], $6::text[], $7, $8, $9, $10, $11, $12)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1732,9 +2095,12 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 			orgID            sql.NullString
 			autoRegistered   int
 			createdAt        string
+			userID           sql.NullString
+			shareTokenID     sql.NullString
+			lastUsedAt       sql.NullString
 		)
 		if err := rows.Scan(&id, &clientID, &clientSecret, &name, &redirectURIsJSON,
-			&grantTypesJSON, &orgID, &autoRegistered, &createdAt); err != nil {
+			&grantTypesJSON, &orgID, &autoRegistered, &createdAt, &userID, &shareTokenID, &lastUsedAt); err != nil {
 			return err
 		}
 		pgRedirectURIs, err := jsonArrayToPostgresTextArray(redirectURIsJSON)
@@ -1750,12 +2116,26 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 			m.skipOrphan("oauth_clients", "org_id")
 			continue
 		}
+		// Secondary nullable FKs: null out (rather than skip the client row) when
+		// the parent was not migrated, so the client itself is preserved and
+		// validateCounts stays exact. Records a skipped-update for observability.
+		if userID.Valid && !m.hasInserted("users", userID.String) {
+			userID = sql.NullString{}
+			m.skipOrphanUpdate("oauth_clients", "user_id")
+		}
+		if shareTokenID.Valid && !m.hasInserted("share_tokens", shareTokenID.String) {
+			shareTokenID = sql.NullString{}
+			m.skipOrphanUpdate("oauth_clients", "share_token_id")
+		}
 		if _, err := stmt.ExecContext(ctx,
 			id, clientID,
 			nullStringToInterface(clientSecret),
 			name, pgRedirectURIs, pgGrantTypes,
 			nullStringToInterface(orgID),
 			pgAutoRegistered, createdAt,
+			nullStringToInterface(userID),
+			nullStringToInterface(shareTokenID),
+			nullStringToInterface(lastUsedAt),
 		); err != nil {
 			return fmt.Errorf("insert oauth_client %s: %w", id, err)
 		}
@@ -1768,7 +2148,7 @@ func (m *DataMigrator) migrateOAuthClients(ctx context.Context) error {
 func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
 		SELECT code, client_id, user_id, redirect_uri, scope, code_challenge,
-		       code_challenge_method, expires_at, created_at, resource
+		       code_challenge_method, expires_at, created_at, resource, share_token_id
 		FROM oauth_authorization_codes
 	`)
 	if err != nil {
@@ -1785,8 +2165,8 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope,
 		                                       code_challenge, code_challenge_method,
-		                                       expires_at, created_at, resource)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                                       expires_at, created_at, resource, share_token_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1802,9 +2182,10 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 			codeChallengeMethod                 string
 			expiresAt, createdAt                string
 			resource                            sql.NullString
+			shareTokenID                        sql.NullString
 		)
 		if err := rows.Scan(&code, &clientID, &userID, &redirectURI, &scope,
-			&codeChallenge, &codeChallengeMethod, &expiresAt, &createdAt, &resource); err != nil {
+			&codeChallenge, &codeChallengeMethod, &expiresAt, &createdAt, &resource, &shareTokenID); err != nil {
 			return err
 		}
 		if !m.insertedByClientID[clientID] {
@@ -1815,11 +2196,16 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 			m.skipOrphan("oauth_authorization_codes", "user_id")
 			continue
 		}
+		if shareTokenID.Valid && !m.hasInserted("share_tokens", shareTokenID.String) {
+			shareTokenID = sql.NullString{}
+			m.skipOrphanUpdate("oauth_authorization_codes", "share_token_id")
+		}
 		if _, err := stmt.ExecContext(ctx,
 			code, clientID, userID, redirectURI, scope,
 			nullStringToInterface(codeChallenge),
 			codeChallengeMethod, expiresAt, createdAt,
 			nullStringToInterface(resource),
+			nullStringToInterface(shareTokenID),
 		); err != nil {
 			return fmt.Errorf("insert oauth_authorization_code %s: %w", code, err)
 		}
@@ -1830,7 +2216,7 @@ func (m *DataMigrator) migrateOAuthAuthorizationCodes(ctx context.Context) error
 
 func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 	rows, err := m.src.QueryContext(ctx, `
-		SELECT token_hash, client_id, user_id, scope, expires_at, revoked_at, created_at
+		SELECT token_hash, client_id, user_id, scope, expires_at, revoked_at, created_at, share_token_id
 		FROM oauth_refresh_tokens
 	`)
 	if err != nil {
@@ -1846,8 +2232,8 @@ func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scope, expires_at,
-		                                  revoked_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		                                  revoked_at, created_at, share_token_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1860,9 +2246,10 @@ func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 			tokenHash, clientID, userID, scope string
 			expiresAt, revokedAt               sql.NullString
 			createdAt                          string
+			shareTokenID                       sql.NullString
 		)
 		if err := rows.Scan(&tokenHash, &clientID, &userID, &scope,
-			&expiresAt, &revokedAt, &createdAt); err != nil {
+			&expiresAt, &revokedAt, &createdAt, &shareTokenID); err != nil {
 			return err
 		}
 		if !m.insertedByClientID[clientID] {
@@ -1873,11 +2260,16 @@ func (m *DataMigrator) migrateOAuthRefreshTokens(ctx context.Context) error {
 			m.skipOrphan("oauth_refresh_tokens", "user_id")
 			continue
 		}
+		if shareTokenID.Valid && !m.hasInserted("share_tokens", shareTokenID.String) {
+			shareTokenID = sql.NullString{}
+			m.skipOrphanUpdate("oauth_refresh_tokens", "share_token_id")
+		}
 		if _, err := stmt.ExecContext(ctx,
 			tokenHash, clientID, userID, scope,
 			nullStringToInterface(expiresAt),
 			nullStringToInterface(revokedAt),
 			createdAt,
+			nullStringToInterface(shareTokenID),
 		); err != nil {
 			return fmt.Errorf("insert oauth_refresh_token %s: %w", tokenHash, err)
 		}

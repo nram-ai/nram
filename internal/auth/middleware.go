@@ -109,6 +109,15 @@ type UserIdentityLookup interface {
 	GetIdentityByID(ctx context.Context, id uuid.UUID) (role string, orgID uuid.UUID, err error)
 }
 
+// ClientUsageRecorder stamps the last-used time of an OAuth client. The
+// middleware calls it best-effort when an access token carries a cid claim, so
+// implementations should be cheap (and ideally self-throttling) since they run
+// on the request hot path. Returned errors are ignored by the caller and must
+// never affect the request's auth outcome.
+type ClientUsageRecorder interface {
+	TouchClientLastUsed(ctx context.Context, clientID string, at time.Time) error
+}
+
 // AuthContext holds the authenticated identity extracted from a request.
 type AuthContext struct {
 	UserID       uuid.UUID
@@ -153,6 +162,12 @@ type Claims struct {
 	Email        string `json:"email,omitempty"`
 	DisplayName  string `json:"display_name,omitempty"`
 	ShareTokenID string `json:"stid,omitempty"`
+	// ClientID (cid) identifies the OAuth client an access token was issued to,
+	// letting the middleware attribute per-request usage back to the client.
+	// Empty on session JWTs and on access tokens minted before this claim
+	// existed; the middleware treats an empty cid as "skip usage tracking",
+	// never as a reason to reject the token.
+	ClientID string `json:"cid,omitempty"`
 }
 
 // AuthMiddleware validates Bearer tokens from the Authorization header.
@@ -170,6 +185,7 @@ type AuthMiddleware struct {
 	shareTokenValidator ShareTokenValidator
 	shareTokenLookup    ShareTokenLookup
 	userIdentityLookup  UserIdentityLookup
+	clientUsage         ClientUsageRecorder
 	jwtSecret           []byte
 	timings             SessionTimings
 }
@@ -193,6 +209,15 @@ func NewAuthMiddleware(apiKeyValidator APIKeyValidator, userIdentityLookup UserI
 func (m *AuthMiddleware) WithShareTokens(validator ShareTokenValidator, lookup ShareTokenLookup) *AuthMiddleware {
 	m.shareTokenValidator = validator
 	m.shareTokenLookup = lookup
+	return m
+}
+
+// WithClientUsage wires OAuth-client usage tracking onto the middleware. When
+// set, JWTs carrying a cid claim stamp the client's last_used_at on each
+// request. Returns the receiver for fluent construction; passing nil (or never
+// calling this) disables tracking with no effect on auth.
+func (m *AuthMiddleware) WithClientUsage(rec ClientUsageRecorder) *AuthMiddleware {
+	m.clientUsage = rec
 	return m
 }
 
@@ -438,6 +463,14 @@ func (m *AuthMiddleware) validateJWT(r *http.Request, tokenStr string) (*AuthCon
 		ac.ShareGrants = projectGrants
 	}
 
+	// Attribute this request to the issuing OAuth client when the access token
+	// carries a cid claim. Best-effort: an empty cid (session JWTs and access
+	// tokens minted before the claim existed) is skipped, and any write error
+	// is swallowed so usage tracking never changes the auth outcome.
+	if claims.ClientID != "" && m.clientUsage != nil {
+		_ = m.clientUsage.TouchClientLastUsed(r.Context(), claims.ClientID, time.Now().UTC())
+	}
+
 	refreshed, err := m.maybeRefreshSessionJWT(r.Context(), claims, userID, orgID)
 	if err != nil {
 		// A refresh-side error never invalidates the request; return an
@@ -487,7 +520,7 @@ func containsAudience(aud jwt.ClaimStrings, expected string) bool {
 // GenerateJWT creates a signed JWT for the given user without an audience claim.
 // Use generateJWTWithAudience when an RFC 8707 resource indicator must be bound.
 func GenerateJWT(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration) (string, error) {
-	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "", nil)
+	return generateJWTWithAudience(userID, orgID, role, secret, expiry, "", nil, "")
 }
 
 // GenerateShareScopedJWT creates a signed JWT that carries a share_token_id
@@ -495,8 +528,11 @@ func GenerateJWT(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, 
 // every request, so owner edits and revocation take effect without a token
 // refresh. Use only on the share-paste OAuth mint path; the account-holder
 // path passes shareTokenID=nil to GenerateJWT or generateJWTWithAudience.
-func GenerateShareScopedJWT(userID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID) (string, error) {
-	return generateJWTWithAudience(userID, orgID, role, secret, expiry, resource, shareTokenID)
+//
+// clientID is set as the cid claim so the middleware can attribute per-request
+// usage to the issuing OAuth client; pass "" when no client is involved.
+func GenerateShareScopedJWT(userID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID, clientID string) (string, error) {
+	return generateJWTWithAudience(userID, orgID, role, secret, expiry, resource, shareTokenID, clientID)
 }
 
 // GenerateSessionJWT creates a signed JWT that includes user profile claims
@@ -527,8 +563,10 @@ func GenerateSessionJWT(userID uuid.UUID, orgID uuid.UUID, role, email, displayN
 // generateJWTWithAudience creates a signed JWT. When resource is non-empty it
 // is set as the sole audience claim (RFC 8707 §2). When shareTokenID is
 // non-nil it is set as the stid claim so the middleware can scope the
-// caller's identity to the share's grant set.
-func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID) (string, error) {
+// caller's identity to the share's grant set. When clientID is non-empty it is
+// set as the cid claim so the middleware can attribute per-request usage to the
+// issuing OAuth client.
+func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, secret []byte, expiry time.Duration, resource string, shareTokenID *uuid.UUID, clientID string) (string, error) {
 	now := time.Now().UTC()
 	reg := jwt.RegisteredClaims{
 		Subject:   userID.String(),
@@ -552,6 +590,7 @@ func generateJWTWithAudience(userID uuid.UUID, orgID uuid.UUID, role string, sec
 		Role:             role,
 		OrgID:            orgIDStr,
 		ShareTokenID:     stid,
+		ClientID:         clientID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

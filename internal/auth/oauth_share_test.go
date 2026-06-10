@@ -404,7 +404,7 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 
 	t.Run("redacts owner pii and rewrites sub", func(t *testing.T) {
 		f := setupShareConsent(t)
-		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID)
+		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID, "")
 		if err != nil {
 			t.Fatalf("mint share-scoped jwt: %v", err)
 		}
@@ -442,7 +442,7 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 		f := setupShareConsent(t)
 		now := time.Now().UTC()
 		f.share.RevokedAt = &now
-		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID)
+		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID, "")
 		if err != nil {
 			t.Fatalf("mint share-scoped jwt: %v", err)
 		}
@@ -459,7 +459,7 @@ func TestUserInfoHandler_ShareBearer_RedactsOwnerAndRevalidatesShare(t *testing.
 		// still well within its own expiry; this proves the handler re-checks
 		// share state, not just the access JWT.
 		f.share.ExpiresAt = time.Now().UTC().Add(-time.Minute)
-		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID)
+		jwtStr, err := GenerateShareScopedJWT(f.env.user.ID, f.env.user.OrgID, f.env.user.Role, testSecret, time.Hour, "", &f.share.ID, "")
 		if err != nil {
 			t.Fatalf("mint share-scoped jwt: %v", err)
 		}

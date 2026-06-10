@@ -249,6 +249,12 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        'Acme Corp', 'acme-corp', 'organization', 768,
 		        '2025-01-17T10:30:00Z', '2025-01-17T10:30:00Z')`)
 
+	// NOTE: entity_vectors (like memory_vectors) is intentionally not seeded
+	// here. The embedded Postgres used by this test has no pgvector extension,
+	// so the entity_vectors_<dim> / memory_vectors_<dim> destination tables do
+	// not exist. migrateEntityVectors mirrors the proven migrateMemoryVectors
+	// sharding path; both no-op cleanly on an empty source.
+
 	// ── entity_aliases ─────────────────────────────────────────────────────
 	mustExec(`INSERT INTO entity_aliases (id, namespace_id, entity_id, alias, alias_type, created_at)
 		VALUES ('22222222-0000-0000-0000-000000000001',
@@ -427,26 +433,43 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        300, 600, 1250,
 		        '2025-03-17T10:30:00Z')`)
 
+	// ── share_tokens / share_token_grants ──────────────────────────────────
+	// Share owned by user 1, granting read_store on project 1.
+	mustExec(`INSERT INTO share_tokens
+		(id, owner_user_id, token_hash, token_prefix, name, description, is_one_shot,
+		 expires_at, consumed_at, created_at, last_used_at, use_count, revoked_at)
+		VALUES ('88888888-0000-0000-0000-000000000001',
+		        'cccccccc-0000-0000-0000-000000000001',
+		        'sharehash123', 'abcd1234', 'Test Share', 'A share for testing', 0,
+		        '2026-12-01T00:00:00Z', NULL, '2025-05-01T00:00:00Z',
+		        '2025-05-15T00:00:00Z', 3, NULL)`)
+	mustExec(`INSERT INTO share_token_grants (share_token_id, project_id, permission)
+		VALUES ('88888888-0000-0000-0000-000000000001',
+		        'eeeeeeee-0000-0000-0000-000000000001', 'read_store')`)
+
 	// ── oauth_clients ──────────────────────────────────────────────────────
-	// Client 1: with secret and org_id, auto_registered=0
+	// Client 1: with secret and org_id, auto_registered=0, owned by user 1, used.
 	mustExec(`INSERT INTO oauth_clients (id, client_id, client_secret, name, redirect_uris,
-	                                     grant_types, org_id, auto_registered, created_at)
+	                                     grant_types, org_id, auto_registered, created_at,
+	                                     user_id, last_used_at)
 		VALUES ('99999999-0000-0000-0000-000000000001',
 		        'test-client-id', 'secret123', 'Test App',
 		        '["https://app.example.com/callback","https://app.example.com/callback2"]',
 		        '["authorization_code","refresh_token"]',
 		        'bbbbbbbb-0000-0000-0000-000000000001', 0,
-		        '2025-01-15T10:30:00Z')`)
+		        '2025-01-15T10:30:00Z',
+		        'cccccccc-0000-0000-0000-000000000001', '2025-03-01T08:00:00Z')`)
 
-	// Client 2: no secret, no org_id, auto_registered=1
+	// Client 2: no secret, no org_id, auto_registered=1, bound to a share.
 	mustExec(`INSERT INTO oauth_clients (id, client_id, name, redirect_uris, grant_types,
-	                                     auto_registered, created_at)
+	                                     auto_registered, created_at, share_token_id)
 		VALUES ('99999999-0000-0000-0000-000000000002',
 		        'auto-client-id', 'Auto Client',
 		        '["https://dynamic.example.com/callback"]',
 		        '["authorization_code"]',
 		        1,
-		        '2025-02-01T10:30:00Z')`)
+		        '2025-02-01T10:30:00Z',
+		        '88888888-0000-0000-0000-000000000001')`)
 
 	// ── oauth_authorization_codes ──────────────────────────────────────────
 	// Code 1: with PKCE and resource
@@ -460,13 +483,14 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        '2025-06-01T12:10:00Z', '2025-06-01T12:00:00Z',
 		        'https://api.example.com/')`)
 
-	// Code 2: without PKCE, without resource
+	// Code 2: without PKCE, without resource, share-derived
 	mustExec(`INSERT INTO oauth_authorization_codes
-		(code, client_id, user_id, redirect_uri, scope, expires_at, created_at)
+		(code, client_id, user_id, redirect_uri, scope, expires_at, created_at, share_token_id)
 		VALUES ('testcode456', 'auto-client-id',
 		        'cccccccc-0000-0000-0000-000000000002',
 		        'https://dynamic.example.com/callback', 'read',
-		        '2025-06-02T12:10:00Z', '2025-06-02T12:00:00Z')`)
+		        '2025-06-02T12:10:00Z', '2025-06-02T12:00:00Z',
+		        '88888888-0000-0000-0000-000000000001')`)
 
 	// ── oauth_refresh_tokens ───────────────────────────────────────────────
 	// Token 1: with expires_at, not revoked
@@ -477,13 +501,14 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        '2026-06-01T12:00:00Z',
 		        '2025-06-01T12:00:00Z')`)
 
-	// Token 2: revoked, no expires_at
+	// Token 2: revoked, no expires_at, share-derived
 	mustExec(`INSERT INTO oauth_refresh_tokens
-		(token_hash, client_id, user_id, scope, revoked_at, created_at)
+		(token_hash, client_id, user_id, scope, revoked_at, created_at, share_token_id)
 		VALUES ('refreshhash456', 'test-client-id',
 		        'cccccccc-0000-0000-0000-000000000001', 'read',
 		        '2025-07-01T00:00:00Z',
-		        '2025-06-15T12:00:00Z')`)
+		        '2025-06-15T12:00:00Z',
+		        '88888888-0000-0000-0000-000000000001')`)
 
 	// ── oauth_idp_configs ──────────────────────────────────────────────────
 	// Config 1: with issuer_url, auto_provision=1
@@ -506,6 +531,30 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        'github', 'github-client-id', 'github-client-secret',
 		        '["github.example.com"]', 0, 'readonly',
 		        '2025-02-01T10:30:00Z', '2025-02-01T10:30:00Z')`)
+
+	// ── audit_events ───────────────────────────────────────────────────────
+	// Event 1: fully populated (no enforced FKs; copied verbatim).
+	mustExec(`INSERT INTO audit_events (id, occurred_at, actor_user_id, actor_role, action,
+	                                    target_type, target_id, target_org_id, source_ip,
+	                                    user_agent, details)
+		VALUES ('77777777-0000-0000-0000-000000000001', '2025-04-01T10:00:00Z',
+		        'cccccccc-0000-0000-0000-000000000001', 'administrator', 'api_key.create',
+		        'api_key', 'dddddddd-0000-0000-0000-000000000001',
+		        'bbbbbbbb-0000-0000-0000-000000000001',
+		        '192.168.1.1', 'curl/8.0', '{"note":"created via test"}')`)
+	// Event 2: minimal, NULL actor/target, default details.
+	mustExec(`INSERT INTO audit_events (id, occurred_at, action)
+		VALUES ('77777777-0000-0000-0000-000000000002', '2025-04-02T10:00:00Z', 'login.failed')`)
+
+	// ── export_jobs ────────────────────────────────────────────────────────
+	mustExec(`INSERT INTO export_jobs (id, user_id, scope, project_id, format, include_superseded,
+	                                   status, artifact_path, artifact_bytes, artifact_sha256,
+	                                   created_at, updated_at)
+		VALUES ('66666666-0000-0000-0000-000000000001',
+		        'cccccccc-0000-0000-0000-000000000001', 'project',
+		        'eeeeeeee-0000-0000-0000-000000000001', 'json', 1, 'succeeded',
+		        '/tmp/export.json', 2048, 'abc123sha',
+		        '2025-04-10T00:00:00Z', '2025-04-10T00:01:00Z')`)
 }
 
 // cleanPostgres truncates all migrated tables in reverse dependency order so
@@ -524,6 +573,10 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 		"oauth_refresh_tokens",
 		"oauth_authorization_codes",
 		"oauth_clients",
+		"share_token_grants",
+		"share_tokens",
+		"audit_events",
+		"export_jobs",
 		"token_usage",
 		"webhooks",
 		"enrichment_queue",
@@ -1290,6 +1343,9 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"org_id":          "bbbbbbbb-0000-0000-0000-000000000001",
 				"auto_registered": false,
 				"created_at":      "2025-01-15T10:30:00Z",
+				"user_id":         "cccccccc-0000-0000-0000-000000000001",
+				"share_token_id":  nil,
+				"last_used_at":    "2025-03-01T08:00:00Z",
 			},
 			{
 				"id":        "99999999-0000-0000-0000-000000000002",
@@ -1300,6 +1356,39 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"org_id":          nil,
 				"auto_registered": true,
 				"created_at":      "2025-02-01T10:30:00Z",
+				"user_id":         nil,
+				"share_token_id":  "88888888-0000-0000-0000-000000000001",
+				"last_used_at":    nil,
+			},
+		})
+	})
+
+	t.Run("share_tokens", func(t *testing.T) {
+		verifyRows(t, pgConn, "share_tokens", []map[string]any{
+			{
+				"id":            "88888888-0000-0000-0000-000000000001",
+				"owner_user_id": "cccccccc-0000-0000-0000-000000000001",
+				"token_hash":    "sharehash123",
+				"token_prefix":  "abcd1234",
+				"name":          "Test Share",
+				"description":   "A share for testing",
+				"is_one_shot":   false,
+				"expires_at":    "2026-12-01T00:00:00Z",
+				"consumed_at":   nil,
+				"created_at":    "2025-05-01T00:00:00Z",
+				"last_used_at":  "2025-05-15T00:00:00Z",
+				"use_count":     int(3),
+				"revoked_at":    nil,
+			},
+		})
+	})
+
+	t.Run("share_token_grants", func(t *testing.T) {
+		verifyRows(t, pgConn, "share_token_grants", []map[string]any{
+			{
+				"share_token_id": "88888888-0000-0000-0000-000000000001",
+				"project_id":     "eeeeeeee-0000-0000-0000-000000000001",
+				"permission":     "read_store",
 			},
 		})
 	})
@@ -1329,6 +1418,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"expires_at":            "2025-06-02T12:10:00Z",
 				"created_at":            "2025-06-02T12:00:00Z",
 				"resource":              nil,
+				"share_token_id":        "88888888-0000-0000-0000-000000000001",
 			},
 		})
 	})
@@ -1345,13 +1435,14 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"created_at": "2025-06-01T12:00:00Z",
 			},
 			{
-				"token_hash": "refreshhash456",
-				"client_id":  "test-client-id",
-				"user_id":    "cccccccc-0000-0000-0000-000000000001",
-				"scope":      "read",
-				"expires_at": nil,
-				"revoked_at": "2025-07-01T00:00:00Z",
-				"created_at": "2025-06-15T12:00:00Z",
+				"token_hash":     "refreshhash456",
+				"client_id":      "test-client-id",
+				"user_id":        "cccccccc-0000-0000-0000-000000000001",
+				"scope":          "read",
+				"expires_at":     nil,
+				"revoked_at":     "2025-07-01T00:00:00Z",
+				"created_at":     "2025-06-15T12:00:00Z",
+				"share_token_id": "88888888-0000-0000-0000-000000000001",
 			},
 		})
 	})
@@ -1379,6 +1470,52 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"auto_provision":  false,
 				"default_role":    "readonly",
 				"created_at":      "2025-02-01T10:30:00Z", "updated_at": "2025-02-01T10:30:00Z",
+			},
+		})
+	})
+
+	t.Run("audit_events", func(t *testing.T) {
+		verifyRows(t, pgConn, "audit_events", []map[string]any{
+			{
+				"id":            "77777777-0000-0000-0000-000000000001",
+				"occurred_at":   "2025-04-01T10:00:00Z",
+				"actor_user_id": "cccccccc-0000-0000-0000-000000000001",
+				"actor_role":    "administrator",
+				"action":        "api_key.create",
+				"target_type":   "api_key",
+				"target_id":     "dddddddd-0000-0000-0000-000000000001",
+				"target_org_id": "bbbbbbbb-0000-0000-0000-000000000001",
+				"source_ip":     "192.168.1.1",
+				"user_agent":    "curl/8.0",
+				"details":       `{"note":"created via test"}`,
+			},
+			{
+				"id":            "77777777-0000-0000-0000-000000000002",
+				"occurred_at":   "2025-04-02T10:00:00Z",
+				"actor_user_id": nil,
+				"action":        "login.failed",
+				"details":       `{}`,
+			},
+		})
+	})
+
+	t.Run("export_jobs", func(t *testing.T) {
+		verifyRows(t, pgConn, "export_jobs", []map[string]any{
+			{
+				"id":                 "66666666-0000-0000-0000-000000000001",
+				"user_id":            "cccccccc-0000-0000-0000-000000000001",
+				"scope":              "project",
+				"project_id":         "eeeeeeee-0000-0000-0000-000000000001",
+				"format":             "json",
+				"include_superseded": true,
+				"status":             "succeeded",
+				"artifact_path":      "/tmp/export.json",
+				"artifact_bytes":     int(2048),
+				"artifact_sha256":    "abc123sha",
+				"error":              nil,
+				"claimed_by":         nil,
+				"created_at":         "2025-04-10T00:00:00Z",
+				"updated_at":         "2025-04-10T00:01:00Z",
 			},
 		})
 	})

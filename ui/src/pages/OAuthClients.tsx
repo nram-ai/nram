@@ -392,6 +392,7 @@ function OAuthClientsSection() {
                 <th className="px-4 py-2">Type</th>
                 <th className="px-4 py-2">Redirect URIs</th>
                 <th className="px-4 py-2">Created</th>
+                <th className="px-4 py-2">Last Used</th>
                 <th className="px-4 py-2">Actions</th>
               </tr>
             </thead>
@@ -412,12 +413,12 @@ function OAuthClientsSection() {
                   <td className="px-4 py-2">
                     <span
                       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                        client.type === "auto"
+                        client.auto_registered
                           ? "bg-info/10 text-info"
                           : "bg-success/10 text-success"
                       }`}
                     >
-                      {client.type === "auto" ? "auto-registered" : "manual"}
+                      {client.auto_registered ? "auto-registered" : "manual"}
                     </span>
                   </td>
                   <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
@@ -425,6 +426,9 @@ function OAuthClientsSection() {
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
                     {formatDate(client.created_at)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
+                    {client.last_used_at ? formatDate(client.last_used_at) : "Never"}
                   </td>
                   <td className="px-4 py-2">
                     <button

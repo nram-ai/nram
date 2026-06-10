@@ -351,7 +351,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	// refresh token (share_token_id column) so the middleware can scope every
 	// downstream request against the share's grant set and so share revocation
 	// cascades through the entire derived chain.
-	accessToken, err := generateJWTWithAudience(authCode.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, effectiveResource, authCode.ShareTokenID)
+	accessToken, err := generateJWTWithAudience(authCode.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, effectiveResource, authCode.ShareTokenID, authCode.ClientID)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return
@@ -374,6 +374,10 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to create refresh token")
 		return
 	}
+
+	// Stamp client usage at the grant moment. Best-effort: a tracking-write
+	// failure must not fail an otherwise-successful token exchange.
+	_ = s.oauthRepo.TouchClientLastUsed(r.Context(), authCode.ClientID, time.Now().UTC())
 
 	resp := tokenResponse{
 		AccessToken:  accessToken,
@@ -445,7 +449,7 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 	// across the refresh boundary so the middleware continues to apply the
 	// share's grant set after rotation. Plain account-holder refreshes pass
 	// nil and behave as before.
-	accessToken, err := GenerateShareScopedJWT(storedToken.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, "", storedToken.ShareTokenID)
+	accessToken, err := GenerateShareScopedJWT(storedToken.UserID, userOrgID, role, s.jwtSecret, accessTokenExpiry, "", storedToken.ShareTokenID, storedToken.ClientID)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to generate access token")
 		return
@@ -473,6 +477,9 @@ func (s *OAuthServer) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Req
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to create new refresh token")
 		return
 	}
+
+	// Stamp client usage on refresh. Best-effort, as in the auth-code path.
+	_ = s.oauthRepo.TouchClientLastUsed(r.Context(), storedToken.ClientID, time.Now().UTC())
 
 	resp := tokenResponse{
 		AccessToken:  accessToken,

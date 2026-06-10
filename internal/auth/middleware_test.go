@@ -436,7 +436,7 @@ func TestHandler_JWT_WrongAudience_Rejected(t *testing.T) {
 
 	userID := uuid.New()
 	// Generate a token with audience for a DIFFERENT server.
-	wrongAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "https://other-server.example.com/mcp", nil)
+	wrongAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "https://other-server.example.com/mcp", nil, "")
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestHandler_JWT_CorrectAudience_Accepted(t *testing.T) {
 
 	userID := uuid.New()
 	// Audience must match what baseURLFromRequest returns for Host: example.com.
-	correctAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "http://example.com/mcp", nil)
+	correctAudToken, err := generateJWTWithAudience(userID, uuid.Nil, "member", testSecret, time.Hour, "http://example.com/mcp", nil, "")
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestHandler_JWT_WithShareTokenID_PopulatesShareGrants(t *testing.T) {
 	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
 		WithShareTokens(nil, lookup)
 
-	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID, "")
 	if err != nil {
 		t.Fatalf("generate share-scoped JWT: %v", err)
 	}
@@ -703,7 +703,7 @@ func TestHandler_JWT_WithShareTokenID_ZeroGrantsRejected(t *testing.T) {
 	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
 		WithShareTokens(nil, lookup)
 
-	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID, "")
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestHandler_JWT_WithShareTokenID_RevokedShareRejected(t *testing.T) {
 	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
 		WithShareTokens(nil, lookup)
 
-	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID)
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", &shareID, "")
 	if err != nil {
 		t.Fatalf("generate JWT: %v", err)
 	}
@@ -775,5 +775,75 @@ func TestHandler_JWT_WithShareTokenID_RevokedShareRejected(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for revoked share JWT, got %d", rec.Code)
+	}
+}
+
+// recordingClientUsage captures TouchClientLastUsed calls so tests can assert
+// whether (and with which client_id) the middleware attributed a request.
+type recordingClientUsage struct {
+	calls []string
+}
+
+func (r *recordingClientUsage) TouchClientLastUsed(_ context.Context, clientID string, _ time.Time) error {
+	r.calls = append(r.calls, clientID)
+	return nil
+}
+
+// TestHandler_JWTWithCid_StampsClientUsage verifies that an access token
+// carrying a cid claim drives a best-effort usage stamp for that client.
+func TestHandler_JWTWithCid_StampsClientUsage(t *testing.T) {
+	userID := uuid.New()
+	rec := &recordingClientUsage{}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithClientUsage(rec)
+
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", nil, "client-abc")
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	handler := mw.Handler(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if len(rec.calls) != 1 || rec.calls[0] != "client-abc" {
+		t.Fatalf("expected one usage stamp for client-abc, got %v", rec.calls)
+	}
+}
+
+// TestHandler_JWTWithoutCid_SkipsClientUsage verifies the backward-compat
+// guarantee: an access token minted before the cid claim existed still
+// authenticates and is NOT used to drive a usage stamp (nothing in flight
+// breaks; no spurious write).
+func TestHandler_JWTWithoutCid_SkipsClientUsage(t *testing.T) {
+	userID := uuid.New()
+	rec := &recordingClientUsage{}
+
+	mw := NewAuthMiddleware(&mockAPIKeyValidator{}, &mockUserIdentityLookup{fixedRole: "member"}, testSecret, nil).
+		WithClientUsage(rec)
+
+	// No cid claim (clientID="").
+	token, err := GenerateShareScopedJWT(userID, uuid.Nil, "member", testSecret, time.Hour, "", nil, "")
+	if err != nil {
+		t.Fatalf("generate JWT: %v", err)
+	}
+
+	handler := mw.Handler(okHandler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for cid-less token, got %d", resp.Code)
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("expected no usage stamp for cid-less token, got %v", rec.calls)
 	}
 }
