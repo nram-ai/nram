@@ -29,6 +29,7 @@ import {
   type WebhookCreateRequest,
   type WebhookUpdateRequest,
   type StoreMemoryRequest,
+  type ImportFormat,
   type MemoryListParams,
   type RecallRequest,
   type MemoryUpdateRequest,
@@ -235,6 +236,25 @@ export function useStoreMemory() {
       projectId: string;
       data: StoreMemoryRequest;
     }) => memoryAPI.store(projectId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "dashboard"] });
+      qc.invalidateQueries({ queryKey: ["admin", "activity"] });
+    },
+  });
+}
+
+export function useImportMemories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      format,
+      data,
+    }: {
+      projectId: string;
+      format: ImportFormat;
+      data: unknown;
+    }) => memoryAPI.import(projectId, format, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "dashboard"] });
       qc.invalidateQueries({ queryKey: ["admin", "activity"] });

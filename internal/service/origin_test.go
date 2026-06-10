@@ -95,7 +95,7 @@ func TestBatchStore_RejectsReservedDreamSourcePerItem(t *testing.T) {
 // carried by export data is dropped rather than re-entering the source column.
 func TestImport_AssignsImportOriginAndSanitizesDreamSource(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	normalSrc := "linkedin"

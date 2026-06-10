@@ -53,6 +53,7 @@ type ExportData struct {
 	Memories      []ExportMemory       `json:"memories"`
 	Entities      []ExportEntity       `json:"entities"`
 	Relationships []ExportRelationship `json:"relationships"`
+	Lineage       []ExportLineage      `json:"lineage"`
 	Stats         ExportStats          `json:"stats"`
 }
 
@@ -73,7 +74,6 @@ type ExportMemory struct {
 	Importance float64         `json:"importance"`
 	Enriched   bool            `json:"enriched"`
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
-	Lineage    []ExportLineage `json:"lineage,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
@@ -89,17 +89,24 @@ type ExportEntity struct {
 
 // ExportRelationship is a relationship representation for export.
 type ExportRelationship struct {
-	ID         uuid.UUID  `json:"id"`
-	SourceID   uuid.UUID  `json:"source_id"`
-	TargetID   uuid.UUID  `json:"target_id"`
-	Relation   string     `json:"relation"`
-	Weight     float64    `json:"weight"`
-	ValidFrom  time.Time  `json:"valid_from"`
-	ValidUntil *time.Time `json:"valid_until,omitempty"`
+	ID       uuid.UUID `json:"id"`
+	SourceID uuid.UUID `json:"source_id"`
+	TargetID uuid.UUID `json:"target_id"`
+	Relation string    `json:"relation"`
+	Weight   float64   `json:"weight"`
+	// SourceMemory is the memory the edge was extracted from. It round-trips so
+	// the importer can re-anchor provenance to the re-created memory; an edge
+	// with null provenance is treated as lost and reaped, so import must never
+	// leave it unset.
+	SourceMemory *uuid.UUID `json:"source_memory,omitempty"`
+	ValidFrom    time.Time  `json:"valid_from"`
+	ValidUntil   *time.Time `json:"valid_until,omitempty"`
 }
 
-// ExportLineage is a lineage record representation for export.
+// ExportLineage is a lineage edge for export: an explicit child -> parent link.
+// MemoryID is the child memory; ParentID is the parent (nil for a root row).
 type ExportLineage struct {
+	MemoryID uuid.UUID  `json:"memory_id"`
 	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 	Relation string     `json:"relation"`
 }
@@ -109,6 +116,7 @@ type ExportStats struct {
 	MemoryCount       int `json:"memory_count"`
 	EntityCount       int `json:"entity_count"`
 	RelationshipCount int `json:"relationship_count"`
+	LineageCount      int `json:"lineage_count"`
 }
 
 // ExportService handles exporting project data in various formats.
@@ -142,7 +150,7 @@ func NewExportService(
 	}
 }
 
-const exportVersion = "1.0"
+const exportVersion = "1.1"
 
 // Export collects all project data and returns it as an ExportData struct (JSON format).
 func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*ExportData, error) {
@@ -164,21 +172,31 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 		return nil, fmt.Errorf("failed to list memories: %w", err)
 	}
 
-	// Collect lineage for each memory.
 	exportMemories := make([]ExportMemory, 0, len(allMemories))
 	for _, mem := range allMemories {
-		em := toExportMemory(mem)
-		lineageRecords, err := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
-		if err == nil && len(lineageRecords) > 0 {
-			em.Lineage = make([]ExportLineage, 0, len(lineageRecords))
-			for _, lr := range lineageRecords {
-				em.Lineage = append(em.Lineage, ExportLineage{
-					ParentID: lr.ParentID,
-					Relation: lr.Relation,
-				})
-			}
+		exportMemories = append(exportMemories, toExportMemory(mem))
+	}
+
+	// Collect lineage as explicit child -> parent edges, deduplicated by row ID
+	// (ListByMemory returns each row under both its endpoints).
+	seenLineage := make(map[uuid.UUID]struct{})
+	var exportLineage []ExportLineage
+	for _, mem := range allMemories {
+		records, err := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
+		if err != nil {
+			continue
 		}
-		exportMemories = append(exportMemories, em)
+		for _, lr := range records {
+			if _, ok := seenLineage[lr.ID]; ok {
+				continue
+			}
+			seenLineage[lr.ID] = struct{}{}
+			exportLineage = append(exportLineage, ExportLineage{
+				MemoryID: lr.MemoryID,
+				ParentID: lr.ParentID,
+				Relation: lr.Relation,
+			})
+		}
 	}
 
 	// Collect all entities.
@@ -218,6 +236,9 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 	if exportRels == nil {
 		exportRels = []ExportRelationship{}
 	}
+	if exportLineage == nil {
+		exportLineage = []ExportLineage{}
+	}
 
 	return &ExportData{
 		Version:    exportVersion,
@@ -230,10 +251,12 @@ func (s *ExportService) Export(ctx context.Context, req *ExportRequest) (*Export
 		Memories:      exportMemories,
 		Entities:      exportEntities,
 		Relationships: exportRels,
+		Lineage:       exportLineage,
 		Stats: ExportStats{
 			MemoryCount:       len(exportMemories),
 			EntityCount:       len(exportEntities),
 			RelationshipCount: len(exportRels),
+			LineageCount:      len(exportLineage),
 		},
 	}, nil
 }
@@ -277,18 +300,7 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 	}
 
 	for _, mem := range allMemories {
-		em := toExportMemory(mem)
-		lineageRecords, lErr := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
-		if lErr == nil && len(lineageRecords) > 0 {
-			em.Lineage = make([]ExportLineage, 0, len(lineageRecords))
-			for _, lr := range lineageRecords {
-				em.Lineage = append(em.Lineage, ExportLineage{
-					ParentID: lr.ParentID,
-					Relation: lr.Relation,
-				})
-			}
-		}
-		if err := enc.Encode(ndjsonRecord{Type: "memory", Data: em}); err != nil {
+		if err := enc.Encode(ndjsonRecord{Type: "memory", Data: toExportMemory(mem)}); err != nil {
 			return fmt.Errorf("failed to write memory record: %w", err)
 		}
 	}
@@ -319,6 +331,28 @@ func (s *ExportService) ExportNDJSON(ctx context.Context, req *ExportRequest, w 
 			seenRels[rel.ID] = struct{}{}
 			if err := enc.Encode(ndjsonRecord{Type: "relationship", Data: toExportRelationship(rel)}); err != nil {
 				return fmt.Errorf("failed to write relationship record: %w", err)
+			}
+		}
+	}
+
+	// Stream lineage as explicit child -> parent edges, deduplicated by row ID.
+	seenLineage := make(map[uuid.UUID]struct{})
+	for _, mem := range allMemories {
+		records, lErr := s.lineage.ListByMemory(ctx, mem.NamespaceID, mem.ID)
+		if lErr != nil {
+			continue
+		}
+		for _, lr := range records {
+			if _, ok := seenLineage[lr.ID]; ok {
+				continue
+			}
+			seenLineage[lr.ID] = struct{}{}
+			if err := enc.Encode(ndjsonRecord{Type: "lineage", Data: ExportLineage{
+				MemoryID: lr.MemoryID,
+				ParentID: lr.ParentID,
+				Relation: lr.Relation,
+			}}); err != nil {
+				return fmt.Errorf("failed to write lineage record: %w", err)
 			}
 		}
 	}
@@ -379,12 +413,13 @@ func toExportEntity(ent model.Entity) ExportEntity {
 
 func toExportRelationship(rel model.Relationship) ExportRelationship {
 	return ExportRelationship{
-		ID:         rel.ID,
-		SourceID:   rel.SourceID,
-		TargetID:   rel.TargetID,
-		Relation:   rel.Relation,
-		Weight:     rel.Weight,
-		ValidFrom:  rel.ValidFrom,
-		ValidUntil: rel.ValidUntil,
+		ID:           rel.ID,
+		SourceID:     rel.SourceID,
+		TargetID:     rel.TargetID,
+		Relation:     rel.Relation,
+		Weight:       rel.Weight,
+		SourceMemory: rel.SourceMemory,
+		ValidFrom:    rel.ValidFrom,
+		ValidUntil:   rel.ValidUntil,
 	}
 }

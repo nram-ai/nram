@@ -251,6 +251,20 @@ export interface StoredMemory {
   latency_ms: number;
 }
 
+/** Source format accepted by the bulk import endpoint. */
+export type ImportFormat = "nram" | "mem0" | "zep";
+
+/** Result of a server-side bulk import (POST .../memories/import). */
+export interface ImportResponse {
+  imported: number;
+  skipped: number;
+  entities_imported: number;
+  relationships_imported: number;
+  lineage_imported: number;
+  errors: { index: number; message: string }[];
+  latency_ms: number;
+}
+
 /**
  * Coarse, server-assigned provenance category. Authoritative discriminator for
  * dream syntheses (the free-form `source` string no longer carries "dream").
@@ -1946,6 +1960,16 @@ function buildMemoryListQuery(params?: MemoryListParams): string {
 export const memoryAPI = {
   store: (projectId: string, data: StoreMemoryRequest) =>
     request<StoredMemory>("POST", `/projects/${projectId}/memories`, data),
+
+  // Server-side bulk import. The request() helper JSON-stringifies the body, so
+  // passing a parsed nram ExportData object re-emits the exact JSON the backend
+  // parser accepts; entities and relationships round-trip for format "nram".
+  import: (projectId: string, format: ImportFormat, data: unknown) =>
+    request<ImportResponse>(
+      "POST",
+      `/projects/${projectId}/memories/import?format=${format}`,
+      data,
+    ),
 
   list: (projectId: string, params?: MemoryListParams) => {
     const qs = buildMemoryListQuery(params);

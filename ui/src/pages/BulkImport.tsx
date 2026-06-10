@@ -1,8 +1,16 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMeProjects, useStoreMemory } from "../hooks/useApi";
+import {
+  useMeProjects,
+  useStoreMemory,
+  useImportMemories,
+} from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
-import type { Project, StoreMemoryRequest } from "../api/client";
+import type {
+  Project,
+  StoreMemoryRequest,
+  ImportResponse,
+} from "../api/client";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUpload } from "../lib/icons";
 
@@ -10,10 +18,47 @@ import { faUpload } from "../lib/icons";
 // Types
 // ---------------------------------------------------------------------------
 
-type DetectedFormat = "mem0" | "zep" | "json" | "csv" | "unknown";
+type DetectedFormat = "nram" | "mem0" | "zep" | "json" | "csv" | "unknown";
 
 interface ParsedRecord {
   [key: string]: unknown;
+}
+
+/**
+ * Shape of nram's own JSON export (ExportData). Only the fields the import
+ * review surface reads are typed; the full object is forwarded verbatim to the
+ * server's nram-format import endpoint, which re-parses it.
+ */
+interface NRAMExportData {
+  version: string;
+  project?: { id?: string; name?: string; slug?: string };
+  memories?: unknown[];
+  entities?: unknown[];
+  relationships?: unknown[];
+  stats?: {
+    memory_count?: number;
+    entity_count?: number;
+    relationship_count?: number;
+  };
+}
+
+/**
+ * An nram JSON export is a top-level object carrying a `version` string and a
+ * `memories` array, corroborated by at least one other native field. This must
+ * be checked before the Zep heuristic, which also keys off a `memories` array.
+ */
+function isNRAMExport(data: unknown): data is NRAMExportData {
+  if (typeof data !== "object" || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (typeof obj.version !== "string") return false;
+  if (!Array.isArray(obj.memories)) return false;
+  return (
+    "exported_at" in obj ||
+    "entities" in obj ||
+    "relationships" in obj ||
+    "stats" in obj ||
+    "project" in obj
+  );
 }
 
 interface FieldMapping {
@@ -111,7 +156,7 @@ function parseCSV(text: string): ParsedRecord[] {
 // Format Detection
 // ---------------------------------------------------------------------------
 
-function detectFormat(
+export function detectFormat(
   data: unknown,
   fileName: string,
 ): { format: DetectedFormat; records: ParsedRecord[] } {
@@ -133,6 +178,12 @@ function detectFormat(
 
   if (typeof data === "object" && data !== null) {
     const obj = data as Record<string, unknown>;
+    // nram's own export must win over the Zep heuristic below: both carry a
+    // top-level `memories` array, but only the native export sets `version`
+    // plus a corroborating native field.
+    if (isNRAMExport(data)) {
+      return { format: "nram", records: obj.memories as ParsedRecord[] };
+    }
     if (Array.isArray(obj.memories)) {
       return { format: "zep", records: obj.memories as ParsedRecord[] };
     }
@@ -218,6 +269,7 @@ function autoMapFields(
   // If no source field found, set a static default based on format
   if (!mapping.source) {
     const formatLabels: Record<DetectedFormat, string> = {
+      nram: "nram-import",
       mem0: "mem0-import",
       zep: "zep-import",
       json: "json-import",
@@ -232,6 +284,8 @@ function autoMapFields(
 
 function formatLabel(format: DetectedFormat): string {
   switch (format) {
+    case "nram":
+      return "nram Export";
     case "mem0":
       return "Mem0 Export";
     case "zep":
@@ -302,15 +356,114 @@ function toMetadataKeys(val: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+// Shared step pieces
+// ---------------------------------------------------------------------------
+
+const SELECT_CLASS =
+  "rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm w-full";
+
+function FileInfoCard({
+  file,
+  label,
+  detail,
+  onBack,
+}: {
+  file: File;
+  label: string;
+  detail?: string;
+  onBack: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium">{file.name}</p>
+          <p className="text-xs text-muted-foreground">
+            {formatFileSize(file.size)} &middot; {label}
+            {detail ?? ""}
+          </p>
+        </div>
+        <button
+          onClick={onBack}
+          className="text-xs text-muted-foreground hover:text-foreground underline"
+        >
+          Change file
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProjectPicker({
+  projects,
+  value,
+  onChange,
+}: {
+  projects: Project[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1.5">
+        Target Project <span className="text-destructive">*</span>
+      </label>
+      <select
+        className={SELECT_CLASS}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Select a project...</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} ({p.slug})
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function StatCard({
+  value,
+  label,
+  tone,
+}: {
+  value: number;
+  label: string;
+  tone?: "success" | "destructive";
+}) {
+  const toneClass =
+    tone === "success"
+      ? " text-success"
+      : tone === "destructive"
+        ? " text-destructive"
+        : "";
+  return (
+    <div className="rounded-md border border-border p-3 text-center">
+      <p className={`text-lg font-semibold${toneClass}`}>{value}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Step Components
 // ---------------------------------------------------------------------------
 
 const STEPS = ["Upload File", "Map Fields", "Preview", "Import"];
+const NRAM_STEPS = ["Upload File", "Review", "Import"];
 
-function StepIndicator({ current }: { current: number }) {
+function StepIndicator({
+  current,
+  steps,
+}: {
+  current: number;
+  steps: string[];
+}) {
   return (
     <div className="flex items-center gap-2 mb-8">
-      {STEPS.map((label, i) => {
+      {steps.map((label, i) => {
         const stepNum = i + 1;
         const isActive = stepNum === current;
         const isDone = stepNum < current;
@@ -364,6 +517,7 @@ function UploadStep({
     records: ParsedRecord[],
     format: DetectedFormat,
     fields: string[],
+    rawData: unknown,
   ) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -411,7 +565,7 @@ function UploadStep({
         }
 
         const fields = getFieldNames(records);
-        onFileParsed(file, records, format, fields);
+        onFileParsed(file, records, format, fields, rawData);
       } catch (e) {
         setError(
           `Failed to parse file: ${e instanceof Error ? e.message : "Unknown error"}`,
@@ -467,7 +621,7 @@ function UploadStep({
               Drop a file here or click to browse
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Accepts .json (Mem0, Zep, or generic) and .csv files
+              Accepts .json (nram export, Mem0, Zep, or generic) and .csv files
             </p>
           </div>
         </div>
@@ -509,10 +663,8 @@ function MapFieldsStep({
   onNext: () => void;
   onBack: () => void;
 }) {
-  const selectClass =
-    "rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm w-full";
-  const inputClass =
-    "rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm w-full";
+  const selectClass = SELECT_CLASS;
+  const inputClass = SELECT_CLASS;
 
   const update = (key: keyof FieldMapping, val: string) => {
     onMappingChange({ ...mapping, [key]: val });
@@ -522,42 +674,13 @@ function MapFieldsStep({
 
   return (
     <div className="space-y-6">
-      {/* File info */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">{file.name}</p>
-            <p className="text-xs text-muted-foreground">
-              {formatFileSize(file.size)} &middot; {formatLabel(format)}
-            </p>
-          </div>
-          <button
-            onClick={onBack}
-            className="text-xs text-muted-foreground hover:text-foreground underline"
-          >
-            Change file
-          </button>
-        </div>
-      </div>
+      <FileInfoCard file={file} label={formatLabel(format)} onBack={onBack} />
 
-      {/* Project selector */}
-      <div>
-        <label className="block text-sm font-medium mb-1.5">
-          Target Project <span className="text-destructive">*</span>
-        </label>
-        <select
-          className={selectClass}
-          value={selectedProject}
-          onChange={(e) => onProjectChange(e.target.value)}
-        >
-          <option value="">Select a project...</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.slug})
-            </option>
-          ))}
-        </select>
-      </div>
+      <ProjectPicker
+        projects={projects}
+        value={selectedProject}
+        onChange={onProjectChange}
+      />
 
       {/* Field mappings */}
       <div className="space-y-4">
@@ -940,22 +1063,9 @@ function ImportStep({
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-4">
-          <div className="rounded-md border border-border p-3 text-center">
-            <p className="text-lg font-semibold">{result!.total}</p>
-            <p className="text-xs text-muted-foreground">Total</p>
-          </div>
-          <div className="rounded-md border border-border p-3 text-center">
-            <p className="text-lg font-semibold text-success">
-              {result!.success}
-            </p>
-            <p className="text-xs text-muted-foreground">Imported</p>
-          </div>
-          <div className="rounded-md border border-border p-3 text-center">
-            <p className="text-lg font-semibold text-destructive">
-              {result!.failed}
-            </p>
-            <p className="text-xs text-muted-foreground">Failed</p>
-          </div>
+          <StatCard value={result!.total} label="Total" />
+          <StatCard value={result!.success} label="Imported" tone="success" />
+          <StatCard value={result!.failed} label="Failed" tone="destructive" />
         </div>
 
         {/* Errors */}
@@ -992,6 +1102,227 @@ function ImportStep({
 }
 
 // ---------------------------------------------------------------------------
+// Native (nram) Review + Import
+// ---------------------------------------------------------------------------
+
+const STAT_KEY = {
+  memories: "memory_count",
+  entities: "entity_count",
+  relationships: "relationship_count",
+} as const;
+
+function countOf(data: NRAMExportData, key: keyof typeof STAT_KEY): number {
+  const arr = data[key];
+  if (Array.isArray(arr)) return arr.length;
+  const stat = data.stats?.[STAT_KEY[key]];
+  return typeof stat === "number" ? stat : 0;
+}
+
+function NRAMReviewStep({
+  file,
+  data,
+  selectedProject,
+  projects,
+  onProjectChange,
+  onNext,
+  onBack,
+}: {
+  file: File;
+  data: NRAMExportData;
+  selectedProject: string;
+  projects: Project[];
+  onProjectChange: (id: string) => void;
+  onNext: () => void;
+  onBack: () => void;
+}) {
+  const memCount = countOf(data, "memories");
+  const entCount = countOf(data, "entities");
+  const relCount = countOf(data, "relationships");
+  const canProceed = selectedProject !== "";
+
+  return (
+    <div className="space-y-6">
+      <FileInfoCard
+        file={file}
+        label={formatLabel("nram")}
+        detail={data.project?.name ? ` from "${data.project.name}"` : undefined}
+        onBack={onBack}
+      />
+
+      {/* Native exports carry the full graph; the server handles parsing and
+          remapping, so no field mapping is needed. */}
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard value={memCount} label="Memories" />
+        <StatCard value={entCount} label="Entities" />
+        <StatCard value={relCount} label="Relationships" />
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        This is a native nram export. Memories, entities, and relationships are
+        imported on the server with relationship endpoints remapped into the
+        target project. Duplicate memories are skipped automatically.
+      </p>
+
+      <ProjectPicker
+        projects={projects}
+        value={selectedProject}
+        onChange={onProjectChange}
+      />
+
+      <div className="flex justify-between pt-2">
+        <button
+          onClick={onBack}
+          className="border border-input bg-background hover:bg-accent rounded-md px-4 py-2 text-sm font-medium"
+        >
+          Back
+        </button>
+        <button
+          onClick={onNext}
+          disabled={!canProceed}
+          className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md px-4 py-2 text-sm font-medium"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NRAMImportStep({
+  data,
+  projectId,
+}: {
+  data: NRAMExportData;
+  projectId: string;
+}) {
+  const navigate = useNavigate();
+  const importMutation = useImportMemories();
+  const [result, setResult] = useState<ImportResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const startImport = useCallback(async () => {
+    setError(null);
+    try {
+      const resp = await importMutation.mutateAsync({
+        projectId,
+        format: "nram",
+        data,
+      });
+      setResult(resp);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+    }
+  }, [importMutation, projectId, data]);
+
+  const importing = importMutation.isPending;
+
+  // Done
+  if (result) {
+    const hadErrors = result.errors.length > 0;
+    return (
+      <div className="space-y-6">
+        <div className="rounded-lg border border-border bg-card p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-full text-lg ${hadErrors ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300" : "bg-success/20 text-success"}`}
+            >
+              {hadErrors ? "!" : "✓"}
+            </div>
+            <div>
+              <p className="text-sm font-medium">Import Complete</p>
+              <p className="text-xs text-muted-foreground">
+                {result.imported} memories, {result.entities_imported} entities,{" "}
+                {result.relationships_imported} relationships,{" "}
+                {result.lineage_imported} lineage links imported
+                {result.skipped > 0 ? `; ${result.skipped} skipped` : ""}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-5 gap-3">
+            <StatCard value={result.imported} label="Memories" tone="success" />
+            <StatCard
+              value={result.entities_imported}
+              label="Entities"
+              tone="success"
+            />
+            <StatCard
+              value={result.relationships_imported}
+              label="Relationships"
+              tone="success"
+            />
+            <StatCard
+              value={result.lineage_imported}
+              label="Lineage"
+              tone="success"
+            />
+            <StatCard value={result.skipped} label="Skipped" />
+          </div>
+
+          {hadErrors && (
+            <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3">
+              <p className="text-sm font-medium text-destructive mb-1">
+                Errors ({result.errors.length})
+              </p>
+              <div className="max-h-40 overflow-y-auto">
+                {result.errors.map((err, i) => (
+                  <p key={i} className="text-xs text-destructive py-0.5">
+                    {err.message}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => navigate("/memories")}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium"
+          >
+            View Imported Memories
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Ready / in progress
+  return (
+    <div className="space-y-6">
+      <div className="rounded-lg border border-border bg-card p-6 text-center">
+        <p className="text-sm">
+          Ready to import{" "}
+          <span className="font-semibold">{countOf(data, "memories")}</span>{" "}
+          memories,{" "}
+          <span className="font-semibold">{countOf(data, "entities")}</span>{" "}
+          entities, and{" "}
+          <span className="font-semibold">
+            {countOf(data, "relationships")}
+          </span>{" "}
+          relationships.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          The export is sent to the server in a single request.
+        </p>
+        <button
+          onClick={startImport}
+          disabled={importing}
+          className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md px-6 py-2 text-sm font-medium"
+        >
+          {importing ? "Importing..." : "Start Import"}
+        </button>
+        {error && (
+          <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
@@ -1001,6 +1332,7 @@ function BulkImport() {
   const [records, setRecords] = useState<ParsedRecord[]>([]);
   const [format, setFormat] = useState<DetectedFormat>("unknown");
   const [fields, setFields] = useState<string[]>([]);
+  const [nramData, setNramData] = useState<NRAMExportData | null>(null);
   const [mapping, setMapping] = useState<FieldMapping>({
     content: "",
     tags: "",
@@ -1014,13 +1346,26 @@ function BulkImport() {
   const { data: projects } = useMeProjects();
 
   const handleFileParsed = useCallback(
-    (f: File, recs: ParsedRecord[], fmt: DetectedFormat, flds: string[]) => {
+    (
+      f: File,
+      recs: ParsedRecord[],
+      fmt: DetectedFormat,
+      flds: string[],
+      rawData: unknown,
+    ) => {
       setFile(f);
       setRecords(recs);
       setFormat(fmt);
       setFields(flds);
-      const autoMapped = autoMapFields(flds, fmt);
-      setMapping(autoMapped);
+      if (fmt === "nram") {
+        // Native export: carry the full object; the per-record map/preview
+        // flow does not apply, so jump straight to the review step.
+        setNramData(rawData as NRAMExportData);
+      } else {
+        setNramData(null);
+        const autoMapped = autoMapFields(flds, fmt);
+        setMapping(autoMapped);
+      }
       setStep(2);
     },
     [],
@@ -1032,6 +1377,7 @@ function BulkImport() {
     setRecords([]);
     setFormat("unknown");
     setFields([]);
+    setNramData(null);
     setMapping({
       content: "",
       tags: "",
@@ -1066,45 +1412,72 @@ function BulkImport() {
       <div className="mb-6">
         <h1 className="font-display text-3xl text-foreground">Bulk Import</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Import memories from Mem0, Zep, or custom JSON/CSV files.
+          Import a native nram export, or memories from Mem0, Zep, or custom
+          JSON/CSV files.
         </p>
       </div>
 
-      <StepIndicator current={step} />
+      <StepIndicator
+        current={step}
+        steps={format === "nram" ? NRAM_STEPS : STEPS}
+      />
 
       {step === 1 && <UploadStep onFileParsed={handleFileParsed} />}
 
-      {step === 2 && file && (
-        <MapFieldsStep
-          file={file}
-          format={format}
-          fields={fields}
-          mapping={mapping}
-          selectedProject={selectedProject}
-          projects={projects ?? []}
-          onMappingChange={setMapping}
-          onProjectChange={setSelectedProject}
-          onNext={() => setStep(3)}
-          onBack={resetWizard}
-        />
-      )}
+      {/* Native nram export: Upload -> Review -> Import (server-side). */}
+      {format === "nram" && nramData ? (
+        <>
+          {step === 2 && file && (
+            <NRAMReviewStep
+              file={file}
+              data={nramData}
+              selectedProject={selectedProject}
+              projects={projects ?? []}
+              onProjectChange={setSelectedProject}
+              onNext={() => setStep(3)}
+              onBack={resetWizard}
+            />
+          )}
 
-      {step === 3 && (
-        <PreviewStep
-          records={records}
-          mapping={mapping}
-          totalCount={records.length}
-          onNext={() => setStep(4)}
-          onBack={() => setStep(2)}
-        />
-      )}
+          {step === 3 && (
+            <NRAMImportStep data={nramData} projectId={selectedProject} />
+          )}
+        </>
+      ) : (
+        <>
+          {step === 2 && file && (
+            <MapFieldsStep
+              file={file}
+              format={format}
+              fields={fields}
+              mapping={mapping}
+              selectedProject={selectedProject}
+              projects={projects ?? []}
+              onMappingChange={setMapping}
+              onProjectChange={setSelectedProject}
+              onNext={() => setStep(3)}
+              onBack={resetWizard}
+            />
+          )}
 
-      {step === 4 && (
-        <ImportStep
-          records={records}
-          mapping={mapping}
-          projectId={selectedProject}
-        />
+          {step === 3 && (
+            <PreviewStep
+              records={records}
+              mapping={mapping}
+              totalCount={records.length}
+              onNext={() => setStep(4)}
+              onBack={() => setStep(2)}
+            />
+          )}
+
+          {step === 4 && (
+            <ImportStep
+              records={records}
+              mapping={mapping}
+              projectId={selectedProject}
+            />
+          )}
+        </>
       )}
     </div>
   );

@@ -335,8 +335,8 @@ func TestExport_JSONFormat_WithData(t *testing.T) {
 		t.Fatalf("Export failed: %v", err)
 	}
 
-	if data.Version != "1.0" {
-		t.Errorf("expected version 1.0, got %s", data.Version)
+	if data.Version != "1.1" {
+		t.Errorf("expected version 1.1, got %s", data.Version)
 	}
 	if data.Project.ID != projectID {
 		t.Errorf("expected project ID %s, got %s", projectID, data.Project.ID)
@@ -365,9 +365,6 @@ func TestExport_JSONFormat_WithData(t *testing.T) {
 	if m1.Content != "First memory" {
 		t.Errorf("expected 'First memory', got %s", m1.Content)
 	}
-	if len(m1.Lineage) != 0 {
-		t.Errorf("expected no lineage for mem1, got %d", len(m1.Lineage))
-	}
 
 	m2, ok := memIDs[mem2ID]
 	if !ok {
@@ -380,15 +377,19 @@ func TestExport_JSONFormat_WithData(t *testing.T) {
 		t.Error("expected mem2 to be enriched")
 	}
 
-	// Lineage for mem2.
-	if len(m2.Lineage) != 1 {
-		t.Fatalf("expected 1 lineage for mem2, got %d", len(m2.Lineage))
+	// Lineage is a top-level array of explicit child -> parent edges.
+	if len(data.Lineage) != 1 {
+		t.Fatalf("expected 1 lineage edge, got %d", len(data.Lineage))
 	}
-	if m2.Lineage[0].Relation != "derived_from" {
-		t.Errorf("expected lineage relation 'derived_from', got %s", m2.Lineage[0].Relation)
+	le := data.Lineage[0]
+	if le.MemoryID != mem2ID {
+		t.Errorf("expected lineage child mem2ID, got %s", le.MemoryID)
 	}
-	if m2.Lineage[0].ParentID == nil || *m2.Lineage[0].ParentID != mem1ID {
+	if le.ParentID == nil || *le.ParentID != mem1ID {
 		t.Error("expected lineage parent_id to be mem1ID")
+	}
+	if le.Relation != "derived_from" {
+		t.Errorf("expected lineage relation 'derived_from', got %s", le.Relation)
 	}
 
 	// Entities.
@@ -591,9 +592,12 @@ func TestExportNDJSON(t *testing.T) {
 	if typeCounts["relationship"] != 1 {
 		t.Errorf("expected 1 relationship record (deduplicated), got %d", typeCounts["relationship"])
 	}
+	if typeCounts["lineage"] != 1 {
+		t.Errorf("expected 1 lineage record, got %d", typeCounts["lineage"])
+	}
 
-	// Total lines: 1 project + 2 memories + 2 entities + 1 relationship = 6
-	expectedTotal := 6
+	// Total lines: 1 project + 2 memories + 2 entities + 1 relationship + 1 lineage = 7
+	expectedTotal := 7
 	if len(lines) != expectedTotal {
 		t.Errorf("expected %d total lines, got %d", expectedTotal, len(lines))
 	}
@@ -639,6 +643,9 @@ func TestExport_StatsCalculatedCorrectly(t *testing.T) {
 	if data.Stats.RelationshipCount != len(data.Relationships) {
 		t.Errorf("stats relationship_count %d does not match actual %d", data.Stats.RelationshipCount, len(data.Relationships))
 	}
+	if data.Stats.LineageCount != len(data.Lineage) {
+		t.Errorf("stats lineage_count %d does not match actual %d", data.Stats.LineageCount, len(data.Lineage))
+	}
 }
 
 func TestExport_LineageIncludedForMemories(t *testing.T) {
@@ -654,30 +661,22 @@ func TestExport_LineageIncludedForMemories(t *testing.T) {
 		t.Fatalf("Export failed: %v", err)
 	}
 
-	memMap := map[uuid.UUID]ExportMemory{}
-	for _, m := range data.Memories {
-		memMap[m.ID] = m
+	// Lineage is a top-level array of explicit child -> parent edges.
+	if len(data.Lineage) != 1 {
+		t.Fatalf("expected 1 lineage edge, got %d", len(data.Lineage))
 	}
-
-	// mem1 should have no lineage.
-	m1 := memMap[mem1ID]
-	if len(m1.Lineage) != 0 {
-		t.Errorf("expected 0 lineage for mem1, got %d", len(m1.Lineage))
+	le := data.Lineage[0]
+	if le.MemoryID != mem2ID {
+		t.Errorf("expected lineage child %s, got %s", mem2ID, le.MemoryID)
 	}
-
-	// mem2 should have 1 lineage entry.
-	m2 := memMap[mem2ID]
-	if len(m2.Lineage) != 1 {
-		t.Fatalf("expected 1 lineage for mem2, got %d", len(m2.Lineage))
-	}
-	if m2.Lineage[0].ParentID == nil {
+	if le.ParentID == nil {
 		t.Fatal("expected non-nil parent_id in lineage")
 	}
-	if *m2.Lineage[0].ParentID != mem1ID {
-		t.Errorf("expected parent_id %s, got %s", mem1ID, *m2.Lineage[0].ParentID)
+	if *le.ParentID != mem1ID {
+		t.Errorf("expected parent_id %s, got %s", mem1ID, *le.ParentID)
 	}
-	if m2.Lineage[0].Relation != "derived_from" {
-		t.Errorf("expected relation 'derived_from', got %s", m2.Lineage[0].Relation)
+	if le.Relation != "derived_from" {
+		t.Errorf("expected relation 'derived_from', got %s", le.Relation)
 	}
 }
 
@@ -697,7 +696,7 @@ func TestExportNDJSON_LineageInMemoryRecords(t *testing.T) {
 
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
 
-	// Find the memory record for mem2 and check its lineage.
+	// Lineage is emitted as its own top-level record type, not nested in memories.
 	found := false
 	for _, line := range lines {
 		var rec struct {
@@ -707,25 +706,22 @@ func TestExportNDJSON_LineageInMemoryRecords(t *testing.T) {
 		if err := json.Unmarshal(line, &rec); err != nil {
 			t.Fatalf("failed to parse line: %v", err)
 		}
-		if rec.Type != "memory" {
+		if rec.Type != "lineage" {
 			continue
 		}
-		var mem ExportMemory
-		if err := json.Unmarshal(rec.Data, &mem); err != nil {
-			t.Fatalf("failed to parse memory data: %v", err)
+		var le ExportLineage
+		if err := json.Unmarshal(rec.Data, &le); err != nil {
+			t.Fatalf("failed to parse lineage data: %v", err)
 		}
-		if mem.ID == mem2ID {
+		if le.MemoryID == mem2ID {
 			found = true
-			if len(mem.Lineage) != 1 {
-				t.Fatalf("expected 1 lineage for mem2 in NDJSON, got %d", len(mem.Lineage))
-			}
-			if mem.Lineage[0].Relation != "derived_from" {
-				t.Errorf("expected lineage relation 'derived_from', got %s", mem.Lineage[0].Relation)
+			if le.Relation != "derived_from" {
+				t.Errorf("expected lineage relation 'derived_from', got %s", le.Relation)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("mem2 not found in NDJSON output")
+		t.Fatal("lineage record for mem2 not found in NDJSON output")
 	}
 }
 

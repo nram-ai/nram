@@ -488,6 +488,7 @@ func main() {
 	)
 	importSvc := service.NewImportService(
 		memoryRepo, projectRepo, namespaceRepo, ingestionLogRepo,
+		entityRepo, relationshipRepo, lineageRepo,
 		settingsSvc,
 	)
 

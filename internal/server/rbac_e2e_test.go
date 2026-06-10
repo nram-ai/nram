@@ -1542,6 +1542,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 	importSvc := service.NewImportService(
 		memRepo, projectLookup, namespaceLookup, &rbacIngestionLogRepo{},
+		nil, nil, nil,
 		nil,
 	)
 

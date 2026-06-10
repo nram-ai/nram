@@ -97,7 +97,7 @@ func newImportTestFixtures() (
 
 func TestImportNRAMJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	src := "test-source"
@@ -177,7 +177,7 @@ func TestImportNRAMJSON(t *testing.T) {
 
 func TestImportNRAMNDJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	ts := time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC)
 	src := "ndjson-source"
@@ -223,7 +223,7 @@ func TestImportNRAMNDJSON(t *testing.T) {
 
 func TestImportMem0Format(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	mem0Data := fmt.Sprintf(`{
@@ -277,7 +277,7 @@ func TestImportMem0Format(t *testing.T) {
 
 func TestImportZepFormat(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	zepData := fmt.Sprintf(`{
@@ -329,7 +329,7 @@ func TestImportZepFormat(t *testing.T) {
 
 func TestImportProjectNotFound(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, _, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: uuid.New(), // unknown project
@@ -347,7 +347,7 @@ func TestImportProjectNotFound(t *testing.T) {
 
 func TestImportInvalidFormat(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: projectID,
@@ -365,7 +365,7 @@ func TestImportInvalidFormat(t *testing.T) {
 
 func TestImportMalformedJSON(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	_, err := svc.Import(context.Background(), &ImportRequest{
 		ProjectID: projectID,
@@ -383,7 +383,7 @@ func TestImportMalformedJSON(t *testing.T) {
 
 func TestImportPerItemErrors(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	// One valid, one empty content.
 	mem0Data := `{
@@ -441,7 +441,7 @@ func TestImportPerItemErrors(t *testing.T) {
 
 func TestImportIngestionLogCreated(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	mem0Data := `{
 		"results": [
@@ -484,7 +484,7 @@ func TestImportIngestionLogCreated(t *testing.T) {
 
 func TestImportLatencyTracked(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	data := `{"results": [{"id": "a", "memory": "test", "hash": "h", "metadata": {}}]}`
 
@@ -504,7 +504,7 @@ func TestImportLatencyTracked(t *testing.T) {
 
 func TestImportEmptyData(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	// Empty results array.
 	data := `{"results": []}`
@@ -531,7 +531,7 @@ func TestImportEmptyData(t *testing.T) {
 
 func TestImportPartialStatusInIngestionLog(t *testing.T) {
 	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	// One valid, one empty -> partial status.
 	data := `{
@@ -570,7 +570,7 @@ func TestImportCreateError(t *testing.T) {
 		return nil
 	}
 
-	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil)
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, nil, nil)
 
 	data := `{
 		"results": [
@@ -603,5 +603,308 @@ func TestImportCreateError(t *testing.T) {
 	}
 	if !strings.Contains(resp.Errors[0].Message, "db error") {
 		t.Errorf("expected 'db error' in message, got %q", resp.Errors[0].Message)
+	}
+}
+
+func TestImportNRAMGraphRoundTripJSON(t *testing.T) {
+	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
+	entRepo := &mockEntityRepo{}
+	relRepo := &mockRelationshipRepo{}
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, entRepo, relRepo, &mockLineageRepo{}, nil)
+
+	// Old IDs as they appear in the export. After import these must be remapped
+	// to the freshly-created entity IDs in the target namespace.
+	oldE1 := uuid.New()
+	oldE2 := uuid.New()
+	oldMem1 := uuid.New()
+	ts := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
+
+	exportData := ExportData{
+		Version:    "1.0",
+		ExportedAt: ts,
+		Project:    ExportProject{ID: projectID, Name: "Test", Slug: "test"},
+		Memories: []ExportMemory{
+			{ID: oldMem1, Content: "Alice knows Bob", Tags: []string{"people"}, Confidence: 0.9, Importance: 0.8, CreatedAt: ts},
+			{ID: uuid.New(), Content: "A second memory", Confidence: 0.7, Importance: 0.6, CreatedAt: ts},
+		},
+		Entities: []ExportEntity{
+			{ID: oldE1, Name: "Alice", Type: "person", Canonical: "alice", Properties: json.RawMessage(`{"k":"v"}`), MentionCount: 3},
+			{ID: oldE2, Name: "Bob", Type: "person", Canonical: "bob", MentionCount: 1},
+		},
+		Relationships: []ExportRelationship{
+			{ID: uuid.New(), SourceID: oldE1, TargetID: oldE2, Relation: "knows", Weight: 0.75, SourceMemory: &oldMem1, ValidFrom: ts},
+		},
+		Stats: ExportStats{MemoryCount: 2, EntityCount: 2, RelationshipCount: 1},
+	}
+
+	data, _ := json.Marshal(exportData)
+
+	resp, err := svc.Import(context.Background(), &ImportRequest{
+		ProjectID: projectID,
+		Format:    ImportFormatNRAM,
+		Data:      strings.NewReader(string(data)),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Imported != 2 {
+		t.Errorf("expected 2 memories imported, got %d", resp.Imported)
+	}
+	if resp.EntitiesImported != 2 {
+		t.Errorf("expected 2 entities imported, got %d", resp.EntitiesImported)
+	}
+	if resp.RelationshipsImported != 1 {
+		t.Errorf("expected 1 relationship imported, got %d", resp.RelationshipsImported)
+	}
+	if len(entRepo.entities) != 2 {
+		t.Fatalf("expected 2 entities upserted, got %d", len(entRepo.entities))
+	}
+	if len(relRepo.relationships) != 1 {
+		t.Fatalf("expected 1 relationship created, got %d", len(relRepo.relationships))
+	}
+
+	// Entities land in the target namespace with canonical preserved.
+	for _, e := range entRepo.entities {
+		if e.NamespaceID != namespaceID {
+			t.Errorf("entity %q in namespace %s, want %s", e.Name, e.NamespaceID, namespaceID)
+		}
+	}
+	if entRepo.entities[0].Canonical != "alice" || entRepo.entities[0].EntityType != "person" {
+		t.Errorf("entity 0 canonical/type not preserved: %q/%q", entRepo.entities[0].Canonical, entRepo.entities[0].EntityType)
+	}
+
+	// The relationship endpoints must point at the newly-created entity IDs,
+	// not the old export IDs.
+	rel := relRepo.relationships[0]
+	newE1 := entRepo.entities[0].ID
+	newE2 := entRepo.entities[1].ID
+	if rel.SourceID != newE1 {
+		t.Errorf("relationship source = %s, want remapped %s", rel.SourceID, newE1)
+	}
+	if rel.TargetID != newE2 {
+		t.Errorf("relationship target = %s, want remapped %s", rel.TargetID, newE2)
+	}
+	if rel.SourceID == oldE1 || rel.TargetID == oldE2 {
+		t.Errorf("relationship endpoints were not remapped from export IDs")
+	}
+	if rel.NamespaceID != namespaceID {
+		t.Errorf("relationship namespace = %s, want %s", rel.NamespaceID, namespaceID)
+	}
+	if rel.Relation != "knows" || rel.Weight != 0.75 {
+		t.Errorf("relationship fields not preserved: %q/%f", rel.Relation, rel.Weight)
+	}
+	if !rel.ValidFrom.Equal(ts) {
+		t.Errorf("relationship valid_from = %v, want %v", rel.ValidFrom, ts)
+	}
+	// Provenance must be remapped to the newly-created memory, never the old
+	// export id and never NULL.
+	if rel.SourceMemory == nil {
+		t.Fatalf("relationship source_memory is NULL")
+	}
+	if *rel.SourceMemory == oldMem1 {
+		t.Errorf("relationship source_memory not remapped from export id")
+	}
+	if *rel.SourceMemory != memRepo.created[0].ID {
+		t.Errorf("relationship source_memory = %s, want first imported memory %s", *rel.SourceMemory, memRepo.created[0].ID)
+	}
+}
+
+func TestImportNRAMGraphSkipsUnmappedRelationship(t *testing.T) {
+	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
+	entRepo := &mockEntityRepo{}
+	relRepo := &mockRelationshipRepo{}
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, entRepo, relRepo, &mockLineageRepo{}, nil)
+
+	e1 := uuid.New()
+	dangling := uuid.New() // referenced by a relationship but absent from Entities
+	exportData := ExportData{
+		Version:  "1.0",
+		Project:  ExportProject{ID: projectID},
+		Memories: []ExportMemory{},
+		Entities: []ExportEntity{
+			{ID: e1, Name: "Alice", Type: "person", Canonical: "alice"},
+		},
+		Relationships: []ExportRelationship{
+			{ID: uuid.New(), SourceID: e1, TargetID: dangling, Relation: "knows", Weight: 1},
+		},
+	}
+	data, _ := json.Marshal(exportData)
+
+	resp, err := svc.Import(context.Background(), &ImportRequest{
+		ProjectID: projectID,
+		Format:    ImportFormatNRAM,
+		Data:      strings.NewReader(string(data)),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.EntitiesImported != 1 {
+		t.Errorf("expected 1 entity imported, got %d", resp.EntitiesImported)
+	}
+	if resp.RelationshipsImported != 0 {
+		t.Errorf("expected 0 relationships imported, got %d", resp.RelationshipsImported)
+	}
+	if len(relRepo.relationships) != 0 {
+		t.Errorf("expected no relationships created, got %d", len(relRepo.relationships))
+	}
+	if resp.Skipped != 1 {
+		t.Errorf("expected 1 skipped (dangling relationship), got %d", resp.Skipped)
+	}
+}
+
+func TestImportNRAMGraphNDJSON(t *testing.T) {
+	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
+	entRepo := &mockEntityRepo{}
+	relRepo := &mockRelationshipRepo{}
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, entRepo, relRepo, &mockLineageRepo{}, nil)
+
+	oldE1 := uuid.New()
+	oldE2 := uuid.New()
+	oldMem := uuid.New()
+	ts := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	projLine, _ := json.Marshal(ndjsonRecord{Type: "project", Data: ExportProject{ID: projectID}})
+	memLine, _ := json.Marshal(ndjsonRecord{Type: "memory", Data: ExportMemory{ID: oldMem, Content: "ND memory", Confidence: 0.9, Importance: 0.8, CreatedAt: ts}})
+	entLine1, _ := json.Marshal(ndjsonRecord{Type: "entity", Data: ExportEntity{ID: oldE1, Name: "Alice", Type: "person", Canonical: "alice"}})
+	entLine2, _ := json.Marshal(ndjsonRecord{Type: "entity", Data: ExportEntity{ID: oldE2, Name: "Bob", Type: "person", Canonical: "bob"}})
+	relLine, _ := json.Marshal(ndjsonRecord{Type: "relationship", Data: ExportRelationship{ID: uuid.New(), SourceID: oldE1, TargetID: oldE2, Relation: "knows", Weight: 0.5, SourceMemory: &oldMem, ValidFrom: ts}})
+
+	nd := strings.Join([]string{string(projLine), string(memLine), string(entLine1), string(entLine2), string(relLine)}, "\n") + "\n"
+
+	resp, err := svc.Import(context.Background(), &ImportRequest{
+		ProjectID: projectID,
+		Format:    ImportFormatNRAM,
+		Data:      strings.NewReader(nd),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Imported != 1 {
+		t.Errorf("expected 1 memory imported, got %d", resp.Imported)
+	}
+	if resp.EntitiesImported != 2 {
+		t.Errorf("expected 2 entities imported, got %d", resp.EntitiesImported)
+	}
+	if resp.RelationshipsImported != 1 {
+		t.Errorf("expected 1 relationship imported, got %d", resp.RelationshipsImported)
+	}
+	if len(relRepo.relationships) != 1 {
+		t.Fatalf("expected 1 relationship created, got %d", len(relRepo.relationships))
+	}
+	rel := relRepo.relationships[0]
+	if rel.SourceID != entRepo.entities[0].ID || rel.TargetID != entRepo.entities[1].ID {
+		t.Errorf("NDJSON relationship endpoints not remapped correctly")
+	}
+}
+
+func TestImportNRAMDropsOrphanEdge(t *testing.T) {
+	memRepo, projRepo, nsRepo, ingRepo, projectID, _ := newImportTestFixtures()
+	entRepo := &mockEntityRepo{}
+	relRepo := &mockRelationshipRepo{}
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, entRepo, relRepo, &mockLineageRepo{}, nil)
+
+	e1 := uuid.New()
+	e2 := uuid.New()
+	orphan := uuid.New() // a source memory that is NOT part of the export
+	ts := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	exportData := ExportData{
+		Version: "1.0",
+		Project: ExportProject{ID: projectID},
+		Memories: []ExportMemory{
+			{ID: uuid.New(), Content: "a memory", Confidence: 0.9, Importance: 0.8, CreatedAt: ts},
+		},
+		Entities: []ExportEntity{
+			{ID: e1, Name: "Alice", Type: "person", Canonical: "alice"},
+			{ID: e2, Name: "Bob", Type: "person", Canonical: "bob"},
+		},
+		Relationships: []ExportRelationship{
+			{ID: uuid.New(), SourceID: e1, TargetID: e2, Relation: "knows", Weight: 1, SourceMemory: &orphan, ValidFrom: ts},
+		},
+	}
+	data, _ := json.Marshal(exportData)
+
+	resp, err := svc.Import(context.Background(), &ImportRequest{
+		ProjectID: projectID,
+		Format:    ImportFormatNRAM,
+		Data:      strings.NewReader(string(data)),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.EntitiesImported != 2 {
+		t.Errorf("expected 2 entities imported, got %d", resp.EntitiesImported)
+	}
+	if resp.RelationshipsImported != 0 {
+		t.Errorf("expected 0 relationships imported (orphan dropped), got %d", resp.RelationshipsImported)
+	}
+	if len(relRepo.relationships) != 0 {
+		t.Errorf("expected no relationships created, got %d", len(relRepo.relationships))
+	}
+	if resp.Skipped != 1 {
+		t.Errorf("expected 1 skipped (orphan edge), got %d", resp.Skipped)
+	}
+}
+
+func TestImportNRAMRoundTripsLineage(t *testing.T) {
+	memRepo, projRepo, nsRepo, ingRepo, projectID, namespaceID := newImportTestFixtures()
+	lineageRepo := &mockLineageRepo{}
+	svc := NewImportService(memRepo, projRepo, nsRepo, ingRepo, nil, nil, lineageRepo, nil)
+
+	childID := uuid.New()
+	parentID := uuid.New()
+	ts := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	exportData := ExportData{
+		Version: "1.1",
+		Project: ExportProject{ID: projectID},
+		Memories: []ExportMemory{
+			{ID: childID, Content: "synthesis", Confidence: 0.9, Importance: 0.8, CreatedAt: ts},
+			{ID: parentID, Content: "source", Confidence: 0.7, Importance: 0.6, CreatedAt: ts},
+		},
+		// Lineage is a top-level explicit child -> parent edge.
+		Lineage: []ExportLineage{
+			{MemoryID: childID, ParentID: &parentID, Relation: model.LineageSynthesizedFrom},
+		},
+	}
+	data, _ := json.Marshal(exportData)
+
+	resp, err := svc.Import(context.Background(), &ImportRequest{
+		ProjectID: projectID,
+		Format:    ImportFormatNRAM,
+		Data:      strings.NewReader(string(data)),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Imported != 2 {
+		t.Fatalf("expected 2 memories imported, got %d", resp.Imported)
+	}
+	if resp.LineageImported != 1 {
+		t.Errorf("expected 1 lineage row imported, got %d", resp.LineageImported)
+	}
+	if len(lineageRepo.lineages) != 1 {
+		t.Fatalf("expected 1 lineage row created, got %d", len(lineageRepo.lineages))
+	}
+
+	// memRepo.created order matches the export memory order: [child, parent].
+	newChild := memRepo.created[0].ID
+	newParent := memRepo.created[1].ID
+	lr := lineageRepo.lineages[0]
+	if lr.NamespaceID != namespaceID {
+		t.Errorf("lineage namespace = %s, want %s", lr.NamespaceID, namespaceID)
+	}
+	if lr.MemoryID != newChild {
+		t.Errorf("lineage child = %s, want remapped %s", lr.MemoryID, newChild)
+	}
+	if lr.ParentID == nil || *lr.ParentID != newParent {
+		t.Errorf("lineage parent = %v, want remapped %s", lr.ParentID, newParent)
+	}
+	if lr.ParentID != nil && (*lr.ParentID == parentID || lr.MemoryID == childID) {
+		t.Errorf("lineage endpoints were not remapped from export ids")
+	}
+	if lr.Relation != model.LineageSynthesizedFrom {
+		t.Errorf("lineage relation = %q, want %q", lr.Relation, model.LineageSynthesizedFrom)
 	}
 }
