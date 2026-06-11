@@ -415,6 +415,129 @@ describe("GraphVisualization layout persistence", () => {
     expect(call.data.settings.graph_charge_strength).toBeUndefined();
   });
 
+  it("shows the custom badge from the live slider value, before any backend round-trip", async () => {
+    // The reported desync: dragging a slider off the default left the panel
+    // saying "Using system defaults" with no badge until the full debounce +
+    // mutation + refetch landed, because the badge was derived from the
+    // persisted value. The mutate mock here is a no-op, so the backend project
+    // cache NEVER updates; the badge must still flip purely from local state.
+    const mutate = vi.fn();
+    useUpdateProjectMock.mockReturnValue({
+      mutate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([projectWithoutOverrides()]) as ReturnType<
+        typeof useApi.useMeProjects
+      >,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
+
+    // Baseline: no overrides, the panel reports system defaults, no badge.
+    expect(screen.getByText("Using system defaults.")).toBeInTheDocument();
+    expect(screen.queryAllByText("custom")).toHaveLength(0);
+
+    // Drag Gravity off the default. No timers advanced, no mutation resolved.
+    fireEvent.change(screen.getAllByRole("slider")[0], { target: { value: "2.0" } });
+
+    expect(
+      screen.getByText("This project has its own layout overrides."),
+    ).toBeInTheDocument();
+    expect(screen.queryAllByText("custom").length).toBeGreaterThanOrEqual(1);
+    // The label updated with zero backend round-trip.
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("clears the custom badge immediately on reset, without waiting for the refetch", async () => {
+    // The reported flicker: after Reset the badge lingered next to the default
+    // value until the refetch dropped the override from the cache. The mutate
+    // mock is a no-op, so the cache keeps the overrides; the badge must clear
+    // from the reset (default) slider values alone.
+    const mutate = vi.fn();
+    useUpdateProjectMock.mockReturnValue({
+      mutate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([projectWithOverrides()]) as ReturnType<
+        typeof useApi.useMeProjects
+      >,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
+
+    // All three overrides differ from the system defaults => three badges.
+    expect(
+      screen.getByText("This project has its own layout overrides."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("custom")).toHaveLength(3);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Reset to system defaults/i }),
+    );
+
+    expect(screen.getByText("Using system defaults.")).toBeInTheDocument();
+    expect(screen.queryAllByText("custom")).toHaveLength(0);
+  });
+
+  it("drops the per-project override when a slider is dragged back to exactly the system default", async () => {
+    // Gravity default is 0.75; the project overrides it to 1.2. Dragging it
+    // back to exactly the default must drop the override (target undefined),
+    // not persist 0.75 as an explicit override.
+    const mutate = vi.fn();
+    useUpdateProjectMock.mockReturnValue({
+      mutate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    useMeProjectsMock.mockReturnValue(
+      queryStub([projectWithOverrides()]) as ReturnType<
+        typeof useApi.useMeProjects
+      >,
+    );
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, PROJECT_ID);
+
+    vi.useFakeTimers();
+    render(
+      <ProjectProvider>
+        <GraphVisualization />
+      </ProjectProvider>,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
+    fireEvent.change(screen.getAllByRole("slider")[0], { target: { value: "0.75" } });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const settings = (
+      mutate.mock.calls[0][0] as { data: { settings: Record<string, unknown> } }
+    ).data.settings;
+    // Dropped, not stored as 0.75.
+    expect(settings.graph_center_gravity).toBeUndefined();
+    // The untouched overrides survive.
+    expect(settings.graph_charge_strength).toBeCloseTo(-42, 5);
+    expect(settings.graph_link_distance).toBeCloseTo(30, 5);
+  });
+
   it("hides the Layout control for a reserved project (overrides cannot be saved)", async () => {
     // Reserved projects reject settings writes, so the per-project Layout
     // control must not be offered (its save would 400). The graph still

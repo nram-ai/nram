@@ -9,11 +9,14 @@ export interface SliderSpec {
   value: number;
   range: { min: number; max: number; step: number };
   onChange: (v: number) => void;
+  // Fired when the drag ends (pointer up / key up). Lets a consumer defer an
+  // expensive apply (e.g. a graph re-layout) to release instead of every frame.
+  onCommit?: () => void;
   isOverride: boolean;
 }
 
 export function SliderRow({ spec }: { spec: SliderSpec }) {
-  const { label, description, value, range, onChange, isOverride } = spec;
+  const { label, description, value, range, onChange, onCommit, isOverride } = spec;
   // Match readout precision to slider step so step=1 controls don't show
   // floating-point noise.
   const decimals = range.step >= 1 ? 0 : range.step >= 0.1 ? 1 : 2;
@@ -40,6 +43,8 @@ export function SliderRow({ spec }: { spec: SliderSpec }) {
         step={range.step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
+        onPointerUp={() => onCommit?.()}
+        onKeyUp={() => onCommit?.()}
         className="w-full accent-blue-500"
       />
       <p className="mt-1 text-xs text-muted-foreground">{description}</p>

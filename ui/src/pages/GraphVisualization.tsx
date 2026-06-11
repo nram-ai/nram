@@ -32,18 +32,39 @@ const LINK_DISTANCE_RANGE_FALLBACK = { min: 5, max: 100, step: 1 };
 const PERSIST_DEBOUNCE_MS = 300;
 const DIRTY_GUARD_MS = 1500;
 
+// Tolerance for treating a slider value as equal to the system default. Slider
+// values are discrete, step-aligned floats, so this only absorbs binary
+// floating-point noise. Drives both the "custom" badge and the drop-override
+// persistence decision so the two never disagree.
+const LAYOUT_EPSILON = 1e-9;
+
+// A layout knob counts as a per-project override when its value differs from
+// the system default by more than the float tolerance. Single source of truth
+// for both the "custom" badge and the drop-override persistence decision, so
+// the two never disagree. Returns false until the default has loaded.
+function isLayoutOverride(value: number, storeDefault: number | undefined): boolean {
+  return storeDefault !== undefined && Math.abs(value - storeDefault) > LAYOUT_EPSILON;
+}
+
+// Above this node count the per-frame simulation reheat during a slider drag
+// is too expensive (every frame restarts alpha at full, so the sim never
+// cools). Below it the live morph is cheap and kept; at or above it the graph
+// re-lays-out once on release instead. Adjustable.
+const LIVE_LAYOUT_NODE_LIMIT = 1000;
+
 // resolveLayoutValue prefers a per-project override; otherwise it falls back to
 // the operator default sourced from the settings store. storeDefault is
-// undefined until /me/setting-defaults loads, so value is likewise undefined
-// during that window and callers must defer applying it (see defaultsLoaded).
+// undefined until /me/setting-defaults loads, so the result is likewise
+// undefined during that window and callers must defer applying it (see
+// defaultsLoaded).
 function resolveLayoutValue(
   override: number | undefined,
   storeDefault: number | undefined,
-): { value: number | undefined; hasOverride: boolean } {
+): number | undefined {
   if (typeof override === "number" && Number.isFinite(override)) {
-    return { value: override, hasOverride: true };
+    return override;
   }
-  return { value: storeDefault, hasOverride: false };
+  return storeDefault;
 }
 
 // resolveRange reads the operator-tunable {min,max,step} from a setting-default
@@ -438,9 +459,9 @@ function GraphVisualization() {
   // Seed at 0 before the store defaults load; the sync effect below replaces
   // these the moment resolved values become defined (and forces are not
   // applied until defaultsLoaded, so the seed is never rendered).
-  const [gravity, setGravity] = useState(resolvedGravity.value ?? 0);
-  const [charge, setCharge] = useState(resolvedCharge.value ?? 0);
-  const [linkDistance, setLinkDistance] = useState(resolvedLinkDistance.value ?? 0);
+  const [gravity, setGravity] = useState(resolvedGravity ?? 0);
+  const [charge, setCharge] = useState(resolvedCharge ?? 0);
+  const [linkDistance, setLinkDistance] = useState(resolvedLinkDistance ?? 0);
 
   // dirtyUntilRef holds off backend->local sync while the user is dragging,
   // so React Query refetches from our own writes don't clobber in-flight
@@ -459,9 +480,9 @@ function GraphVisualization() {
     // (for a project without overrides) are undefined and there is nothing
     // meaningful to seed yet.
     if (
-      resolvedGravity.value === undefined ||
-      resolvedCharge.value === undefined ||
-      resolvedLinkDistance.value === undefined
+      resolvedGravity === undefined ||
+      resolvedCharge === undefined ||
+      resolvedLinkDistance === undefined
     ) {
       return;
     }
@@ -472,14 +493,14 @@ function GraphVisualization() {
       lastSyncedProjectRef.current = selectedProjectId;
       userEditedRef.current = false;
     }
-    setGravity(resolvedGravity.value);
-    setCharge(resolvedCharge.value);
-    setLinkDistance(resolvedLinkDistance.value);
+    setGravity(resolvedGravity);
+    setCharge(resolvedCharge);
+    setLinkDistance(resolvedLinkDistance);
   }, [
     selectedProjectId,
-    resolvedGravity.value,
-    resolvedCharge.value,
-    resolvedLinkDistance.value,
+    resolvedGravity,
+    resolvedCharge,
+    resolvedLinkDistance,
   ]);
 
   const debouncedGravity = useDebounce(gravity, PERSIST_DEBOUNCE_MS);
@@ -501,24 +522,22 @@ function GraphVisualization() {
     // (the Layout control is hidden, so this is purely defensive).
     if (isReservedProject) return;
     // The store defaults gate the drop-override comparison below; without them
-    // resolved.value is undefined and we cannot tell whether the slider equals
-    // the default. Persist only once they are known.
+    // we cannot tell whether the slider equals the default. Persist only once
+    // they are known (isLayoutOverride is false while a default is undefined).
     if (!defaultsLoaded) return;
     const fields = [
-      { resolved: resolvedGravity, debounced: debouncedGravity, stored: projectSettings?.graph_center_gravity, key: "graph_center_gravity" as const },
-      { resolved: resolvedCharge, debounced: debouncedCharge, stored: projectSettings?.graph_charge_strength, key: "graph_charge_strength" as const },
-      { resolved: resolvedLinkDistance, debounced: debouncedLinkDistance, stored: projectSettings?.graph_link_distance, key: "graph_link_distance" as const },
+      { debounced: debouncedGravity, def: gravityDefault, stored: projectSettings?.graph_center_gravity, key: "graph_center_gravity" as const },
+      { debounced: debouncedCharge, def: chargeDefault, stored: projectSettings?.graph_charge_strength, key: "graph_charge_strength" as const },
+      { debounced: debouncedLinkDistance, def: linkDistanceDefault, stored: projectSettings?.graph_link_distance, key: "graph_link_distance" as const },
     ];
 
     const targets: Partial<Record<typeof fields[number]["key"], number | undefined>> = {};
     let changed = false;
     for (const f of fields) {
-      // resolved.value is the effective default (or the existing override);
-      // when the slider matches it and no override exists, target=undefined so
-      // the override is dropped and the project tracks the system default.
-      const rv = f.resolved.value;
-      const wants = rv === undefined || Math.abs(f.debounced - rv) > 1e-9 || f.resolved.hasOverride;
-      const target = wants ? f.debounced : undefined;
+      // Drop the override (target=undefined) when the slider sits at the system
+      // default; otherwise store the slider value. Same value-vs-default test as
+      // the "custom" badge, so persistence and the badge never disagree.
+      const target = isLayoutOverride(f.debounced, f.def) ? f.debounced : undefined;
       targets[f.key] = target;
       if (f.stored !== target) changed = true;
     }
@@ -545,6 +564,38 @@ function GraphVisualization() {
     dirtyUntilRef.current = Date.now() + DIRTY_GUARD_MS;
     userEditedRef.current = true;
   }, []);
+  // rAF-coalesced simulation reheat: a slider drag fires onChange every pixel,
+  // so restart alpha at most once per frame. Shared by the live-layout path
+  // (small graphs) and the on-release commit path (large graphs).
+  const reheatPendingRef = useRef(false);
+  const requestReheat = useCallback(() => {
+    if (reheatPendingRef.current) return;
+    reheatPendingRef.current = true;
+    requestAnimationFrame(() => {
+      reheatPendingRef.current = false;
+      const fg = graphRef.current;
+      if (!fg) return;
+      const reheat = (fg as unknown as { d3ReheatSimulation?: () => void }).d3ReheatSimulation;
+      reheat?.call(fg);
+    });
+  }, []);
+  // Imperatively push the layout knob values into the running d3-force
+  // simulation. Cheap O(1) setters; does not restart alpha (that is
+  // requestReheat). Used by both the apply effect and the reset handler.
+  const applyLayoutForces = useCallback((g: number, c: number, l: number) => {
+    const fg = graphRef.current;
+    if (!fg) return;
+    const chargeForce = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
+    chargeForce?.strength?.(c);
+    const linkForce = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
+    linkForce?.distance?.(l);
+    const centerForce = fg.d3Force("center") as unknown as { strength?: (v: number) => void } | undefined;
+    centerForce?.strength?.(g);
+  }, []);
+  // Fired when a slider is released (pointer up / key up). On large graphs this
+  // is the single re-layout; on small graphs it is a harmless extra reheat
+  // after the live morph.
+  const handleSliderCommit = useCallback(() => { requestReheat(); }, [requestReheat]);
   const handleGravityChange = useCallback((v: number) => { markDirty(); setGravity(v); }, [markDirty]);
   const handleRepulsionChange = useCallback((v: number) => { markDirty(); setCharge(-v); }, [markDirty]);
   const handleLinkDistanceChange = useCallback((v: number) => { markDirty(); setLinkDistance(v); }, [markDirty]);
@@ -571,6 +622,12 @@ function GraphVisualization() {
     setGravity(gravityDefault);
     setCharge(chargeDefault);
     setLinkDistance(linkDistanceDefault);
+    // Apply the defaults imperatively and reheat now: on large graphs the apply
+    // effect does not reheat on its own, and scheduling a reheat off the state
+    // update would race the post-paint passive effect and reheat stale
+    // strengths. Setting them here first keeps reset coherent at any graph size.
+    applyLayoutForces(gravityDefault, chargeDefault, linkDistanceDefault);
+    requestReheat();
     updateProjectMut.mutate({
       id: currentProject.id,
       data: { settings: nextSettings },
@@ -582,6 +639,8 @@ function GraphVisualization() {
     gravityDefault,
     chargeDefault,
     linkDistanceDefault,
+    applyLayoutForces,
+    requestReheat,
   ]);
 
   // Callback ref, fires when the container div mounts/unmounts
@@ -728,35 +787,28 @@ function GraphVisualization() {
     [entityMap],
   );
 
-  // Apply forces after mount and on every layout-knob change. Reheat is
-  // rAF-coalesced so a slider drag (which fires onChange every pixel) only
-  // restarts the simulation alpha at most once per frame instead of per event.
-  const reheatPendingRef = useRef(false);
+  // Apply forces after mount and on every layout-knob change. The strength
+  // setters are always applied (cheap); the reheat (which restarts the
+  // simulation alpha) is gated on graph size so large graphs do not churn the
+  // simulation on every drag frame. Below LIVE_LAYOUT_NODE_LIMIT the live morph
+  // is kept; at or above it the graph re-lays-out only on release/reset.
   useEffect(() => {
     if (!graphRef.current) return;
     // Hold off until the store defaults have loaded so the simulation is never
     // seeded with the placeholder 0s; the sync effect installs the real values
     // and this effect re-runs once defaultsLoaded flips true.
     if (!defaultsLoaded) return;
-    const fg = graphRef.current;
-
-    const chargeForce = fg.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
-    chargeForce?.strength?.(charge);
-
-    const linkForce = fg.d3Force("link") as unknown as { distance?: (v: number) => void } | undefined;
-    linkForce?.distance?.(linkDistance);
-
-    const centerForce = fg.d3Force("center") as unknown as { strength?: (v: number) => void } | undefined;
-    centerForce?.strength?.(gravity);
-
-    if (reheatPendingRef.current) return;
-    reheatPendingRef.current = true;
-    requestAnimationFrame(() => {
-      reheatPendingRef.current = false;
-      const reheat = (fg as unknown as { d3ReheatSimulation?: () => void }).d3ReheatSimulation;
-      reheat?.call(fg);
-    });
-  }, [graph3dData, gravity, charge, linkDistance, defaultsLoaded]);
+    applyLayoutForces(gravity, charge, linkDistance);
+    if (graph3dData.nodes.length <= LIVE_LAYOUT_NODE_LIMIT) requestReheat();
+  }, [
+    graph3dData,
+    gravity,
+    charge,
+    linkDistance,
+    defaultsLoaded,
+    applyLayoutForces,
+    requestReheat,
+  ]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 
@@ -914,7 +966,8 @@ function GraphVisualization() {
                     value: gravity,
                     range: gravityRange,
                     onChange: handleGravityChange,
-                    isOverride: resolvedGravity.hasOverride,
+                    onCommit: handleSliderCommit,
+                    isOverride: isLayoutOverride(gravity, gravityDefault),
                   },
                   {
                     label: "Repulsion",
@@ -922,7 +975,8 @@ function GraphVisualization() {
                     value: -charge,
                     range: repulsionRange,
                     onChange: handleRepulsionChange,
-                    isOverride: resolvedCharge.hasOverride,
+                    onCommit: handleSliderCommit,
+                    isOverride: isLayoutOverride(charge, chargeDefault),
                   },
                   {
                     label: "Link distance",
@@ -930,7 +984,8 @@ function GraphVisualization() {
                     value: linkDistance,
                     range: linkDistanceRange,
                     onChange: handleLinkDistanceChange,
-                    isOverride: resolvedLinkDistance.hasOverride,
+                    onCommit: handleSliderCommit,
+                    isOverride: isLayoutOverride(linkDistance, linkDistanceDefault),
                   },
                 ]}
                 onReset={handleResetLayout}
