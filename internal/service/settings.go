@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/provider"
 )
 
 // Provider slot config is stored in the settings table as a JSON blob under
@@ -596,6 +598,127 @@ const (
 	ReconsolidationModePersist = "persist"
 )
 
+// Prompt system-prompt companion keys. Each LLM phase splits its template into
+// a static instruction part (the *SystemPrompt key, sent as the system role
+// and a stable cacheable prefix) and a dynamic data part (the existing prompt
+// key, sent as the user role). The two halves' defaults are derived from the
+// existing combined default at package init (see splitPromptDefault); the
+// static half is authored below and the dynamic remainder is the rest.
+const (
+	SettingFactSystemPrompt               = "enrichment.fact_system_prompt"
+	SettingEntitySystemPrompt             = "enrichment.entity_system_prompt"
+	SettingIngestionDecisionSystemPrompt  = "enrichment.ingestion_decision.system_prompt"
+	SettingQueryAugmentSystemPrompt       = "enrichment.query_augment.system_prompt"
+	SettingDreamContradictionSystemPrompt = "dreaming.contradiction_system_prompt"
+	SettingDreamSynthesisSystemPrompt     = "dreaming.synthesis_system_prompt"
+	SettingDreamAlignmentSystemPrompt     = "dreaming.alignment_system_prompt"
+	SettingDreamNoveltyJudgeSystemPrompt  = "dreaming.novelty.judge_system_prompt"
+)
+
+// Provider prompt-delivery and Ollama keep-warm runtime settings.
+const (
+	// SettingProviderPromptCacheEnabled controls whether providers that accept
+	// explicit cache hints (Anthropic cache_control) mark the system prefix as
+	// cacheable. Below a model's minimum cacheable prefix the hint is a no-op.
+	SettingProviderPromptCacheEnabled = "provider.prompt_cache.enabled"
+	// SettingProviderOllamaKeepAlive is the Ollama keep_alive value (e.g. "5m",
+	// "-1" to keep resident) so the model stays warm between calls.
+	SettingProviderOllamaKeepAlive = "provider.ollama.keep_alive"
+	// SettingProviderOllamaNumCtx overrides Ollama's context window per request
+	// (0 leaves it to the model/Modelfile default).
+	SettingProviderOllamaNumCtx = "provider.ollama.num_ctx"
+)
+
+// Static system-prompt halves for each phase. splitPromptDefault verifies at
+// package load that combined == systemText + "\n\n" + dynamicRemainder and
+// panics on mismatch, so an edit to either half that breaks the boundary fails
+// fast rather than silently shipping a duplicated or truncated prompt.
+const (
+	factSystemPromptText = `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
+- "content": the fact statement (string)
+- "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
+- "tags": relevant tags for categorization (array of strings)
+
+Hard rules:
+- Do NOT emit a fact whose content merely restates the input. If the input is already a single atomic fact, return an empty array [].
+- Do NOT emit a fact that differs from the input only by punctuation, capitalization, or whitespace.
+- Tag-only deltas are NOT a reason to emit a fact. If the only thing you would add is a new tag on otherwise-identical content, return an empty array; the calling system merges tags from suppressed facts into the parent automatically.
+- Only emit facts that introduce a new entity, relationship, quantity, date, cause, consequence, or other proposition not already explicit in the input.
+
+Return ONLY valid JSON. Do not include markdown fences or explanation.`
+
+	entitySystemPromptText = `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
+
+Return a JSON object with two fields:
+- "entities": array of objects with fields:
+  - "name": the entity name (string)
+  - "type": the entity type, e.g. "person", "organization", "location", "concept" (string)
+  - "properties": optional key-value pairs (object)
+- "relationships": array of objects with fields:
+  - "source": source entity name (string)
+  - "target": target entity name (string)
+  - "relation": the relationship type (string)
+  - "weight": confidence/strength 0.0 to 1.0 (number)
+  - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
+
+Return ONLY valid JSON. Do not include markdown fences or explanation.`
+
+	ingestionDecisionSystemPromptText = `You are an ingestion decision engine. You do NOT converse. You output JSON only.
+
+A new memory has just arrived. Below is its content, followed by up to %d candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory.
+
+Choose exactly one operation:
+- "ADD": the new memory is genuinely distinct from every candidate; keep it as a separate row.
+- "UPDATE": the new memory is an updated, more specific, more recent, or otherwise improved version of one specific candidate. The old candidate should be marked superseded by the new memory.
+- "DELETE": the new memory is itself redundant: every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
+- "NONE": the new memory overlaps with one or more candidates but is not a clean update or duplicate (e.g. partial overlap, different aspect of the same topic). Keep the new memory but do not record any lineage edge.
+
+Hard rules:
+- target_id is required for UPDATE and DELETE and must be one of the candidate IDs given below verbatim. For ADD and NONE, set target_id to null.
+- Pick UPDATE only when one specific candidate is clearly superseded; if multiple candidates would each need updating, choose NONE.
+- Pick DELETE only when the new memory adds nothing not already in the named candidate.
+- When in doubt between ADD and NONE, prefer ADD.
+- Rationale must be one short sentence (under 200 characters) that names the candidate ID you compared against (when applicable).`
+
+	queryAugmentSystemPromptText = `You are a query augmentation engine. You do NOT converse. You output JSON only.
+
+Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
+
+OUTPUT FORMAT, read carefully:
+- Output ONLY a JSON array of strings.
+- EVERY element MUST be wrapped in DOUBLE QUOTES ("..."). Not single quotes. Not backticks. Not bare words.
+- No prose before or after the array. No markdown fences (no ` + "```" + `). No trailing commas. No comments.
+- Use \" to escape a literal double quote inside an element.
+
+CORRECT:   ["what time does X start", "X start time", "schedule for X"]
+WRONG (missing quotes):   [what time does X start, X start time, schedule for X]
+WRONG (single quotes):    ['what time does X start', 'X start time']
+WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + ``
+
+	contradictionSystemPromptText = `You are a contradiction detector. You do NOT converse. You output JSON only.
+
+Determine if the two statements below contradict each other.`
+
+	synthesisSystemPromptText = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
+
+Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.`
+
+	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
+
+Score how strongly the evidence supports or contradicts the synthesis.`
+
+	noveltyJudgeSystemPromptText = `You are a novelty auditor. You do NOT converse. You output JSON only.
+
+Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
+
+Hard rules:
+- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
+- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
+- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
+- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
+- When in doubt, return an empty array.`
+)
+
 // settingDefaults provides built-in default values for well-known settings.
 // These are used when a setting is not found at any scope in the database.
 var settingDefaults = map[string]string{
@@ -870,6 +993,10 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	SettingEmbeddingCacheMaxEntries: "8192",
 	SettingEmbeddingCacheTTLSeconds: "900",
 
+	SettingProviderPromptCacheEnabled: "true",
+	SettingProviderOllamaKeepAlive:    "5m",
+	SettingProviderOllamaNumCtx:       "0",
+
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the
 	// most common nram backend and the easiest to overload: concurrent calls
@@ -1014,6 +1141,43 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	"api.rate_limit_burst":  "20",
 }
 
+// promptSplitDefaults maps each phase's combined prompt key to its new
+// system-prompt companion key and the authored static instruction half. The
+// dynamic remainder is derived from the combined default at init.
+var promptSplitDefaults = []struct {
+	combinedKey string
+	systemKey   string
+	systemText  string
+	combined    string // original pre-split combined default, captured at init
+}{
+	{combinedKey: SettingFactPrompt, systemKey: SettingFactSystemPrompt, systemText: factSystemPromptText},
+	{combinedKey: SettingEntityPrompt, systemKey: SettingEntitySystemPrompt, systemText: entitySystemPromptText},
+	{combinedKey: SettingIngestionDecisionPrompt, systemKey: SettingIngestionDecisionSystemPrompt, systemText: ingestionDecisionSystemPromptText},
+	{combinedKey: SettingQueryAugmentPrompt, systemKey: SettingQueryAugmentSystemPrompt, systemText: queryAugmentSystemPromptText},
+	{combinedKey: SettingDreamContradictionPrompt, systemKey: SettingDreamContradictionSystemPrompt, systemText: contradictionSystemPromptText},
+	{combinedKey: SettingDreamSynthesisPrompt, systemKey: SettingDreamSynthesisSystemPrompt, systemText: synthesisSystemPromptText},
+	{combinedKey: SettingDreamAlignmentPrompt, systemKey: SettingDreamAlignmentSystemPrompt, systemText: alignmentSystemPromptText},
+	{combinedKey: SettingDreamNoveltyJudgePrompt, systemKey: SettingDreamNoveltyJudgeSystemPrompt, systemText: noveltyJudgeSystemPromptText},
+}
+
+func init() {
+	for i := range promptSplitDefaults {
+		p := &promptSplitDefaults[i]
+		combined, ok := settingDefaults[p.combinedKey]
+		if !ok {
+			panic("settings: prompt split references unknown combined key " + p.combinedKey)
+		}
+		sep := p.systemText + provider.PromptSplitSeparator
+		if !strings.HasPrefix(combined, sep) {
+			panic("settings: system-prompt half does not prefix the combined default for " + p.combinedKey +
+				"; the authored *SystemPromptText must equal the combined prompt up to the first blank line")
+		}
+		p.combined = combined
+		settingDefaults[p.systemKey] = p.systemText
+		settingDefaults[p.combinedKey] = strings.TrimPrefix(combined, sep)
+	}
+}
+
 // GetDefault returns the built-in default for the given setting key. The
 // boolean reports whether the key is registered. Used by callers that need
 // the same fallback the runtime cascade lands on (e.g. the schema admin
@@ -1067,6 +1231,95 @@ func ResolveOrDefault(ctx context.Context, s *SettingsService, key, scope string
 	}
 	def, _ := GetDefault(key)
 	return def
+}
+
+// LegacyCombinedPromptKeys are the eight phase prompt keys whose default
+// format changed in v0.2.0: each was split into a static system-instruction
+// half (the new <key>_system_prompt companion) and a dynamic data half (the
+// key itself, now dynamic-only). An operator who customized one of these
+// before v0.2.0 keeps a full combined prompt under the key; it is still sent as
+// the user message, but the new default system instructions are also prepended,
+// duplicating instructions until the operator resets or migrates.
+var LegacyCombinedPromptKeys = []string{
+	SettingFactPrompt,
+	SettingEntityPrompt,
+	SettingIngestionDecisionPrompt,
+	SettingQueryAugmentPrompt,
+	SettingDreamContradictionPrompt,
+	SettingDreamSynthesisPrompt,
+	SettingDreamAlignmentPrompt,
+	SettingDreamNoveltyJudgePrompt,
+}
+
+// ReconcileSplitPromptDefaults migrates prompt rows written before the v0.2.0
+// system/user split. The boot seed writes a default row for every prompt key;
+// before v0.2.0 that row held the full combined template. After upgrade an
+// InsertManyIfMissing seed leaves that stale combined row in place, so Resolve
+// returns the old full prompt as the user message while the freshly-seeded
+// system half is also prepended, duplicating instructions for every upgraded
+// install (not just operators who customized a prompt).
+//
+// For each legacy key whose stored global value still equals the exact pre-split
+// combined default, this rewrites the row to the new dynamic-only default so the
+// split applies cleanly. A genuine operator override (value differs from the old
+// combined default) is left untouched and surfaces via WarnOnSplitPromptOverrides.
+// Idempotent: once a row holds the new default it no longer matches and is
+// skipped. Returns the number of rows migrated. No-op on a nil service.
+func (s *SettingsService) ReconcileSplitPromptDefaults(ctx context.Context) (int, error) {
+	if s == nil {
+		return 0, nil
+	}
+	migrated := 0
+	for _, p := range promptSplitDefaults {
+		stored, err := s.repo.Get(ctx, p.combinedKey, "global")
+		if err != nil {
+			// sql.ErrNoRows: no stored row, already falling back to the new
+			// default. Any other error: skip this key and continue.
+			continue
+		}
+		if unmarshalJSONString(stored.Value) != p.combined {
+			continue
+		}
+		newDefault := settingDefaults[p.combinedKey]
+		if err := s.Set(ctx, p.combinedKey, newDefault, "global", nil); err != nil {
+			return migrated, fmt.Errorf("reconcile split prompt %q: %w", p.combinedKey, err)
+		}
+		migrated++
+	}
+	return migrated, nil
+}
+
+// WarnOnSplitPromptOverrides logs a startup warning for each phase prompt whose
+// stored global value differs from the current (post-split, dynamic-only)
+// default, because the prompt format changed in v0.2.0 (see
+// LegacyCombinedPromptKeys). Run after ReconcileSplitPromptDefaults, which
+// removes stale-default rows, so this fires only for genuine operator
+// customizations. The override keeps working; the warning is the migration
+// path. No-op on a nil service or a repo read error.
+func (s *SettingsService) WarnOnSplitPromptOverrides(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	for _, p := range promptSplitDefaults {
+		stored, err := s.repo.Get(ctx, p.combinedKey, "global")
+		if err != nil {
+			continue
+		}
+		if unmarshalJSONString(stored.Value) == settingDefaults[p.combinedKey] {
+			continue
+		}
+		slog.Warn("custom LLM prompt predates the v0.2.0 system/user prompt split; "+
+			"the new default system instructions are now prepended to your custom prompt, "+
+			"which may duplicate instructions. Reset this prompt to its default, or move its "+
+			"static instructions into the matching *_system_prompt key, on the Prompt Templates page.",
+			"key", p.combinedKey)
+	}
+}
+
+// PromptCacheEnabled reports whether providers that accept explicit cache hints
+// should mark the system prefix as cacheable. Nil-safe; defaults to true.
+func PromptCacheEnabled(ctx context.Context, s *SettingsService) bool {
+	return ResolveOrDefault(ctx, s, SettingProviderPromptCacheEnabled, "global") == "true"
 }
 
 // SettingsRepository defines the persistence operations needed by the settings service.

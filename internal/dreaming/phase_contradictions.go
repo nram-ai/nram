@@ -181,7 +181,8 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			"cycle", cycle.ID, "err", selErr)
 	}
 
-	promptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamContradictionPrompt, "global")
+	systemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamContradictionSystemPrompt)
+	promptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamContradictionPrompt)
 
 	// Index stale by ID so haircut/supersede updates can be mirrored back.
 	// The post-loop stamp pass writes Update on each stale[i].Mem with all
@@ -229,7 +230,8 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// Pre-flight budget check using the 4-bytes-per-token heuristic on
 		// the prompt plus the per-call output cap. Prevents starting calls
 		// we can't afford to record.
-		estPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
+		userPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
+		estPrompt := systemPrompt + provider.PromptSplitSeparator + userPrompt
 		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
@@ -239,7 +241,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		}
 
 		pairStart := time.Now()
-		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], estPrompt, budget, temperature)
+		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], systemPrompt, userPrompt, budget, temperature)
 		pairDur := time.Since(pairStart)
 
 		callTokens := 0
@@ -897,24 +899,23 @@ func (p *ContradictionPhase) checkContradiction(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	a, b *model.Memory,
-	prompt string,
+	system, user string,
 	budget *TokenBudget,
 	temperature float64,
 ) (bool, string, string, *provider.TokenUsage, error) {
+	estText := system + provider.PromptSplitSeparator + user
 	resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionJudge, llm.Name(),
 		a.ID.String()+","+b.ID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
 			ctx = provider.WithMemoryID(ctx, a.ID)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages: []provider.Message{
-					{Role: "user", Content: prompt},
-				},
+				Messages:    provider.BuildMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
 			})
-			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseContradictions), e
+			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseContradictions), e
 		})
 	if err != nil {
 		return false, "", "", usage, err

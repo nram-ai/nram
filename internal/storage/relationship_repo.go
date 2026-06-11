@@ -200,13 +200,33 @@ hops:
 	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
 		var nextFrontier []uuid.UUID
 
-		for _, eid := range frontier {
-			rels, err := r.ListByEntity(ctx, eid, namespaces)
-			if err != nil {
-				return TraversalResult{Cap: maxEdges}, fmt.Errorf("relationship traverse hop %d: %w", hop, err)
-			}
+		// One query for the whole frontier instead of one per node. The result
+		// is ordered created_at DESC, so filtering it per frontier entity (in
+		// frontier order) reproduces the exact per-node ListByEntity ordering
+		// the previous one-query-per-node loop used, keeping the accumulation
+		// order and the maxEdges truncation point identical.
+		hopRels, err := r.ListByEntities(ctx, frontier, namespaces)
+		if err != nil {
+			return TraversalResult{Cap: maxEdges}, fmt.Errorf("relationship traverse hop %d: %w", hop, err)
+		}
 
-			for _, rel := range rels {
+		// Bucket the hop's relationships by each endpoint entity in a single
+		// pass, preserving the created_at DESC order within each bucket. The
+		// frontier walk below then indexes directly into each entity's bucket,
+		// making the hop O(len(hopRels)) instead of O(len(frontier)*len(hopRels)).
+		// A relationship between two distinct entities lands in both buckets, so
+		// a rel touching two frontier nodes is still visited once per node (as in
+		// the prior per-node scan); a self-loop is bucketed once.
+		byEntity := make(map[uuid.UUID][]model.Relationship, len(frontier))
+		for _, rel := range hopRels {
+			byEntity[rel.SourceID] = append(byEntity[rel.SourceID], rel)
+			if rel.TargetID != rel.SourceID {
+				byEntity[rel.TargetID] = append(byEntity[rel.TargetID], rel)
+			}
+		}
+
+		for _, eid := range frontier {
+			for _, rel := range byEntity[eid] {
 				if !visitedRels[rel.ID] {
 					visitedRels[rel.ID] = true
 					result = append(result, rel)
@@ -285,6 +305,44 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID,
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("relationship list by entity: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return r.scanRelationships(rows)
+}
+
+// ListByEntities returns every relationship touching any of the given entities
+// (as source or target), bounded to the supplied namespaces and ordered by
+// created_at DESC. It is the batched form of ListByEntity used by graph
+// traversal to collect a whole BFS frontier in one query instead of one query
+// per node. The same created_at DESC order lets a caller reproduce the
+// per-entity ListByEntity ordering by filtering this set per entity. Same
+// fail-closed tenant bound: an empty entities or namespaces slice returns no
+// rows.
+func (r *RelationshipRepo) ListByEntities(ctx context.Context, entityIDs []uuid.UUID, namespaces []uuid.UUID) ([]model.Relationship, error) {
+	if len(entityIDs) == 0 || len(namespaces) == 0 {
+		return []model.Relationship{}, nil
+	}
+
+	// source_id IN (...) placeholders start at $1, target_id IN (...) reuse the
+	// same entity values at the next block, namespace IN (...) follows.
+	srcPh, srcArgs := uuidInPlaceholders(r.db, entityIDs, 1)
+	tgtPh, tgtArgs := uuidInPlaceholders(r.db, entityIDs, 1+len(entityIDs))
+	nsPh, nsArgs := uuidInPlaceholders(r.db, namespaces, 1+2*len(entityIDs))
+
+	query := selectRelationshipColumns + ` FROM relationships
+		WHERE (source_id IN (` + strings.Join(srcPh, ", ") + `) OR target_id IN (` + strings.Join(tgtPh, ", ") + `))
+			AND namespace_id IN (` + strings.Join(nsPh, ", ") + `)
+		ORDER BY created_at DESC`
+
+	args := make([]any, 0, len(srcArgs)+len(tgtArgs)+len(nsArgs))
+	args = append(args, srcArgs...)
+	args = append(args, tgtArgs...)
+	args = append(args, nsArgs...)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("relationship list by entities: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 

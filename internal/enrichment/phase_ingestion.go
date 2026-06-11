@@ -22,10 +22,11 @@ import (
 // five (or six) cascade resolutions are not repeated mid-flight, and so
 // future per-batch caching can fold in without changing call sites.
 type ingestionSettings struct {
-	threshold float64
-	topK      int
-	shadow    bool
-	prompt    string
+	threshold    float64
+	topK         int
+	shadow       bool
+	systemPrompt string // static instruction half (carries the %d top_k)
+	prompt       string // dynamic half (carries the %s new memory and %s candidates)
 }
 
 // ingestionDecisionResult is the in-memory product of one ingestion-decision
@@ -136,8 +137,10 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	// Model is left empty: the ingestion-decision provider slot supplies the
 	// model (falling back to the fact provider's model when no dedicated slot
 	// is set, per Registry.GetIngestionDecision).
+	system := fmt.Sprintf(cfg.systemPrompt, cfg.topK)
+	user := renderIngestionUser(cfg.prompt, mem.Content, matches)
 	req := &provider.CompletionRequest{
-		Messages:    []provider.Message{{Role: "user", Content: renderIngestionPrompt(cfg.prompt, cfg.topK, mem.Content, matches)}},
+		Messages:    provider.BuildMessages(system, user),
 		MaxTokens:   512,
 		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
 		JSONMode:    true,
@@ -242,10 +245,8 @@ func (wp *WorkerPool) resolveIngestionSettings(ctx context.Context, namespaceID 
 		cfg.topK = v
 	}
 	cfg.shadow = wp.settings.ResolveBool(ctx, service.SettingIngestionDecisionShadow, "global")
-	cfg.prompt, _ = wp.settings.Resolve(ctx, service.SettingIngestionDecisionPrompt, "global")
-	if cfg.prompt == "" {
-		cfg.prompt, _ = service.GetDefault(service.SettingIngestionDecisionPrompt)
-	}
+	cfg.systemPrompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingIngestionDecisionSystemPrompt, "global")
+	cfg.prompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingIngestionDecisionPrompt, "global")
 	return cfg
 }
 
@@ -359,17 +360,18 @@ func validateIngestionDecision(d *rawDecision, matches []MemoryMatch) (string, *
 	return op, target, true
 }
 
-// renderIngestionPrompt formats the candidate list into the prompt template.
-// Each candidate is rendered as `[N] id: <uuid>, created: <RFC3339>, content:
-// <content>`. The template is the configured prompt body which carries the
-// instruction header and the strict-JSON output schema.
-func renderIngestionPrompt(template string, topK int, content string, matches []MemoryMatch) string {
+// renderIngestionUser formats the candidate list into the dynamic half of the
+// ingestion prompt. Each candidate is rendered as `[N] id: <uuid>, created:
+// <RFC3339>, content: <content>`. The template is the dynamic prompt body
+// (two %s placeholders: the new memory content and the candidate list); the
+// static instruction header and the %d top_k live in the system half.
+func renderIngestionUser(template string, content string, matches []MemoryMatch) string {
 	var b strings.Builder
 	for i, m := range matches {
 		fmt.Fprintf(&b, "[%d] id: %s, created: %s, content: %s\n",
 			i+1, m.ID, m.CreatedAt.UTC().Format(time.RFC3339), m.Content)
 	}
-	return fmt.Sprintf(template, topK, content, b.String())
+	return fmt.Sprintf(template, content, b.String())
 }
 
 // truncate caps a string at n bytes without splitting a UTF-8 rune. Walks

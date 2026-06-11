@@ -920,8 +920,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		// s.settings unset fall through to the registered default of true);
 		// topk is resolved at point of use inside the channel.
 		var vectorEntities []model.Entity
-		if s.settings.ResolveBoolWithDefault(ctx, SettingRecallGraphVectorActivationEnabled, "global") &&
-			embeddingUsed && queryEmbeddingDim > 0 && s.vectorSearch != nil {
+		// Cheap structural preconditions first so an embedding-less recall skips
+		// the settings resolve entirely (short-circuit evaluation).
+		if embeddingUsed && queryEmbeddingDim > 0 && s.vectorSearch != nil &&
+			s.settings.ResolveBoolWithDefault(ctx, SettingRecallGraphVectorActivationEnabled, "global") {
 			vecActTopK := s.settings.ResolveIntWithDefault(ctx, SettingRecallGraphVectorActivationTopK, "global")
 			for _, nsID := range searchNamespaces {
 				res, err := s.vectorSearch.Search(ctx, storage.VectorKindEntity, queryEmbedding, nsID, queryEmbeddingDim, vecActTopK)
@@ -1651,6 +1653,14 @@ func splitQueryWords(query string) []string {
 // the dream novelty audit. Falsy on missing or unparseable metadata.
 func isLowNovelty(raw json.RawMessage) bool {
 	if len(raw) == 0 {
+		return false
+	}
+	// Fast path: the low_novelty key is only set on dream rows, so the vast
+	// majority of candidates lack it. A substring miss is conclusive (the key
+	// cannot be present), so we skip the map allocation and full parse. When the
+	// substring is present we still parse to confirm the value is boolean true,
+	// keeping the decision byte-for-byte identical to a plain unmarshal.
+	if !bytes.Contains(raw, []byte(`"low_novelty"`)) {
 		return false
 	}
 	var m map[string]any

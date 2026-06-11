@@ -180,9 +180,9 @@ func AsExtractionFailure(err error) (*ExtractionFailure, bool) {
 
 // buildExtractionRequest constructs the LLM request body shared by the
 // fact and entity helpers.
-func buildExtractionRequest(prompt string, opts CallOptions) *provider.CompletionRequest {
+func buildExtractionRequest(messages []provider.Message, opts CallOptions) *provider.CompletionRequest {
 	return &provider.CompletionRequest{
-		Messages:      []provider.Message{{Role: "user", Content: prompt}},
+		Messages:      messages,
 		MaxTokens:     opts.MaxTokens,
 		Temperature:   opts.Temperature,
 		JSONMode:      true,
@@ -201,8 +201,10 @@ func ExtractFactsLLM(
 	content string,
 	opts CallOptions,
 ) (*FactExtractionEnvelope, error) {
-	prompt := fmt.Sprintf(ResolveOrDefault(ctx, settings, SettingFactPrompt, "global"), content)
-	req := buildExtractionRequest(prompt, opts)
+	system := ResolveOrDefault(ctx, settings, SettingFactSystemPrompt, "global")
+	user := fmt.Sprintf(ResolveOrDefault(ctx, settings, SettingFactPrompt, "global"), content)
+	messages := provider.BuildMessages(system, user)
+	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), req)
 	if err != nil {
@@ -240,8 +242,10 @@ func ExtractEntitiesLLM(
 	content string,
 	opts CallOptions,
 ) (*EntityExtractionEnvelope, error) {
-	prompt := fmt.Sprintf(ResolveOrDefault(ctx, settings, SettingEntityPrompt, "global"), content)
-	req := buildExtractionRequest(prompt, opts)
+	system := ResolveOrDefault(ctx, settings, SettingEntitySystemPrompt, "global")
+	user := fmt.Sprintf(ResolveOrDefault(ctx, settings, SettingEntityPrompt, "global"), content)
+	messages := provider.BuildMessages(system, user)
+	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), req)
 	if err != nil {

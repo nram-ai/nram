@@ -24,6 +24,11 @@ type AnthropicConfig struct {
 
 	// Timeout is the HTTP client timeout. Defaults to 300s if zero.
 	Timeout time.Duration
+
+	// PromptCacheEnabled marks the system instruction prefix as cacheable via
+	// cache_control: {type: "ephemeral"}. Below a model's minimum cacheable
+	// prefix the hint is a no-op; above it, the prefix is cached.
+	PromptCacheEnabled bool
 }
 
 // AnthropicProvider implements LLMProvider and ProviderHealth using the native
@@ -72,14 +77,29 @@ type anthropicMessage struct {
 	Content string `json:"content"`
 }
 
-// anthropicMessagesRequest is the request body for POST /v1/messages.
+// anthropicMessagesRequest is the request body for POST /v1/messages. System
+// is `any` because the Anthropic API accepts either a plain string or an array
+// of content blocks (used to attach cache_control to the system prefix).
 type anthropicMessagesRequest struct {
 	Model         string             `json:"model"`
 	MaxTokens     int                `json:"max_tokens"`
-	System        string             `json:"system,omitempty"`
+	System        any                `json:"system,omitempty"`
 	Messages      []anthropicMessage `json:"messages"`
 	Temperature   *float64           `json:"temperature,omitempty"`
 	StopSequences []string           `json:"stop_sequences,omitempty"`
+}
+
+// anthropicCacheControl marks a content block as cacheable.
+type anthropicCacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+// anthropicSystemBlock is one text block of the system prompt, optionally
+// carrying a cache_control breakpoint.
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"` // "text"
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicContentBlock is a single block in the response content array.
@@ -89,9 +109,13 @@ type anthropicContentBlock struct {
 }
 
 // anthropicUsage is the token usage block returned by the Anthropic API.
+// Cache tokens are reported separately from input_tokens: cache reads and
+// writes are input the model processed but are billed at different rates.
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 // anthropicMessagesResponse is the response body from POST /v1/messages.
@@ -155,7 +179,17 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		Messages:  messages,
 	}
 	if systemText != "" {
-		body.System = systemText
+		if p.config.PromptCacheEnabled {
+			// Send the system prompt as a single cacheable text block. Below
+			// the model's minimum cacheable prefix the breakpoint is ignored.
+			body.System = []anthropicSystemBlock{{
+				Type:         "text",
+				Text:         systemText,
+				CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+			}}
+		} else {
+			body.System = systemText
+		}
 	}
 	if req.Temperature != 0 {
 		t := req.Temperature
@@ -178,14 +212,19 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		}
 	}
 
+	// Prompt tokens include cached input (reads + writes): the model processed
+	// all of it, so undercounting it would understate usage when caching is on.
+	promptTokens := msgResp.Usage.InputTokens +
+		msgResp.Usage.CacheCreationInputTokens +
+		msgResp.Usage.CacheReadInputTokens
 	return &CompletionResponse{
 		Content:      content.String(),
 		Model:        msgResp.Model,
 		FinishReason: msgResp.StopReason,
 		Usage: TokenUsage{
-			PromptTokens:     msgResp.Usage.InputTokens,
+			PromptTokens:     promptTokens,
 			CompletionTokens: msgResp.Usage.OutputTokens,
-			TotalTokens:      msgResp.Usage.InputTokens + msgResp.Usage.OutputTokens,
+			TotalTokens:      promptTokens + msgResp.Usage.OutputTokens,
 		},
 	}, nil
 }

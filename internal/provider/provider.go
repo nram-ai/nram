@@ -13,6 +13,30 @@ type Message struct {
 	Content string
 }
 
+// PromptSplitSeparator is the boundary between a static system instruction half
+// and a dynamic user payload. It is the exact separator used when authoring the
+// split prompt defaults, so a system half plus this separator plus a dynamic
+// half reproduces the original combined template byte for byte. Token
+// estimation reconstructs the combined length the same way.
+const PromptSplitSeparator = "\n\n"
+
+// BuildMessages assembles the messages for an LLM completion from a static
+// system instruction and a dynamic user payload.
+//
+// The two are sent as separate system and user messages so the system
+// instruction forms a stable, cacheable prefix (KV-cache prefix reuse on
+// Ollama/vLLM; prompt-prefix caching on hosted APIs when it exceeds the model's
+// minimum cacheable size). An empty system collapses to a single user message.
+func BuildMessages(system, user string) []Message {
+	if system == "" {
+		return []Message{{Role: "user", Content: user}}
+	}
+	return []Message{
+		{Role: "system", Content: system},
+		{Role: "user", Content: user},
+	}
+}
+
 // CompletionRequest contains the parameters for an LLM completion call.
 //
 // RepeatPenalty, TopK, and MinP are Ollama-extension fields. Strict OpenAI
@@ -30,6 +54,13 @@ type CompletionRequest struct {
 	RepeatPenalty *float64
 	TopK          *int
 	MinP          *float64
+
+	// KeepAlive and NumCtx are Ollama-extension fields. KeepAlive controls how
+	// long Ollama keeps the model resident after the call (e.g. "5m", "-1" to
+	// keep it loaded indefinitely); NumCtx overrides the context window. Both
+	// are gated behind ProviderTypeOllama in OpenAIProvider; nil means omit.
+	KeepAlive *string
+	NumCtx    *int
 }
 
 // CompletionResponse contains the result of an LLM completion call.

@@ -26,7 +26,8 @@ const QueryAugmentSeparator = "\n---\n"
 type queryAugmentSettings struct {
 	enabled       bool
 	count         int
-	prompt        string
+	systemPrompt  string // static instruction half (carries the {N} count)
+	prompt        string // dynamic half (carries the {content} placeholder)
 	maxInputChars int
 	maxTokens     int
 }
@@ -70,10 +71,8 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 		}
 		cfg.count = v
 	}
-	cfg.prompt, _ = wp.settings.Resolve(ctx, service.SettingQueryAugmentPrompt, "global")
-	if cfg.prompt == "" {
-		cfg.prompt, _ = service.GetDefault(service.SettingQueryAugmentPrompt)
-	}
+	cfg.systemPrompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingQueryAugmentSystemPrompt, "global")
+	cfg.prompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingQueryAugmentPrompt, "global")
 	if v, err := wp.settings.ResolveInt(ctx, service.SettingQueryAugmentMaxInputChars, "global"); err == nil && v >= 0 {
 		cfg.maxInputChars = v
 	}
@@ -364,7 +363,8 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		return nil, model.QueryAugmentSkipProviderUnavailable
 	}
 
-	prompt := RenderQueryAugmentPrompt(cfg.prompt, mem.Content, cfg.count)
+	system := RenderQueryAugmentPrompt(cfg.systemPrompt, mem.Content, cfg.count)
+	user := RenderQueryAugmentPrompt(cfg.prompt, mem.Content, cfg.count)
 	// Deliberately NOT setting JSONMode. response_format=json_object on
 	// OpenAI-compatible providers (including Ollama's compat shim) forces
 	// the model to emit an object, not an array. qwen3:8b-extract observed
@@ -376,7 +376,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// (falling back to the fact provider's model when no dedicated slot is set,
 	// per Registry.GetQueryAugment).
 	req := &provider.CompletionRequest{
-		Messages:  []provider.Message{{Role: "user", Content: prompt}},
+		Messages:  provider.BuildMessages(system, user),
 		MaxTokens: cfg.maxTokens,
 	}
 

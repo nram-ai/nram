@@ -14,6 +14,7 @@ import (
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 )
 
 // EnrichmentAdminStore abstracts storage and worker management operations
@@ -42,6 +43,15 @@ type EnrichmentAdminConfig struct {
 	// prompt (or its registered default). Nil falls back to a bare-template
 	// error like the other prompt resolvers.
 	IngestionPromptDefault func(ctx context.Context) string
+
+	// The *SystemPromptDefault resolvers return the static instruction half for
+	// each phase (operator-edited value or registered default). The Test surface
+	// uses them when the request omits system_prompt, so a defaults run sends the
+	// same system+user split the runtime does.
+	FactSystemPromptDefault      func(ctx context.Context) string
+	EntitySystemPromptDefault    func(ctx context.Context) string
+	QueryAugmentSystemPromptDef  func(ctx context.Context) string
+	IngestionSystemPromptDefault func(ctx context.Context) string
 
 	// QueryAugmentProvider and IngestionProvider resolve the providers for the
 	// query-augmentation and ingestion-decision phases. Each returns the
@@ -337,10 +347,15 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type        string `json:"type"`            // "fact", "entity", "augment", or "ingestion"
-	Prompt      string `json:"prompt"`          // custom prompt text (optional; uses default if empty)
-	SampleInput string `json:"sample_input"`    // memory content to test against
-	Count       int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
+	Type   string `json:"type"`   // "fact", "entity", "augment", or "ingestion"
+	Prompt string `json:"prompt"` // custom dynamic-half prompt text (optional; uses default if empty)
+	// SystemPrompt is the static instruction half. Sent as a separate system
+	// message so the Test surface exercises the exact system+user split the
+	// runtime uses (provider.BuildMessages). Empty falls back to the phase's
+	// registered system-prompt default.
+	SystemPrompt string `json:"system_prompt"`
+	SampleInput  string `json:"sample_input"`    // memory content to test against
+	Count        int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
 }
 
 // enrichmentTestPromptResponse is the response for POST /enrichment/test-prompt.
@@ -469,6 +484,34 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
+	// Static instruction half. The request carries it explicitly (the Prompt
+	// Templates page sends both editors); an empty value falls back to the
+	// phase's registered system-prompt default so a defaults run still matches
+	// the runtime split.
+	var systemTemplate string
+	if strings.TrimSpace(body.SystemPrompt) != "" {
+		systemTemplate = body.SystemPrompt
+	} else {
+		switch body.Type {
+		case "fact":
+			if cfg.FactSystemPromptDefault != nil {
+				systemTemplate = cfg.FactSystemPromptDefault(r.Context())
+			}
+		case "entity":
+			if cfg.EntitySystemPromptDefault != nil {
+				systemTemplate = cfg.EntitySystemPromptDefault(r.Context())
+			}
+		case "augment":
+			if cfg.QueryAugmentSystemPromptDef != nil {
+				systemTemplate = cfg.QueryAugmentSystemPromptDef(r.Context())
+			}
+		case "ingestion":
+			if cfg.IngestionSystemPromptDefault != nil {
+				systemTemplate = cfg.IngestionSystemPromptDefault(r.Context())
+			}
+		}
+	}
+
 	count := body.Count
 	if count <= 0 {
 		count = 4
@@ -476,25 +519,35 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 
 	start := time.Now()
 
-	var rendered string
+	// Render both halves exactly as each runtime phase does, co-located per
+	// phase so the two stay in lockstep: augment substitutes the same named
+	// placeholders (RenderQueryAugmentPrompt), ingestion's dynamic half carries
+	// %d cap + %s content + %s candidate block (empty in the test) while its
+	// system half carries only the %d cap, and fact/entity render %s content
+	// with the system half passed verbatim.
+	var rendered, renderedSystem string
 	switch body.Type {
 	case "augment":
 		rendered = enrichment.RenderQueryAugmentPrompt(promptTemplate, body.SampleInput, count)
+		renderedSystem = enrichment.RenderQueryAugmentPrompt(systemTemplate, body.SampleInput, count)
 	case "ingestion":
-		// The ingestion prompt template carries three verbs: %d (candidate
-		// cap), %s (new memory content), %s (candidate block). The test has no
-		// candidates, so the block is empty and the cap is cosmetic.
 		rendered = fmt.Sprintf(promptTemplate, ingestionTestTopK, body.SampleInput, "")
+		// Guard the empty default so Sprintf doesn't emit a %!(EXTRA) artifact.
+		if systemTemplate != "" {
+			renderedSystem = fmt.Sprintf(systemTemplate, ingestionTestTopK)
+		}
 	default:
 		rendered = fmt.Sprintf(promptTemplate, body.SampleInput)
+		renderedSystem = systemTemplate
 	}
 
 	completionReq := &provider.CompletionRequest{
-		Messages: []provider.Message{
-			{Role: "user", Content: rendered},
-		},
+		Messages: provider.BuildMessages(renderedSystem, rendered),
 		// Model left empty: the resolved provider slot supplies its own model.
-		MaxTokens:   2048,
+		// 8192 leaves headroom for reasoning models (e.g. qwen3:8b) that spend
+		// output budget on a thinking pass before emitting the JSON/text answer;
+		// a tighter cap truncates them to an empty response.
+		MaxTokens:   8192,
 		Temperature: 0.1,
 		// Augmentation and ingestion both expect a JSON response. The runtime
 		// ingestion phase and the per-memory augment preview set JSONMode;
@@ -564,30 +617,46 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 	writeJSON(w, http.StatusOK, response)
 }
 
-// parseTestFactResponse parses an LLM fact extraction response.
+// parseTestFactResponse parses an LLM fact extraction response into the same
+// shape the runtime extractor uses (service.ExtractedFact, which accepts both
+// the "content" key the prompt asks for and the "fact" key some models emit),
+// then normalises to "content" so the Test preview shows the actual fact text.
+// Key precedence (fact over content) mirrors the runtime extractor.
 func parseTestFactResponse(raw string) (any, error) {
 	raw = strings.TrimSpace(raw)
 
-	type extractedFact struct {
-		Fact       string  `json:"fact"`
-		Confidence float64 `json:"confidence"`
+	type outFact struct {
+		Content    string   `json:"content"`
+		Confidence float64  `json:"confidence"`
+		Tags       []string `json:"tags,omitempty"`
+	}
+	normalise := func(in []service.ExtractedFact) []outFact {
+		out := make([]outFact, len(in))
+		for i, f := range in {
+			text := f.Fact
+			if text == "" {
+				text = f.Content
+			}
+			out[i] = outFact{Content: text, Confidence: f.Confidence, Tags: f.Tags}
+		}
+		return out
 	}
 
-	var facts []extractedFact
+	var facts []service.ExtractedFact
 	if err := json.Unmarshal([]byte(raw), &facts); err == nil {
-		return facts, nil
+		return normalise(facts), nil
 	}
 
 	stripped := stripTestMarkdownFences(raw)
 	if err := json.Unmarshal([]byte(stripped), &facts); err == nil {
-		return facts, nil
+		return normalise(facts), nil
 	}
 
 	re := regexp.MustCompile(`\[[\s\S]*\]`)
 	match := re.FindString(raw)
 	if match != "" {
 		if err := json.Unmarshal([]byte(match), &facts); err == nil {
-			return facts, nil
+			return normalise(facts), nil
 		}
 	}
 

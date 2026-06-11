@@ -148,6 +148,14 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 	// in the same batch so we do not race ourselves into duplicates.
 	seenHashes := make(map[string]uuid.UUID, len(req.Items))
 
+	// Collected for batched persistence after the validation/dedup loop. The
+	// three slices stay index-aligned with pendingIdx (the original item index)
+	// so a per-row fallback can attribute an insert error to the right item.
+	pendingMems := make([]*model.Memory, 0, len(req.Items))
+	pendingLogs := make([]*model.IngestionLog, 0, len(req.Items))
+	pendingJobs := make([]*model.EnrichmentJob, 0, len(req.Items))
+	pendingIdx := make([]int, 0, len(req.Items))
+
 	defaultImportance := resolveDefaultImportance(ctx, s.settings)
 	defaultConfidence := resolveDefaultConfidence(ctx, s.settings)
 
@@ -215,23 +223,13 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			ExpiresAt:   expiresAt,
 		}
 
-		// Persist the memory.
-		if err := s.memories.Create(ctx, mem); err != nil {
-			errs = append(errs, BatchStoreError{
-				Index:   i,
-				Message: fmt.Sprintf("failed to create memory: %v", err),
-			})
-			continue
-		}
-
+		// Stage the memory, its ingestion log, and its enrichment job for
+		// batched persistence after the loop. Dedup state is recorded now so a
+		// later same-hash item in this batch is still collapsed.
 		seenHashes[hash] = memID
-		memoriesCreated++
-		if s.metrics != nil {
-			s.metrics.MemoriesTotal.Inc()
-		}
-
-		// Create ingestion log for this item.
-		ingLog := &model.IngestionLog{
+		pendingMems = append(pendingMems, mem)
+		pendingIdx = append(pendingIdx, i)
+		pendingLogs = append(pendingLogs, &model.IngestionLog{
 			ID:          uuid.New(),
 			NamespaceID: ns.ID,
 			Source:      item.Source,
@@ -240,10 +238,8 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			Status:      "completed",
 			Metadata:    item.Metadata,
 			CreatedAt:   time.Now(),
-		}
-		_ = s.ingestionLogs.Create(ctx, ingLog)
-
-		job := &model.EnrichmentJob{
+		})
+		pendingJobs = append(pendingJobs, &model.EnrichmentJob{
 			ID:          uuid.New(),
 			MemoryID:    memID,
 			NamespaceID: ns.ID,
@@ -253,9 +249,10 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 			MaxAttempts: 3,
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
-		}
-		_, _ = s.enrichmentQueue.Enqueue(ctx, job)
+		})
 	}
+
+	memoriesCreated, errs = s.persistBatch(ctx, pendingMems, pendingLogs, pendingJobs, pendingIdx, errs)
 
 	latency := time.Since(start).Milliseconds()
 
@@ -265,4 +262,84 @@ func (s *BatchStoreService) BatchStore(ctx context.Context, req *BatchStoreReque
 		Errors:          errs,
 		LatencyMs:       latency,
 	}, nil
+}
+
+// persistBatch writes the staged memories, ingestion logs, and enrichment jobs
+// after the validation/dedup loop. Memories use the batch fast path when the
+// concrete repo supports it (one atomic INSERT per chunk); on any error it
+// falls back to per-row Create so a single bad row is attributed to its item
+// index rather than failing the whole batch (the batch path is atomic, so the
+// fallback cannot collide on a primary key already inserted). Ingestion logs
+// and enrichment jobs are fire-and-forget: errors are logged, never surfaced,
+// matching the prior per-item behavior. Returns the number of memories created
+// and the (possibly extended) error list.
+func (s *BatchStoreService) persistBatch(
+	ctx context.Context,
+	mems []*model.Memory,
+	logs []*model.IngestionLog,
+	jobs []*model.EnrichmentJob,
+	idx []int,
+	errs []BatchStoreError,
+) (int, []BatchStoreError) {
+	if len(mems) == 0 {
+		return 0, errs
+	}
+
+	created := 0
+	batched := false
+	if bc, ok := s.memories.(memoryBatchCreator); ok {
+		if err := bc.BatchCreate(ctx, mems); err != nil {
+			slog.Warn("batch_store: batch memory create failed; falling back to per-row",
+				"count", len(mems), "err", err)
+		} else {
+			batched = true
+			created = len(mems)
+		}
+	}
+	if !batched {
+		// Per-row fallback with per-item error attribution. Only stage the log
+		// and job for rows that actually persisted.
+		okLogs := make([]*model.IngestionLog, 0, len(logs))
+		okJobs := make([]*model.EnrichmentJob, 0, len(jobs))
+		for k, mem := range mems {
+			if err := s.memories.Create(ctx, mem); err != nil {
+				errs = append(errs, BatchStoreError{
+					Index:   idx[k],
+					Message: fmt.Sprintf("failed to create memory: %v", err),
+				})
+				continue
+			}
+			created++
+			okLogs = append(okLogs, logs[k])
+			okJobs = append(okJobs, jobs[k])
+		}
+		logs, jobs = okLogs, okJobs
+	}
+	if s.metrics != nil {
+		for i := 0; i < created; i++ {
+			s.metrics.MemoriesTotal.Inc()
+		}
+	}
+
+	if blc, ok := s.ingestionLogs.(ingestionLogBatchCreator); ok {
+		if err := blc.BatchCreate(ctx, logs); err != nil {
+			slog.Warn("batch_store: batch ingestion-log create failed", "count", len(logs), "err", err)
+		}
+	} else {
+		for _, lg := range logs {
+			_ = s.ingestionLogs.Create(ctx, lg)
+		}
+	}
+
+	if bqe, ok := s.enrichmentQueue.(enrichmentQueueBatchEnqueuer); ok {
+		if err := bqe.BatchEnqueue(ctx, jobs); err != nil {
+			slog.Warn("batch_store: batch enrichment enqueue failed", "count", len(jobs), "err", err)
+		}
+	} else {
+		for _, j := range jobs {
+			_, _ = s.enrichmentQueue.Enqueue(ctx, j)
+		}
+	}
+
+	return created, errs
 }

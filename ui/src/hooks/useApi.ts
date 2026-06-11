@@ -1254,10 +1254,11 @@ export function useTestExtractionPrompt() {
       prompt: string;
       sampleInput: string;
       count?: number;
+      systemPrompt?: string;
     }
   >({
-    mutationFn: ({ type, prompt, sampleInput, count }) =>
-      adminAPI.testExtractionPrompt(type, prompt, sampleInput, count),
+    mutationFn: ({ type, prompt, sampleInput, count, systemPrompt }) =>
+      adminAPI.testExtractionPrompt(type, prompt, sampleInput, count, systemPrompt),
   });
 }
 

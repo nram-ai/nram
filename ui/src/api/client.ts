@@ -1840,10 +1840,12 @@ export const adminAPI = {
     prompt: string,
     sampleInput: string,
     count?: number,
+    systemPrompt?: string,
   ) =>
     request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
       type,
       prompt,
+      system_prompt: systemPrompt ?? "",
       sample_input: sampleInput,
       ...(typeof count === "number" ? { count } : {}),
     }),

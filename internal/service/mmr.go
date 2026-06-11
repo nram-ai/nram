@@ -76,6 +76,22 @@ func mmrSelect(passing []RecallResult, queryEmbedding []float32, lambda float64,
 	selected = append(selected, embedded[0])
 	used[embedded[0]] = true
 
+	// Precompute the per-candidate query relevance (invariant across iterations)
+	// and the running max similarity to the selected set, seeded against the
+	// first pick. Maintaining the max incrementally (updating only against each
+	// newly selected item) makes the greedy loop O(E^2) instead of O(E^3). The
+	// computed values are identical: same simQ, same max-over-selected, so the
+	// argmax at every step and the final selection are byte-for-byte unchanged.
+	simQ := make([]float64, len(passing))
+	maxSimSel := make([]float64, len(passing))
+	for _, i := range embedded {
+		simQ[i] = relevanceForQuery(passing[i], queryEmbedding)
+		if i == embedded[0] {
+			continue
+		}
+		maxSimSel[i] = cosineSim(passing[i].embedding, passing[embedded[0]].embedding)
+	}
+
 	for len(selected) < len(embedded) {
 		bestIdx := -1
 		bestScore := math.Inf(-1)
@@ -83,15 +99,7 @@ func mmrSelect(passing []RecallResult, queryEmbedding []float32, lambda float64,
 			if used[i] {
 				continue
 			}
-			simQ := relevanceForQuery(passing[i], queryEmbedding)
-			maxSimSel := math.Inf(-1)
-			for _, j := range selected {
-				s := cosineSim(passing[i].embedding, passing[j].embedding)
-				if s > maxSimSel {
-					maxSimSel = s
-				}
-			}
-			score := lambda*simQ - (1.0-lambda)*maxSimSel
+			score := lambda*simQ[i] - (1.0-lambda)*maxSimSel[i]
 			if score > bestScore {
 				bestScore = score
 				bestIdx = i
@@ -102,6 +110,15 @@ func mmrSelect(passing []RecallResult, queryEmbedding []float32, lambda float64,
 		}
 		selected = append(selected, bestIdx)
 		used[bestIdx] = true
+		// Fold the new pick into every remaining candidate's running max.
+		for _, i := range embedded {
+			if used[i] {
+				continue
+			}
+			if s := cosineSim(passing[i].embedding, passing[bestIdx].embedding); s > maxSimSel[i] {
+				maxSimSel[i] = s
+			}
+		}
 	}
 
 	// Assemble the output by walking passing in original composite-rank order.

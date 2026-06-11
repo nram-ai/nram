@@ -338,7 +338,8 @@ func (p *ConsolidationPhase) reinforce(
 	alignmentSampleSize := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamConsolidationAlignmentSampleSize, "global")
 	alignmentTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamAlignmentTemperature, "global")
 
-	alignmentPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamAlignmentPrompt, "global")
+	alignmentSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamAlignmentSystemPrompt)
+	alignmentPromptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamAlignmentPrompt)
 
 	visited := 0
 	for i := range stale {
@@ -357,8 +358,8 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		// Pre-flight budget check using the same prompt we'll send.
-		prompt := renderAlignmentPrompt(alignmentPromptTemplate, &synthesis, sample)
-		estCost := EstimateTokens(prompt) + budget.PerCallCap()
+		userPrompt := renderAlignmentPrompt(alignmentPromptTemplate, &synthesis, sample)
+		estCost := EstimateTokens(alignmentSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "synthesis", synthesis.ID,
@@ -370,7 +371,7 @@ func (p *ConsolidationPhase) reinforce(
 
 		callStart := time.Now()
 		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
-		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, prompt, budget, alignmentTemperature)
+		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, alignmentSystemPrompt, userPrompt, budget, alignmentTemperature)
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -458,23 +459,22 @@ func (p *ConsolidationPhase) scoreAlignment(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	synthesisID uuid.UUID,
-	prompt string,
+	system, user string,
 	budget *TokenBudget,
 	temperature float64,
 ) (float64, *provider.TokenUsage, error) {
+	estText := system + provider.PromptSplitSeparator + user
 	resp, usage, err := WrapLLMCall(ctx, budget, OpAlignmentScore, llm.Name(),
 		synthesisID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages: []provider.Message{
-					{Role: "user", Content: prompt},
-				},
+				Messages:    provider.BuildMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
 			})
-			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
 	if err != nil {
 		return 0, usage, err
@@ -1321,7 +1321,8 @@ func (p *ConsolidationPhase) consolidate(
 	initialConfidence := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamInitialConfidence, "global")
 	synthesisTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamSynthesisTemperature, "global")
 
-	synthesisPromptTemplate, _ := p.settings.Resolve(ctx, service.SettingDreamSynthesisPrompt, "global")
+	synthesisSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamSynthesisSystemPrompt)
+	synthesisPromptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamSynthesisPrompt)
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
 	clustersVisited := 0
@@ -1335,8 +1336,8 @@ func (p *ConsolidationPhase) consolidate(
 		}
 		clustersVisited++
 
-		prompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
-		estCost := EstimateTokens(prompt) + budget.PerCallCap()
+		userPrompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
+		estCost := EstimateTokens(synthesisSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
 				"cycle", cycle.ID, "cluster_size", len(cluster),
@@ -1347,7 +1348,7 @@ func (p *ConsolidationPhase) consolidate(
 		}
 
 		synthStart := time.Now()
-		synthesisContent, usage, err := p.synthesize(ctx, llm, prompt, budget, synthesisTemperature)
+		synthesisContent, usage, err := p.synthesize(ctx, llm, synthesisSystemPrompt, userPrompt, budget, synthesisTemperature)
 		synthTokens := 0
 		if usage != nil {
 			synthTokens = usage.TotalTokens
@@ -1567,21 +1568,20 @@ func renderSynthesisPrompt(template string, cluster []model.Memory) string {
 func (p *ConsolidationPhase) synthesize(
 	ctx context.Context,
 	llm provider.LLMProvider,
-	prompt string,
+	system, user string,
 	budget *TokenBudget,
 	temperature float64,
 ) (string, *provider.TokenUsage, error) {
+	estText := system + provider.PromptSplitSeparator + user
 	resp, usage, err := WrapLLMCall(ctx, budget, OpSynthesis, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages: []provider.Message{
-					{Role: "user", Content: prompt},
-				},
+				Messages:    provider.BuildMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 			})
-			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
 	if err != nil {
 		return "", usage, err
@@ -1726,12 +1726,14 @@ func (p *ConsolidationPhase) auditNovelty(
 		// Fail closed when the embedder pre-filter did not already decide.
 		return false, "no_judge_prompt", nil, embedTokens, nil
 	}
+	systemTpl := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamNoveltyJudgeSystemPrompt)
 
 	sourceTexts := make([]string, 0, len(sources))
 	for _, s := range sources {
 		sourceTexts = append(sourceTexts, s.Content)
 	}
-	prompt := fmt.Sprintf(promptTpl, candidate, strings.Join(sourceTexts, "\n---\n"))
+	user := fmt.Sprintf(promptTpl, candidate, strings.Join(sourceTexts, "\n---\n"))
+	prompt := systemTpl + provider.PromptSplitSeparator + user
 
 	maxTokens := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
 
@@ -1758,9 +1760,7 @@ func (p *ConsolidationPhase) auditNovelty(
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
-				Messages: []provider.Message{
-					{Role: "user", Content: prompt},
-				},
+				Messages:    provider.BuildMessages(systemTpl, user),
 				MaxTokens:   maxTokens,
 				Temperature: noveltyTemperature,
 				JSONMode:    true,

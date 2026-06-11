@@ -32,6 +32,23 @@ type MemoryRepository interface {
 	LookupByContentHash(ctx context.Context, namespaceID uuid.UUID, hash string) (*model.Memory, error)
 }
 
+// memoryBatchCreator is an optional capability implemented by the concrete
+// *storage.MemoryRepo. The batch-store path uses it when available and falls
+// back to per-row Create otherwise (e.g. in tests with lightweight mocks).
+type memoryBatchCreator interface {
+	BatchCreate(ctx context.Context, mems []*model.Memory) error
+}
+
+// ingestionLogBatchCreator and enrichmentQueueBatchEnqueuer are the analogous
+// optional batch capabilities for the fire-and-forget log and job writes.
+type ingestionLogBatchCreator interface {
+	BatchCreate(ctx context.Context, logs []*model.IngestionLog) error
+}
+
+type enrichmentQueueBatchEnqueuer interface {
+	BatchEnqueue(ctx context.Context, items []*model.EnrichmentJob) error
+}
+
 // ProjectRepository defines the project lookup operations needed by the store service.
 type ProjectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)

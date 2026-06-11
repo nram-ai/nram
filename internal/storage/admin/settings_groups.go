@@ -192,6 +192,23 @@ var settingsGroups = []api.SettingGroup{
 		SubSections: []api.SettingSubSection{{Category: "events"}},
 	},
 	{
+		ID:          "providers",
+		Label:       "Providers",
+		Description: "Runtime controls for how prompts are delivered to LLM providers and how local models are kept warm. Provider endpoints and credentials are configured on the Providers page; these are global delivery toggles.",
+		SubSections: []api.SettingSubSection{
+			{
+				Category:    "provider_prompt_delivery",
+				Label:       "Prompt Delivery",
+				Description: "Whether explicit provider cache hints are emitted for the system instruction prefix that prompts are delivered with.",
+			},
+			{
+				Category:    "provider_ollama",
+				Label:       "Ollama",
+				Description: "Keep-warm and context-window controls applied to Ollama providers (keep_alive, num_ctx). Ignored by strict OpenAI-compatible endpoints.",
+			},
+		},
+	},
+	{
 		ID:          "caches",
 		Label:       "Service Caches",
 		Description: "Cache lifetimes for the cascade resolver and settings service, plus the export pagination size and the embedding cache.",

@@ -131,6 +131,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		return nil, fmt.Errorf("conflict: vector search: %w", err)
 	}
 
+	systemPrompt := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionSystemPrompt, "global")
 	promptTemplate := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionPrompt, "global")
 	temperature := service.GetDefaultFloat(service.SettingEnrichmentConflictTemperature)
 	if cd.settings != nil {
@@ -157,11 +158,9 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		}
 
 		// Ask the LLM whether the two statements contradict.
-		prompt := fmt.Sprintf(promptTemplate, memory.Content, candidate.Content)
+		user := fmt.Sprintf(promptTemplate, memory.Content, candidate.Content)
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
-			Messages: []provider.Message{
-				{Role: "user", Content: prompt},
-			},
+			Messages:    provider.BuildMessages(systemPrompt, user),
 			MaxTokens:   256,
 			Temperature: temperature,
 			JSONMode:    true,

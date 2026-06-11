@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.1.4
+  version: 0.2.0
   license:
     name: MIT
 
@@ -5557,6 +5557,7 @@ components:
         - "cascade.cache_ttl_seconds"
         - "dreaming.alignment.temperature"
         - "dreaming.alignment_prompt"
+        - "dreaming.alignment_system_prompt"
         - "dreaming.augmentation_backfill.budget_fraction"
         - "dreaming.augmentation_backfill.cap_per_cycle"
         - "dreaming.augmentation_backfill.enabled"
@@ -5578,6 +5579,7 @@ components:
         - "dreaming.contradiction.tie_haircut"
         - "dreaming.contradiction.winner_haircut"
         - "dreaming.contradiction_prompt"
+        - "dreaming.contradiction_system_prompt"
         - "dreaming.cooldown_seconds"
         - "dreaming.embedding_backfill.budget_fraction"
         - "dreaming.embedding_backfill.cap_per_cycle"
@@ -5601,6 +5603,7 @@ components:
         - "dreaming.novelty.judge.temperature"
         - "dreaming.novelty.judge_max_tokens"
         - "dreaming.novelty.judge_prompt"
+        - "dreaming.novelty.judge_system_prompt"
         - "dreaming.paraphrase.cap_per_cycle"
         - "dreaming.paraphrase.enabled"
         - "dreaming.paraphrase.stale_fetch_max"
@@ -5618,6 +5621,7 @@ components:
         - "dreaming.supersession_threshold"
         - "dreaming.synthesis.temperature"
         - "dreaming.synthesis_prompt"
+        - "dreaming.synthesis_system_prompt"
         - "dreaming.transitive.budget_fraction"
         - "dreaming.transitive.max_per_cycle"
         - "dreaming.transitive.min_weight"
@@ -5645,6 +5649,7 @@ components:
         - "enrichment.entity_extraction.sync.temperature"
         - "enrichment.entity_extraction.top_k"
         - "enrichment.entity_prompt"
+        - "enrichment.entity_system_prompt"
         - "enrichment.extracted_fact_backfill_batch_size"
         - "enrichment.extracted_fact_guard_enabled"
         - "enrichment.extracted_fact_paraphrase_threshold"
@@ -5655,11 +5660,13 @@ components:
         - "enrichment.fact_extraction.sync.temperature"
         - "enrichment.fact_extraction.top_k"
         - "enrichment.fact_prompt"
+        - "enrichment.fact_system_prompt"
         - "enrichment.failed_retention_days"
         - "enrichment.ingestion.rationale_max_len"
         - "enrichment.ingestion_decision.enabled"
         - "enrichment.ingestion_decision.prompt"
         - "enrichment.ingestion_decision.shadow_mode"
+        - "enrichment.ingestion_decision.system_prompt"
         - "enrichment.ingestion_decision.temperature"
         - "enrichment.ingestion_decision.threshold"
         - "enrichment.ingestion_decision.top_k"
@@ -5669,6 +5676,7 @@ components:
         - "enrichment.query_augment.max_input_chars"
         - "enrichment.query_augment.max_tokens"
         - "enrichment.query_augment.prompt"
+        - "enrichment.query_augment.system_prompt"
         - "enrichment.stuck_scan_limit"
         - "enrichment.stuck_sweep_seconds"
         - "enrichment.stuck_threshold_seconds"
@@ -5708,6 +5716,9 @@ components:
         - "provider.embedding_cache.enabled"
         - "provider.embedding_cache.max_entries"
         - "provider.embedding_cache.ttl_seconds"
+        - "provider.ollama.keep_alive"
+        - "provider.ollama.num_ctx"
+        - "provider.prompt_cache.enabled"
         - "qdrant.addr"
         - "qdrant.api_key"
         - "qdrant.keepalive_time"
