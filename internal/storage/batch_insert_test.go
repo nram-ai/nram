@@ -97,16 +97,17 @@ func TestEnrichmentQueueRepo_BatchEnqueue(t *testing.T) {
 		if err := queueRepo.BatchEnqueue(ctx, jobs); err != nil {
 			t.Fatalf("BatchEnqueue: %v", err)
 		}
-		stats, err := queueRepo.CountByStatus(ctx)
-		if err != nil {
-			t.Fatalf("CountByStatus: %v", err)
-		}
-		if stats.Pending != n {
-			t.Errorf("want %d pending jobs, got %d", n, stats.Pending)
+		// Count per memory rather than the table-wide CountByStatus: the shared
+		// Postgres test schema is populated by sibling tests, so a global count
+		// is not isolated. Each enqueued memory must have exactly one pending job.
+		for _, j := range jobs {
+			if got := countQueueStatus(t, ctx, db, j.MemoryID, "pending"); got != 1 {
+				t.Errorf("memory %s: want 1 pending job, got %d", j.MemoryID, got)
+			}
 		}
 
 		// Re-enqueuing the same memories must dedup against the existing pending
-		// job (ON CONFLICT ... DO NOTHING), leaving the pending count unchanged.
+		// job (ON CONFLICT ... DO NOTHING), leaving exactly one pending row each.
 		dupes := make([]*model.EnrichmentJob, n)
 		for i, j := range jobs {
 			dupes[i] = &model.EnrichmentJob{MemoryID: j.MemoryID, NamespaceID: nsID}
@@ -114,12 +115,10 @@ func TestEnrichmentQueueRepo_BatchEnqueue(t *testing.T) {
 		if err := queueRepo.BatchEnqueue(ctx, dupes); err != nil {
 			t.Fatalf("BatchEnqueue dupes: %v", err)
 		}
-		stats, err = queueRepo.CountByStatus(ctx)
-		if err != nil {
-			t.Fatalf("CountByStatus after dupes: %v", err)
-		}
-		if stats.Pending != n {
-			t.Errorf("dedup failed: want %d pending after duplicate enqueue, got %d", n, stats.Pending)
+		for _, j := range jobs {
+			if got := countQueueStatus(t, ctx, db, j.MemoryID, "pending"); got != 1 {
+				t.Errorf("dedup failed: memory %s has %d pending jobs, want 1", j.MemoryID, got)
+			}
 		}
 	})
 }
