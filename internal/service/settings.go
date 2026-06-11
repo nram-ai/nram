@@ -23,19 +23,24 @@ import (
 
 // Well-known setting keys.
 const (
-	SettingEmbedProvider     = "provider.embedding.type"
-	SettingEmbedURL          = "provider.embedding.url"
-	SettingEmbedKey          = "provider.embedding.key"
-	SettingEmbedModel        = "provider.embedding.model"
-	SettingFactProvider      = "provider.fact.type"
-	SettingFactURL           = "provider.fact.url"
-	SettingFactKey           = "provider.fact.key"
-	SettingFactModel         = "provider.fact.model"
-	SettingEntityProvider    = "provider.entity.type"
-	SettingEntityURL         = "provider.entity.url"
-	SettingEntityKey         = "provider.entity.key"
-	SettingEntityModel       = "provider.entity.model"
-	SettingEnrichmentEnabled = "enrichment.enabled"
+	SettingEmbedProvider = "provider.embedding.type"
+	SettingEmbedURL      = "provider.embedding.url"
+	SettingEmbedKey      = "provider.embedding.key"
+	SettingEmbedModel    = "provider.embedding.model"
+	// Exact-match embedding cache. Output-neutral: a hit returns the same
+	// vector the provider would have produced, skipping a redundant call.
+	SettingEmbeddingCacheEnabled    = "provider.embedding_cache.enabled"
+	SettingEmbeddingCacheMaxEntries = "provider.embedding_cache.max_entries"
+	SettingEmbeddingCacheTTLSeconds = "provider.embedding_cache.ttl_seconds"
+	SettingFactProvider             = "provider.fact.type"
+	SettingFactURL                  = "provider.fact.url"
+	SettingFactKey                  = "provider.fact.key"
+	SettingFactModel                = "provider.fact.model"
+	SettingEntityProvider           = "provider.entity.type"
+	SettingEntityURL                = "provider.entity.url"
+	SettingEntityKey                = "provider.entity.key"
+	SettingEntityModel              = "provider.entity.model"
+	SettingEnrichmentEnabled        = "enrichment.enabled"
 	// SettingEnrichmentPaused is the operator pause control for the worker
 	// pool. It is a runtime control flag, not an operator-config knob, so it
 	// is intentionally absent from settingDefaults and the UI settings schema;
@@ -860,6 +865,10 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 
 	SettingCascadeCacheTTLSeconds:  "30",
 	SettingSettingsCacheTTLSeconds: "30",
+
+	SettingEmbeddingCacheEnabled:    "true",
+	SettingEmbeddingCacheMaxEntries: "8192",
+	SettingEmbeddingCacheTTLSeconds: "900",
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the

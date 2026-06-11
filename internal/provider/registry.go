@@ -142,6 +142,13 @@ type Registry struct {
 	// without disturbing in-flight goroutines that still reference the
 	// old one.
 	probeGroup *singleflight.Group
+
+	// embedStore is the process-wide exact-match embedding cache, installed
+	// via WithEmbeddingCache. nil disables caching. Atomic so it can be set
+	// once at startup and read lock-free inside buildProviders on every
+	// Reload, mirroring embedWrapper. The wrapper around each rebuilt inner
+	// chain is recreated per Reload, but the store persists.
+	embedStore atomic.Pointer[embedCacheStore]
 }
 
 // NewRegistry instantiates providers from config, wraps each in a circuit
@@ -413,7 +420,14 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 			if err != nil {
 				return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
 			}
-			built.embedding = r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(slot.Type, "embed")))
+			embedder := r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(slot.Type, "embed")))
+			// The cache sits outermost (outside the usage recorder) so a full
+			// hit records no token_usage row. Keyed on slot.Model so a model
+			// change across Reload cannot return a stale vector.
+			if store := r.embedStore.Load(); store != nil {
+				embedder = newCachingEmbedding(embedder, slot.Model, store)
+			}
+			built.embedding = embedder
 			continue
 		}
 		lp, err := createLLMProvider(slot)
@@ -476,6 +490,19 @@ func (r *Registry) WithTokenCounter(c TokenCounter) *Registry {
 	} else {
 		r.tokenCounter.Store(&c)
 	}
+	return r
+}
+
+// WithEmbeddingCache installs the process-wide exact-match embedding cache,
+// reading its live configuration (enabled/size/TTL) through cfg on every Embed
+// call. Passing nil disables caching. Call before the post-construction Reload
+// so the cache wraps the embedding provider, exactly like WithEmbeddingWrapper.
+func (r *Registry) WithEmbeddingCache(cfg func(context.Context) EmbedCacheConfig) *Registry {
+	if cfg == nil {
+		r.embedStore.Store(nil)
+		return r
+	}
+	r.embedStore.Store(newEmbedCacheStore(cfg))
 	return r
 }
 

@@ -305,9 +305,20 @@ func main() {
 		registry.WithEmbeddingWrapper(func(ep provider.EmbeddingProvider) provider.EmbeddingProvider {
 			return metrics.WrapEmbeddingProvider(ep, promMetrics)
 		})
+		// Install the exact-match embedding cache (outermost, so a full hit
+		// records no token_usage row). Config is read live from settings on
+		// every Embed, so the admin toggle and size/TTL knobs take effect
+		// without a restart.
+		registry.WithEmbeddingCache(func(ctx context.Context) provider.EmbedCacheConfig {
+			return provider.EmbedCacheConfig{
+				Enabled:    settingsSvc.ResolveBool(ctx, service.SettingEmbeddingCacheEnabled, "global"),
+				MaxEntries: settingsSvc.ResolveIntWithDefault(ctx, service.SettingEmbeddingCacheMaxEntries, "global"),
+				TTL:        time.Duration(settingsSvc.ResolveIntWithDefault(ctx, service.SettingEmbeddingCacheTTLSeconds, "global")) * time.Second,
+			}
+		})
 		// Reload so the embedding provider already wrapped by NewRegistry
-		// picks up the freshly-installed embed wrapper. On configs with
-		// no embedding slot this is a no-op.
+		// picks up the freshly-installed embed wrapper and cache. On configs
+		// with no embedding slot this is a no-op.
 		if rerr := registry.Reload(regCfg); rerr != nil {
 			log.Printf("warning: registry reload to install metrics hooks failed: %v", rerr)
 		}
@@ -706,6 +717,7 @@ func main() {
 	// re-embedding the namespace every cycle.
 	if vectorStore != nil {
 		consolidationPhase.AttachVectorPurger(vectorStore)
+		consolidationPhase.AttachVectorStore(vectorStore)
 		contradictionPhase.AttachVectorStore(vectorStore)
 		contradictionPhase.AttachVectorPurger(vectorStore)
 		memoryRepo.AttachVectorStore(vectorStore)

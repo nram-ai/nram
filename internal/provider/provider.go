@@ -2,7 +2,10 @@
 // providers used throughout the nram enrichment pipeline.
 package provider
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Message represents a single message in a conversation with an LLM.
 type Message struct {
@@ -35,6 +38,22 @@ type CompletionResponse struct {
 	Model        string
 	FinishReason string
 	Usage        TokenUsage
+}
+
+// IsTruncated reports whether a completion's finish reason indicates the model
+// stopped because it hit the output token cap rather than finishing its
+// response. Providers spell this differently: OpenAI and Ollama use "length",
+// Anthropic "max_tokens", Gemini "MAX_TOKENS" (lowercased on ingest). A
+// truncated response is structurally incomplete, and at temperature 0 a
+// re-send of the same request with the same cap truncates identically, so
+// callers use this to skip a deterministically-failing retry.
+func IsTruncated(finishReason string) bool {
+	switch strings.ToLower(strings.TrimSpace(finishReason)) {
+	case "length", "max_tokens":
+		return true
+	default:
+		return false
+	}
 }
 
 // TokenUsage tracks the token consumption for a single LLM or embedding call.

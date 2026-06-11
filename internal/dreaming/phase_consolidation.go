@@ -75,7 +75,19 @@ type ConsolidationPhase struct {
 	embedderProvider EmbeddingProviderFunc
 	settings         SettingsResolver
 	vectorPurger     VectorPurger
+	vectorStore      storage.VectorStore
 	enrichmentQueue  EnrichmentQueueWriter
+}
+
+// AttachVectorStore wires a VectorStore so the novelty audit can reuse a
+// source memory's already-persisted vector instead of re-embedding its content
+// every cycle. Reuse is restricted to memories whose stored vector is a
+// raw-content embedding (AugmentedEmbeddingAt == nil) at the audit dimension,
+// so the cosine comparison against the freshly-embedded candidate is
+// byte-identical to embedding the source. Nil is safe and disables reuse;
+// behaviour reverts to embedding every source.
+func (p *ConsolidationPhase) AttachVectorStore(vs storage.VectorStore) {
+	p.vectorStore = vs
 }
 
 // AttachVectorPurger wires a VectorPurger so dream-side state transitions
@@ -1621,12 +1633,49 @@ func (p *ConsolidationPhase) auditNovelty(
 	}
 
 	if embedder != nil {
-		// Batch embed candidate + every source in one call so we pay one
-		// network round-trip per audit instead of N+1.
+		auditDim := storage.BestEmbeddingDimension(embedder.Dimensions())
+
+		// Reuse already-persisted vectors for sources whose stored vector is a
+		// raw-content embedding at the audit dimension (never augmented), so we
+		// embed only the candidate and the sources we cannot reuse. This is
+		// output-identical: a reused vector is byte-equal to what re-embedding
+		// the source would produce, so the cosine comparison below is unchanged.
+		// On any vector-store error the source simply falls back to embedding.
+		// srcEmb holds each source's embedding by position: reusable stored
+		// vectors are pre-filled here, and the remaining (nil) slots are filled
+		// from the fresh embed batch below.
+		srcEmb := make([][]float32, len(sources))
+		if p.vectorStore != nil && auditDim > 0 {
+			ids := make([]uuid.UUID, 0, len(sources))
+			idToIdx := make(map[uuid.UUID]int, len(sources))
+			for i, s := range sources {
+				if s.AugmentedEmbeddingAt == nil && s.EmbeddingDim != nil && *s.EmbeddingDim == auditDim {
+					ids = append(ids, s.ID)
+					idToIdx[s.ID] = i
+				}
+			}
+			if len(ids) > 0 {
+				if fetched, ferr := p.vectorStore.GetByIDs(ctx, storage.VectorKindMemory, ids, auditDim); ferr == nil {
+					for id, vec := range fetched {
+						if len(vec) == auditDim {
+							srcEmb[idToIdx[id]] = vec
+						}
+					}
+				}
+			}
+		}
+
+		// Batch embed candidate + every non-reused source in one call so we pay
+		// one network round-trip per audit instead of N+1.
 		inputs := make([]string, 0, len(sources)+1)
 		inputs = append(inputs, candidate)
-		for _, s := range sources {
+		embeddedSrcIdx := make([]int, 0, len(sources)) // source index per embedded input, in order
+		for i, s := range sources {
+			if srcEmb[i] != nil {
+				continue
+			}
 			inputs = append(inputs, s.Content)
+			embeddedSrcIdx = append(embeddedSrcIdx, i)
 		}
 		resp, embUsage, embErr := WrapLLMCall(ctx, budget, OpNoveltyAuditEmbed,
 			embedder.Name(), "",
@@ -1634,7 +1683,7 @@ func (p *ConsolidationPhase) auditNovelty(
 				ctx = provider.WithOperation(ctx, provider.OperationDreamNoveltyEmbedding)
 				r, e := embedder.Embed(ctx, &provider.EmbeddingRequest{
 					Input:     inputs,
-					Dimension: storage.BestEmbeddingDimension(embedder.Dimensions()),
+					Dimension: auditDim,
 				})
 				return r, usageOrEstimateEmbed(r, inputs), e
 			})
@@ -1644,10 +1693,20 @@ func (p *ConsolidationPhase) auditNovelty(
 		if embUsage != nil {
 			embedTokens = embUsage.TotalTokens
 		}
+
+		// Fill the freshly embedded misses back into their source positions,
+		// alongside the reused stored vectors already in srcEmb.
 		candEmb := resp.Embeddings[0]
+		for j, srcIdx := range embeddedSrcIdx {
+			srcEmb[srcIdx] = resp.Embeddings[1+j]
+		}
+
 		maxSim := 0.0
-		for i := 1; i < len(resp.Embeddings); i++ {
-			sim := hnsw.CosineSimilarity(candEmb, resp.Embeddings[i])
+		for _, sv := range srcEmb {
+			if sv == nil {
+				continue
+			}
+			sim := hnsw.CosineSimilarity(candEmb, sv)
 			if sim > maxSim {
 				maxSim = sim
 			}

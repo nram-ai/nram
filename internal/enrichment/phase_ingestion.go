@@ -159,6 +159,19 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 
 	parsed, parseErr := parseIngestionDecision(resp.Content)
 	if parseErr != nil {
+		// A re-send only helps when sampling could yield a different response.
+		// At temperature 0 the request is deterministic, so when the first
+		// response was truncated at the token cap the retry would truncate
+		// identically and fail to parse again: skip it and fall through to the
+		// fallback, saving a guaranteed-wasted completion. At temperature > 0,
+		// or when the finish reason is unknown, retry exactly as before.
+		if req.Temperature == 0 && provider.IsTruncated(resp.FinishReason) {
+			slog.Warn("enrichment: ingestion_decision parse (truncated at temp=0, deterministic retry skipped)",
+				"job", job.ID, "finish_reason", resp.FinishReason, "llm_latency_ms", llmLatency.Milliseconds())
+			res.decision = IngestionOpAddFallback
+			wp.logIngestionDecision(job, mem, res)
+			return res
+		}
 		retryStart := time.Now()
 		resp, err = llm.Complete(ingestionCtx, req)
 		llmLatency += time.Since(retryStart)

@@ -194,8 +194,15 @@ var settingsGroups = []api.SettingGroup{
 	{
 		ID:          "caches",
 		Label:       "Service Caches",
-		Description: "Cache lifetimes for the cascade resolver and settings service, plus the export pagination size.",
-		SubSections: []api.SettingSubSection{{Category: "performance"}},
+		Description: "Cache lifetimes for the cascade resolver and settings service, plus the export pagination size and the embedding cache.",
+		SubSections: []api.SettingSubSection{
+			{Category: "performance"},
+			{
+				Category:    "embedding_cache",
+				Label:       "Embedding Cache",
+				Description: "Reuse embedding vectors for identical input text so the same text is never embedded twice. Output-neutral; trims redundant embedding spend.",
+			},
+		},
 	},
 	{
 		ID:          "usage_export",
