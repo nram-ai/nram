@@ -129,6 +129,17 @@ export function getRelationColor(relation: string): string {
   return `hsl(${hue}, 62%, 65%)`;
 }
 
+// Directional-particle "pulse" tier from relationship weight (stored capped at
+// 2.0). Stronger relationships pulse with more, faster particles; below the
+// floor they don't pulse at all. Precomputed onto each link so the ForceGraph
+// particle accessors stay O(1). Lower band bound is inclusive.
+export function getPulse(weight: number): { count: number; speed: number } {
+  if (weight < 0.5) return { count: 0, speed: 0 };
+  if (weight < 1.0) return { count: 1, speed: 0.003 };
+  if (weight < 1.5) return { count: 2, speed: 0.006 };
+  return { count: 3, speed: 0.010 };
+}
+
 // Graph data types for 3D force graph
 interface GraphNode {
   id: string;
@@ -150,6 +161,10 @@ interface GraphLink {
   // ForceGraph color accessors (line, particles, arrow) read it instead of
   // re-hashing the relation on every link every frame.
   color: string;
+  // Directional-particle pulse tier derived from weight (getPulse), precomputed
+  // here so the count/speed accessors stay O(1).
+  particleCount: number;
+  particleSpeed: number;
   weight: number;
   id: string;
 }
@@ -728,14 +743,19 @@ function GraphVisualization() {
 
     const links: GraphLink[] = (graphData.relationships || [])
       .filter((r) => entityIds.has(r.source_id) && entityIds.has(r.target_id))
-      .map((r) => ({
-        source: r.source_id,
-        target: r.target_id,
-        relation: r.relation,
-        color: getRelationColor(r.relation),
-        weight: r.weight,
-        id: r.id,
-      }));
+      .map((r) => {
+        const pulse = getPulse(r.weight);
+        return {
+          source: r.source_id,
+          target: r.target_id,
+          relation: r.relation,
+          color: getRelationColor(r.relation),
+          particleCount: pulse.count,
+          particleSpeed: pulse.speed,
+          weight: r.weight,
+          id: r.id,
+        };
+      });
 
     return { nodes, links };
   }, [graphData]);
@@ -944,8 +964,8 @@ function GraphVisualization() {
               linkWidth={((link: GraphLink) => Math.max(0.3, Math.min(link.weight * 0.4, 2))) as any}
               linkOpacity={0.4}
               linkCurvature={0.15}
-              linkDirectionalParticles={((link: GraphLink) => link.weight >= 2 ? 2 : 0) as any}
-              linkDirectionalParticleSpeed={0.005}
+              linkDirectionalParticles={((link: GraphLink) => link.particleCount) as any}
+              linkDirectionalParticleSpeed={((link: GraphLink) => link.particleSpeed) as any}
               linkDirectionalParticleWidth={1.5}
               linkDirectionalParticleColor={((link: GraphLink) => link.color) as any}
               linkDirectionalArrowLength={3}
