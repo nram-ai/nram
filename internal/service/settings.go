@@ -8,13 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
-	"github.com/nram-ai/nram/internal/provider"
 )
 
 // Provider slot config is stored in the settings table as a JSON blob under
@@ -49,8 +47,6 @@ const (
 	// ResolveBool returns false (unpaused) when it is unset.
 	SettingEnrichmentPaused = "enrichment.paused"
 	SettingDedupThreshold   = "enrichment.dedup_threshold"
-	SettingFactPrompt       = "enrichment.fact_prompt"
-	SettingEntityPrompt     = "enrichment.entity_prompt"
 
 	// Pre-insert paraphrase guard run on each extracted-fact child during
 	// enrichment. When a fact's cosine to its parent (or a previously-accepted
@@ -92,9 +88,6 @@ const (
 	SettingDreamInitialConfidence     = "dreaming.initial_confidence"
 	SettingDreamSupersessionThreshold = "dreaming.supersession_threshold"
 	SettingDreamLogRetention          = "dreaming.log_retention_days"
-	SettingDreamContradictionPrompt   = "dreaming.contradiction_prompt"
-	SettingDreamSynthesisPrompt       = "dreaming.synthesis_prompt"
-	SettingDreamAlignmentPrompt       = "dreaming.alignment_prompt"
 
 	// Novelty audit. A dream synthesis must contain at least one fact not
 	// present in any of its source memories. Hybrid check: max-cosine
@@ -103,7 +96,6 @@ const (
 	SettingDreamNoveltyEnabled            = "dreaming.novelty.enabled"
 	SettingDreamNoveltyEmbedHighThreshold = "dreaming.novelty.embed_high_threshold"
 	SettingDreamNoveltyEmbedLowThreshold  = "dreaming.novelty.embed_low_threshold"
-	SettingDreamNoveltyJudgePrompt        = "dreaming.novelty.judge_prompt"
 	SettingDreamNoveltyJudgeMaxTokens     = "dreaming.novelty.judge_max_tokens"
 	SettingDreamNoveltyBackfillPerCycle   = "dreaming.novelty.backfill_per_cycle"
 	// Backfill path uses a more aggressive auto-reject threshold than
@@ -232,7 +224,6 @@ const (
 	SettingIngestionDecisionShadow    = "enrichment.ingestion_decision.shadow_mode"
 	SettingIngestionDecisionThreshold = "enrichment.ingestion_decision.threshold"
 	SettingIngestionDecisionTopK      = "enrichment.ingestion_decision.top_k"
-	SettingIngestionDecisionPrompt    = "enrichment.ingestion_decision.prompt"
 
 	// Query augmentation. When enabled, the enrichment worker generates N
 	// paraphrased query forms per memory at ingest time and prepends them to
@@ -241,11 +232,9 @@ const (
 	// default; flip only after the canned recall regression set shows no
 	// contamination-probe regressions plus measurable improvement on 3 or
 	// more of 7 stress angles. The model comes from the query_augment provider
-	// slot (which falls back to the fact provider). Prompt accepts {content}
-	// and {N} as named placeholders.
+	// slot (which falls back to the fact provider).
 	SettingQueryAugmentEnabled       = "enrichment.query_augment.enabled"
 	SettingQueryAugmentCount         = "enrichment.query_augment.count"
-	SettingQueryAugmentPrompt        = "enrichment.query_augment.prompt"
 	SettingQueryAugmentMaxInputChars = "enrichment.query_augment.max_input_chars"
 	SettingQueryAugmentMaxTokens     = "enrichment.query_augment.max_tokens"
 
@@ -598,12 +587,12 @@ const (
 	ReconsolidationModePersist = "persist"
 )
 
-// Prompt system-prompt companion keys. Each LLM phase splits its template into
-// a static instruction part (the *SystemPrompt key, sent as the system role
-// and a stable cacheable prefix) and a dynamic data part (the existing prompt
-// key, sent as the user role). The two halves' defaults are derived from the
-// existing combined default at package init (see splitPromptDefault); the
-// static half is authored below and the dynamic remainder is the rest.
+// Per-phase system-prompt keys. Each LLM phase's tunable instruction (its role,
+// rules, and complete output contract/schema) is stored under one of these keys
+// and sent as the system message (a stable, cacheable prefix). The dynamic
+// memory data is wrapped by a hardcoded per-phase code template and sent as the
+// user message via provider.BuildMessages; that wrapper is not a setting. The
+// system prompt is the only tunable LLM template.
 const (
 	SettingFactSystemPrompt               = "enrichment.fact_system_prompt"
 	SettingEntitySystemPrompt             = "enrichment.entity_system_prompt"
@@ -629,10 +618,10 @@ const (
 	SettingProviderOllamaNumCtx = "provider.ollama.num_ctx"
 )
 
-// Static system-prompt halves for each phase. splitPromptDefault verifies at
-// package load that combined == systemText + "\n\n" + dynamicRemainder and
-// panics on mismatch, so an edit to either half that breaks the boundary fails
-// fast rather than silently shipping a duplicated or truncated prompt.
+// Default system-prompt text for each phase: the full static instruction (role,
+// rules, and the complete output contract/schema) sent as the system message.
+// Pure static text with no fmt verbs; the dynamic memory data is injected by the
+// per-phase code wrapper into the user message.
 const (
 	factSystemPromptText = `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
 - "content": the fact statement (string)
@@ -665,24 +654,43 @@ Return ONLY valid JSON. Do not include markdown fences or explanation.`
 
 	ingestionDecisionSystemPromptText = `You are an ingestion decision engine. You do NOT converse. You output JSON only.
 
-A new memory has just arrived. Below is its content, followed by up to %d candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory.
+A new memory has just arrived. Below it are the candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory by comparing its facts to each candidate's facts.
 
-Choose exactly one operation:
-- "ADD": the new memory is genuinely distinct from every candidate; keep it as a separate row.
-- "UPDATE": the new memory is an updated, more specific, more recent, or otherwise improved version of one specific candidate. The old candidate should be marked superseded by the new memory.
-- "DELETE": the new memory is itself redundant: every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
-- "NONE": the new memory overlaps with one or more candidates but is not a clean update or duplicate (e.g. partial overlap, different aspect of the same topic). Keep the new memory but do not record any lineage edge.
+Operations (choose exactly one):
+- "ADD": the new memory contributes at least one fact not in any candidate, and it does not simply correct or fully restate one candidate.
+- "UPDATE": the new memory should REPLACE exactly one candidate, because it is a newer or more specific version of that candidate's facts. The replaced candidate is discarded.
+- "DELETE": the new memory adds nothing; every fact it states is already present in one candidate (it equals that candidate or is a subset of it).
+- "NONE": overlaps a candidate but is not a clean replacement or duplicate.
+
+How to choose:
+1. States any fact no candidate contains, without merely correcting a value? -> ADD.
+2. Same subject as one candidate but a newer/more specific/corrected version? -> UPDATE.
+3. All facts already covered by one candidate (equal or subset)? -> DELETE.
+4. Otherwise -> NONE.
+
+Critical: UPDATE DISCARDS the candidate. A vaguer or less detailed memory never supersedes a more detailed one; that is DELETE.
+
+Worked examples:
+- new "Ben enjoys coffee." / candidate "Ben enjoys coffee and tea." -> DELETE.
+- new "The cache TTL is 600 seconds." / candidate "The cache TTL is 300 seconds." -> UPDATE.
+- new "Ben enjoys coffee and cycles to work." / candidate "Ben enjoys tea." -> ADD.
 
 Hard rules:
-- target_id is required for UPDATE and DELETE and must be one of the candidate IDs given below verbatim. For ADD and NONE, set target_id to null.
-- Pick UPDATE only when one specific candidate is clearly superseded; if multiple candidates would each need updating, choose NONE.
-- Pick DELETE only when the new memory adds nothing not already in the named candidate.
-- When in doubt between ADD and NONE, prefer ADD.
-- Rationale must be one short sentence (under 200 characters) that names the candidate ID you compared against (when applicable).`
+- target_id required for UPDATE/DELETE (verbatim candidate ID); null for ADD/NONE.
+- Rationale: one short sentence (under 200 characters) naming the candidate ID compared against.
+
+Output ONLY this JSON, nothing else:
+{"operation": "ADD", "target_id": null, "rationale": "..."}
+or
+{"operation": "UPDATE", "target_id": "candidate-uuid", "rationale": "..."}
+or
+{"operation": "DELETE", "target_id": "candidate-uuid", "rationale": "..."}
+or
+{"operation": "NONE", "target_id": null, "rationale": "..."}`
 
 	queryAugmentSystemPromptText = `You are a query augmentation engine. You do NOT converse. You output JSON only.
 
-Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
+Given a memory's content, generate the requested number of short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
 
 OUTPUT FORMAT, read carefully:
 - Output ONLY a JSON array of strings.
@@ -697,70 +705,7 @@ WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + ``
 
 	contradictionSystemPromptText = `You are a contradiction detector. You do NOT converse. You output JSON only.
 
-Determine if the two statements below contradict each other.`
-
-	synthesisSystemPromptText = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
-
-Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.`
-
-	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
-
-Score how strongly the evidence supports or contradicts the synthesis.`
-
-	noveltyJudgeSystemPromptText = `You are a novelty auditor. You do NOT converse. You output JSON only.
-
-Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
-
-Hard rules:
-- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
-- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
-- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
-- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
-- When in doubt, return an empty array.`
-)
-
-// settingDefaults provides built-in default values for well-known settings.
-// These are used when a setting is not found at any scope in the database.
-var settingDefaults = map[string]string{
-	SettingEnrichmentEnabled:                "true",
-	SettingDedupThreshold:                   "0.92",
-	SettingExtractedFactGuardEnabled:        "true",
-	SettingExtractedFactParaphraseThreshold: "0.92",
-	SettingExtractedFactBackfillBatchSize:   "100",
-	SettingRankWeightSim:                    "0.50",
-	SettingRankWeightRec:                    "0.15",
-	SettingRankWeightImp:                    "0.10",
-	SettingRankWeightFreq:                   "0.00",
-	SettingRankWeightGraph:                  "0.20",
-	SettingRankWeightConf:                   "0.05",
-	SettingRankWeightOrigin:                 "0.25",
-	SettingRankWeightMmr:                    "0.75",
-	SettingRecallFusionEnabled:              "true",
-	SettingRecallFusionK:                    "60",
-	SettingRecallFusionVecW:                 "0.60",
-	SettingRecallFusionLexW:                 "0.40",
-	SettingRecallFusionNormalizePerChan:     "false",
-	SettingTokenRetention:                   "365",
-	SettingTokenCostRates:                   "[]",
-	SettingDreamingEnabled:                  "true",
-	SettingDreamMaxTokensPerCycle:           "1024000",
-	SettingDreamMaxTokensPerCall:            "2048",
-	SettingDreamCooldown:                    "300",
-	SettingDreamMinInterval:                 "600",
-	SettingDreamInitialConfidence:           "0.3",
-	SettingDreamSupersessionThreshold:       "0.85",
-	SettingDreamLogRetention:                "30",
-	SettingDreamContradictionPrompt: `You are a contradiction detector. You do NOT converse. You output JSON only.
-
 Determine if the two statements below contradict each other.
-
-<statement_a>
-%s
-</statement_a>
-
-<statement_b>
-%s
-</statement_b>
 
 When they contradict, also identify which is more likely correct and set "winner" to "a", "b", or "tie". Use "tie" when the contradiction is real but neither side is clearly right (subjective claims, partial overlap, claims about different time periods, equally plausible interpretations).
 
@@ -771,27 +716,17 @@ or
 or
 {"contradicts": true, "winner": "tie", "explanation": "reason"}
 or
-{"contradicts": false, "winner": null, "explanation": "reason"}`,
-	SettingDreamSynthesisPrompt: `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
+{"contradicts": false, "winner": null, "explanation": "reason"}`
+
+	synthesisSystemPromptText = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
 
 Combine the following pieces of information into a single concise paragraph that preserves all key facts. Do not lose details. Do not add commentary. Do not prefix with "Here is" or similar.
 
-<information>
-%s
-</information>
+Output ONLY the synthesized text:`
 
-Output ONLY the synthesized text:`,
-	SettingDreamAlignmentPrompt: `You are an alignment scorer. You do NOT converse. You output JSON only.
+	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
 
 Score how strongly the evidence supports or contradicts the synthesis.
-
-<synthesis>
-%s
-</synthesis>
-
-<evidence>
-%s
-</evidence>
 
 Output ONLY this JSON, nothing else:
 {"alignment": 0.0, "reasoning": "brief reason"}
@@ -799,7 +734,59 @@ Output ONLY this JSON, nothing else:
 alignment must be a float:
 1.0 = strong support
 0.0 = neutral/unrelated
--1.0 = strong contradiction`,
+-1.0 = strong contradiction`
+
+	noveltyJudgeSystemPromptText = `You are a novelty auditor. You do NOT converse. You output JSON only.
+
+Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
+
+Hard rules:
+- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
+- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
+- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
+- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
+- When in doubt, return an empty array.
+
+Output ONLY this JSON, nothing else:
+{"novel_facts": ["fact 1", "fact 2"]}
+
+Empty array if every fact in the synthesis is already present in the sources.`
+)
+
+// settingDefaults provides built-in default values for well-known settings.
+// These are used when a setting is not found at any scope in the database.
+var settingDefaults = map[string]string{
+	SettingEnrichmentEnabled:                      "true",
+	SettingDedupThreshold:                         "0.92",
+	SettingExtractedFactGuardEnabled:              "true",
+	SettingExtractedFactParaphraseThreshold:       "0.92",
+	SettingExtractedFactBackfillBatchSize:         "100",
+	SettingRankWeightSim:                          "0.50",
+	SettingRankWeightRec:                          "0.15",
+	SettingRankWeightImp:                          "0.10",
+	SettingRankWeightFreq:                         "0.00",
+	SettingRankWeightGraph:                        "0.20",
+	SettingRankWeightConf:                         "0.05",
+	SettingRankWeightOrigin:                       "0.25",
+	SettingRankWeightMmr:                          "0.75",
+	SettingRecallFusionEnabled:                    "true",
+	SettingRecallFusionK:                          "60",
+	SettingRecallFusionVecW:                       "0.60",
+	SettingRecallFusionLexW:                       "0.40",
+	SettingRecallFusionNormalizePerChan:           "false",
+	SettingTokenRetention:                         "365",
+	SettingTokenCostRates:                         "[]",
+	SettingDreamingEnabled:                        "true",
+	SettingDreamMaxTokensPerCycle:                 "1024000",
+	SettingDreamMaxTokensPerCall:                  "2048",
+	SettingDreamCooldown:                          "300",
+	SettingDreamMinInterval:                       "600",
+	SettingDreamInitialConfidence:                 "0.3",
+	SettingDreamSupersessionThreshold:             "0.85",
+	SettingDreamLogRetention:                      "30",
+	SettingDreamContradictionSystemPrompt:         contradictionSystemPromptText,
+	SettingDreamSynthesisSystemPrompt:             synthesisSystemPromptText,
+	SettingDreamAlignmentSystemPrompt:             alignmentSystemPromptText,
 	SettingDreamNoveltyEnabled:                    "true",
 	SettingDreamNoveltyEmbedHighThreshold:         "0.97",
 	SettingDreamNoveltyEmbedLowThreshold:          "0.85",
@@ -846,127 +833,25 @@ alignment must be a float:
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 
-	SettingFactPrompt: `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
-- "content": the fact statement (string)
-- "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
-- "tags": relevant tags for categorization (array of strings)
+	SettingFactSystemPrompt:   factSystemPromptText,
+	SettingEntitySystemPrompt: entitySystemPromptText,
 
-Hard rules:
-- Do NOT emit a fact whose content merely restates the input. If the input is already a single atomic fact, return an empty array [].
-- Do NOT emit a fact that differs from the input only by punctuation, capitalization, or whitespace.
-- Tag-only deltas are NOT a reason to emit a fact. If the only thing you would add is a new tag on otherwise-identical content, return an empty array; the calling system merges tags from suppressed facts into the parent automatically.
-- Only emit facts that introduce a new entity, relationship, quantity, date, cause, consequence, or other proposition not already explicit in the input.
+	SettingIngestionDecisionEnabled:      "true",
+	SettingIngestionDecisionShadow:       "false",
+	SettingIngestionDecisionThreshold:    "0.92",
+	SettingIngestionDecisionTopK:         "5",
+	SettingIngestionDecisionSystemPrompt: ingestionDecisionSystemPromptText,
 
-Return ONLY valid JSON. Do not include markdown fences or explanation.
-
-Text:
-%s`,
-	SettingEntityPrompt: `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
-
-Return a JSON object with two fields:
-- "entities": array of objects with fields:
-  - "name": the entity name (string)
-  - "type": the entity type, e.g. "person", "organization", "location", "concept" (string)
-  - "properties": optional key-value pairs (object)
-- "relationships": array of objects with fields:
-  - "source": source entity name (string)
-  - "target": target entity name (string)
-  - "relation": the relationship type (string)
-  - "weight": confidence/strength 0.0 to 1.0 (number)
-  - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
-
-Return ONLY valid JSON. Do not include markdown fences or explanation.
-
-Text:
-%s`,
-
-	SettingIngestionDecisionEnabled:   "true",
-	SettingIngestionDecisionShadow:    "false",
-	SettingIngestionDecisionThreshold: "0.92",
-	SettingIngestionDecisionTopK:      "5",
-	SettingIngestionDecisionPrompt: `You are an ingestion decision engine. You do NOT converse. You output JSON only.
-
-A new memory has just arrived. Below is its content, followed by up to %d candidate near-neighbour memories that already exist (with their IDs and creation times). Decide what to do with the new memory.
-
-Choose exactly one operation:
-- "ADD": the new memory is genuinely distinct from every candidate; keep it as a separate row.
-- "UPDATE": the new memory is an updated, more specific, more recent, or otherwise improved version of one specific candidate. The old candidate should be marked superseded by the new memory.
-- "DELETE": the new memory is itself redundant: every fact it states is already present in one of the candidates, which remains the canonical record. Discard the new memory.
-- "NONE": the new memory overlaps with one or more candidates but is not a clean update or duplicate (e.g. partial overlap, different aspect of the same topic). Keep the new memory but do not record any lineage edge.
-
-Hard rules:
-- target_id is required for UPDATE and DELETE and must be one of the candidate IDs given below verbatim. For ADD and NONE, set target_id to null.
-- Pick UPDATE only when one specific candidate is clearly superseded; if multiple candidates would each need updating, choose NONE.
-- Pick DELETE only when the new memory adds nothing not already in the named candidate.
-- When in doubt between ADD and NONE, prefer ADD.
-- Rationale must be one short sentence (under 200 characters) that names the candidate ID you compared against (when applicable).
-
-<new_memory>
-%s
-</new_memory>
-
-<candidates>
-%s
-</candidates>
-
-Output ONLY this JSON, nothing else:
-{"operation": "ADD", "target_id": null, "rationale": "..."}
-or
-{"operation": "UPDATE", "target_id": "candidate-uuid", "rationale": "..."}
-or
-{"operation": "DELETE", "target_id": "candidate-uuid", "rationale": "..."}
-or
-{"operation": "NONE", "target_id": null, "rationale": "..."}`,
-
-	SettingQueryAugmentEnabled:       "true",
-	SettingQueryAugmentCount:         "4",
-	SettingQueryAugmentMaxInputChars: "0",
-	SettingQueryAugmentMaxTokens:     "2048",
-	SettingQueryAugmentPrompt: `You are a query augmentation engine. You do NOT converse. You output JSON only.
-
-Given the memory content below, generate {N} short, distinct natural-language questions or phrases a user might use to retrieve this memory. Vary the phrasings: cover synonyms, partial-fact lookups, and the most likely way the information would be asked about. Keep each query under 120 characters and avoid restating the memory verbatim.
-
-OUTPUT FORMAT, read carefully:
-- Output ONLY a JSON array of strings.
-- EVERY element MUST be wrapped in DOUBLE QUOTES ("..."). Not single quotes. Not backticks. Not bare words.
-- No prose before or after the array. No markdown fences (no ` + "```" + `). No trailing commas. No comments.
-- Use \" to escape a literal double quote inside an element.
-
-CORRECT:   ["what time does X start", "X start time", "schedule for X"]
-WRONG (missing quotes):   [what time does X start, X start time, schedule for X]
-WRONG (single quotes):    ['what time does X start', 'X start time']
-WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + `
-
-<memory>
-{content}
-</memory>`,
-	SettingDreamNoveltyJudgePrompt: `You are a novelty auditor. You do NOT converse. You output JSON only.
-
-Given a synthesized memory and the source memories it was derived from, list any facts present in the synthesis that are NOT stated or directly implied by any of the sources. A fact is "novel" only if a careful reader could not derive it from the sources alone.
-
-Hard rules:
-- Rewording is NEVER novelty. If the synthesis says the same thing with different words, it is not novel.
-- Reorganization is NEVER novelty. Reordering, combining, or restructuring source content is not novel.
-- Summarization is NEVER novelty. Compressing or generalizing source content is not novel.
-- A fact is novel ONLY if it introduces a new entity, relationship, quantity, date, cause, or consequence absent from every source.
-- When in doubt, return an empty array.
-
-<synthesis>
-%s
-</synthesis>
-
-<sources>
-%s
-</sources>
-
-Output ONLY this JSON, nothing else:
-{"novel_facts": ["fact 1", "fact 2"]}
-
-Empty array if every fact in the synthesis is already present in the sources.`,
-	SettingQdrantUseTLS:           "false",
-	SettingQdrantPoolSize:         "3",
-	SettingQdrantKeepAliveTime:    "10",
-	SettingQdrantKeepAliveTimeout: "2",
+	SettingQueryAugmentEnabled:           "true",
+	SettingQueryAugmentCount:             "4",
+	SettingQueryAugmentMaxInputChars:     "0",
+	SettingQueryAugmentMaxTokens:         "2048",
+	SettingQueryAugmentSystemPrompt:      queryAugmentSystemPromptText,
+	SettingDreamNoveltyJudgeSystemPrompt: noveltyJudgeSystemPromptText,
+	SettingQdrantUseTLS:                  "false",
+	SettingQdrantPoolSize:                "3",
+	SettingQdrantKeepAliveTime:           "10",
+	SettingQdrantKeepAliveTimeout:        "2",
 
 	SettingHNSWM:                "16",
 	SettingHNSWEfConstruction:   "200",
@@ -1141,43 +1026,6 @@ Empty array if every fact in the synthesis is already present in the sources.`,
 	"api.rate_limit_burst":  "20",
 }
 
-// promptSplitDefaults maps each phase's combined prompt key to its new
-// system-prompt companion key and the authored static instruction half. The
-// dynamic remainder is derived from the combined default at init.
-var promptSplitDefaults = []struct {
-	combinedKey string
-	systemKey   string
-	systemText  string
-	combined    string // original pre-split combined default, captured at init
-}{
-	{combinedKey: SettingFactPrompt, systemKey: SettingFactSystemPrompt, systemText: factSystemPromptText},
-	{combinedKey: SettingEntityPrompt, systemKey: SettingEntitySystemPrompt, systemText: entitySystemPromptText},
-	{combinedKey: SettingIngestionDecisionPrompt, systemKey: SettingIngestionDecisionSystemPrompt, systemText: ingestionDecisionSystemPromptText},
-	{combinedKey: SettingQueryAugmentPrompt, systemKey: SettingQueryAugmentSystemPrompt, systemText: queryAugmentSystemPromptText},
-	{combinedKey: SettingDreamContradictionPrompt, systemKey: SettingDreamContradictionSystemPrompt, systemText: contradictionSystemPromptText},
-	{combinedKey: SettingDreamSynthesisPrompt, systemKey: SettingDreamSynthesisSystemPrompt, systemText: synthesisSystemPromptText},
-	{combinedKey: SettingDreamAlignmentPrompt, systemKey: SettingDreamAlignmentSystemPrompt, systemText: alignmentSystemPromptText},
-	{combinedKey: SettingDreamNoveltyJudgePrompt, systemKey: SettingDreamNoveltyJudgeSystemPrompt, systemText: noveltyJudgeSystemPromptText},
-}
-
-func init() {
-	for i := range promptSplitDefaults {
-		p := &promptSplitDefaults[i]
-		combined, ok := settingDefaults[p.combinedKey]
-		if !ok {
-			panic("settings: prompt split references unknown combined key " + p.combinedKey)
-		}
-		sep := p.systemText + provider.PromptSplitSeparator
-		if !strings.HasPrefix(combined, sep) {
-			panic("settings: system-prompt half does not prefix the combined default for " + p.combinedKey +
-				"; the authored *SystemPromptText must equal the combined prompt up to the first blank line")
-		}
-		p.combined = combined
-		settingDefaults[p.systemKey] = p.systemText
-		settingDefaults[p.combinedKey] = strings.TrimPrefix(combined, sep)
-	}
-}
-
 // GetDefault returns the built-in default for the given setting key. The
 // boolean reports whether the key is registered. Used by callers that need
 // the same fallback the runtime cascade lands on (e.g. the schema admin
@@ -1231,89 +1079,6 @@ func ResolveOrDefault(ctx context.Context, s *SettingsService, key, scope string
 	}
 	def, _ := GetDefault(key)
 	return def
-}
-
-// LegacyCombinedPromptKeys are the eight phase prompt keys whose default
-// format changed in v0.2.0: each was split into a static system-instruction
-// half (the new <key>_system_prompt companion) and a dynamic data half (the
-// key itself, now dynamic-only). An operator who customized one of these
-// before v0.2.0 keeps a full combined prompt under the key; it is still sent as
-// the user message, but the new default system instructions are also prepended,
-// duplicating instructions until the operator resets or migrates.
-var LegacyCombinedPromptKeys = []string{
-	SettingFactPrompt,
-	SettingEntityPrompt,
-	SettingIngestionDecisionPrompt,
-	SettingQueryAugmentPrompt,
-	SettingDreamContradictionPrompt,
-	SettingDreamSynthesisPrompt,
-	SettingDreamAlignmentPrompt,
-	SettingDreamNoveltyJudgePrompt,
-}
-
-// ReconcileSplitPromptDefaults migrates prompt rows written before the v0.2.0
-// system/user split. The boot seed writes a default row for every prompt key;
-// before v0.2.0 that row held the full combined template. After upgrade an
-// InsertManyIfMissing seed leaves that stale combined row in place, so Resolve
-// returns the old full prompt as the user message while the freshly-seeded
-// system half is also prepended, duplicating instructions for every upgraded
-// install (not just operators who customized a prompt).
-//
-// For each legacy key whose stored global value still equals the exact pre-split
-// combined default, this rewrites the row to the new dynamic-only default so the
-// split applies cleanly. A genuine operator override (value differs from the old
-// combined default) is left untouched and surfaces via WarnOnSplitPromptOverrides.
-// Idempotent: once a row holds the new default it no longer matches and is
-// skipped. Returns the number of rows migrated. No-op on a nil service.
-func (s *SettingsService) ReconcileSplitPromptDefaults(ctx context.Context) (int, error) {
-	if s == nil {
-		return 0, nil
-	}
-	migrated := 0
-	for _, p := range promptSplitDefaults {
-		stored, err := s.repo.Get(ctx, p.combinedKey, "global")
-		if err != nil {
-			// sql.ErrNoRows: no stored row, already falling back to the new
-			// default. Any other error: skip this key and continue.
-			continue
-		}
-		if unmarshalJSONString(stored.Value) != p.combined {
-			continue
-		}
-		newDefault := settingDefaults[p.combinedKey]
-		if err := s.Set(ctx, p.combinedKey, newDefault, "global", nil); err != nil {
-			return migrated, fmt.Errorf("reconcile split prompt %q: %w", p.combinedKey, err)
-		}
-		migrated++
-	}
-	return migrated, nil
-}
-
-// WarnOnSplitPromptOverrides logs a startup warning for each phase prompt whose
-// stored global value differs from the current (post-split, dynamic-only)
-// default, because the prompt format changed in v0.2.0 (see
-// LegacyCombinedPromptKeys). Run after ReconcileSplitPromptDefaults, which
-// removes stale-default rows, so this fires only for genuine operator
-// customizations. The override keeps working; the warning is the migration
-// path. No-op on a nil service or a repo read error.
-func (s *SettingsService) WarnOnSplitPromptOverrides(ctx context.Context) {
-	if s == nil {
-		return
-	}
-	for _, p := range promptSplitDefaults {
-		stored, err := s.repo.Get(ctx, p.combinedKey, "global")
-		if err != nil {
-			continue
-		}
-		if unmarshalJSONString(stored.Value) == settingDefaults[p.combinedKey] {
-			continue
-		}
-		slog.Warn("custom LLM prompt predates the v0.2.0 system/user prompt split; "+
-			"the new default system instructions are now prepended to your custom prompt, "+
-			"which may duplicate instructions. Reset this prompt to its default, or move its "+
-			"static instructions into the matching *_system_prompt key, on the Prompt Templates page.",
-			"key", p.combinedKey)
-	}
 }
 
 // PromptCacheEnabled reports whether providers that accept explicit cache hints

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,8 +27,7 @@ const QueryAugmentSeparator = "\n---\n"
 type queryAugmentSettings struct {
 	enabled       bool
 	count         int
-	systemPrompt  string // static instruction half (carries the {N} count)
-	prompt        string // dynamic half (carries the {content} placeholder)
+	systemPrompt  string // tunable static instruction (role, rules, output format)
 	maxInputChars int
 	maxTokens     int
 }
@@ -72,7 +72,6 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 		cfg.count = v
 	}
 	cfg.systemPrompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingQueryAugmentSystemPrompt, "global")
-	cfg.prompt = service.ResolveOrDefault(ctx, wp.settings, service.SettingQueryAugmentPrompt, "global")
 	if v, err := wp.settings.ResolveInt(ctx, service.SettingQueryAugmentMaxInputChars, "global"); err == nil && v >= 0 {
 		cfg.maxInputChars = v
 	}
@@ -82,13 +81,19 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 	return cfg
 }
 
-// RenderQueryAugmentPrompt substitutes the two named placeholders in the
-// operator-editable prompt template. strings.Replace, not fmt.Sprintf, so a
-// prompt body containing literal '%' characters is safe and a prompt that
-// drops or duplicates a placeholder cannot crash the call site.
-func RenderQueryAugmentPrompt(template, content string, n int) string {
-	out := strings.ReplaceAll(template, "{content}", content)
-	out = strings.ReplaceAll(out, "{N}", fmt.Sprintf("%d", n))
+// queryAugmentUserWrapper is the hardcoded dynamic-half template for the
+// query-augmentation phase. It carries the requested query count and the memory
+// content; the tunable instruction (role, rules, output format) lives entirely
+// in SettingQueryAugmentSystemPrompt, sent as the system message. The count and
+// content are substituted via strings.Replace, not fmt.Sprintf, so a memory body
+// containing literal '%' is safe.
+const queryAugmentUserWrapper = "Generate {N} short, distinct retrieval queries for the memory below.\n\n<memory>\n{content}\n</memory>"
+
+// RenderQueryAugmentUser builds the user message for the query-augmentation
+// phase from the memory content and the requested query count.
+func RenderQueryAugmentUser(content string, n int) string {
+	out := strings.ReplaceAll(queryAugmentUserWrapper, "{content}", content)
+	out = strings.ReplaceAll(out, "{N}", strconv.Itoa(n))
 	return out
 }
 
@@ -363,8 +368,8 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 		return nil, model.QueryAugmentSkipProviderUnavailable
 	}
 
-	system := RenderQueryAugmentPrompt(cfg.systemPrompt, mem.Content, cfg.count)
-	user := RenderQueryAugmentPrompt(cfg.prompt, mem.Content, cfg.count)
+	system := cfg.systemPrompt
+	user := RenderQueryAugmentUser(mem.Content, cfg.count)
 	// Deliberately NOT setting JSONMode. response_format=json_object on
 	// OpenAI-compatible providers (including Ollama's compat shim) forces
 	// the model to emit an object, not an array. qwen3:8b-extract observed

@@ -474,26 +474,19 @@ func SettingsSchemas() []api.SettingSchema {
 // service.GetDefault so the value the UI shows as the "default" cannot drift
 // from the value the runtime cascade falls back to in service.Resolve.
 var promptSchemaEntries = []api.SettingSchema{
-	// Each phase is split into a static system-instruction half (sent as the
-	// system role, a stable cacheable prefix) and a dynamic data half (sent as
-	// the user role, carrying the placeholders). The two are paired here so the
-	// Prompt Templates page can render them together.
-	{Key: service.SettingDreamContradictionSystemPrompt, Type: "prompt", Description: "Static system-instruction half for the contradiction-detection phase. No data placeholders; sets the task and JSON output contract. The statements and output schema live in the dynamic half.", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamContradictionPrompt, Type: "prompt", Description: "Dynamic half for the contradiction-detection phase. Two %s placeholders for Statement A and Statement B, plus the JSON output schema (`contradicts`, `winner` \"a\"/\"b\"/\"tie\"/null, `explanation`).", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamSynthesisSystemPrompt, Type: "prompt", Description: "Static system-instruction half for the consolidation synthesis phase. No data placeholders; instructs the model to merge sources into one synthesis with no commentary.", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamSynthesisPrompt, Type: "prompt", Description: "Dynamic half for the consolidation synthesis phase. One %s placeholder for the combined source content, plus the \"output only the synthesized text\" instruction.", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamAlignmentSystemPrompt, Type: "prompt", Description: "Static system-instruction half for alignment scoring. No data placeholders; sets the scoring task.", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamAlignmentPrompt, Type: "prompt", Description: "Dynamic half for alignment scoring. Two %s placeholders for synthesis and evidence, plus the JSON output schema (`alignment` float in [-1.0, 1.0], `reasoning`).", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamNoveltyJudgeSystemPrompt, Type: "prompt", Description: "Static system-instruction half for the novelty audit. No data placeholders; defines what counts as a novel fact and the hard rules.", Category: "dreaming_prompts"},
-	{Key: service.SettingDreamNoveltyJudgePrompt, Type: "prompt", Description: "Dynamic half for the novelty audit. Two %s placeholders for synthesis and sources, plus the JSON output schema (`novel_facts` array, empty when duplicative).", Category: "dreaming_prompts"},
-	{Key: service.SettingIngestionDecisionSystemPrompt, Type: "prompt", Description: "Static system-instruction half for the ingestion-decision phase. One %d placeholder for top_k rendered into the instructions; defines the ADD/UPDATE/DELETE/NONE choices and hard rules.", Category: "enrichment_prompts"},
-	{Key: service.SettingIngestionDecisionPrompt, Type: "prompt", Description: "Dynamic half for the ingestion-decision phase. Two %s placeholders in order: the new memory content, then the candidate list. Plus the JSON output schema {\"operation\":\"ADD|UPDATE|DELETE|NONE\",\"target_id\":\"uuid|null\",\"rationale\":\"string\"}.", Category: "enrichment_prompts"},
-	{Key: service.SettingFactSystemPrompt, Type: "prompt", Description: "Static system-instruction half for fact extraction. No data placeholders; defines the fact JSON shape and the hard rules.", Category: "enrichment_prompts"},
-	{Key: service.SettingFactPrompt, Type: "prompt", Description: "Dynamic half for fact extraction. One %s placeholder for the input content. The model returns a JSON array of {content, confidence, tags} objects.", Category: "enrichment_prompts"},
-	{Key: service.SettingEntitySystemPrompt, Type: "prompt", Description: "Static system-instruction half for entity and relationship extraction. No data placeholders; defines the entities/relationships JSON shape.", Category: "enrichment_prompts"},
-	{Key: service.SettingEntityPrompt, Type: "prompt", Description: "Dynamic half for entity and relationship extraction. One %s placeholder for the input content.", Category: "enrichment_prompts"},
-	{Key: service.SettingQueryAugmentSystemPrompt, Type: "prompt", Description: "Static system-instruction half for the query-augmentation phase. Named placeholder {N} is substituted with the requested query count (string replace, not fmt.Sprintf); defines the strict JSON-array output rules.", Category: "enrichment_prompts"},
-	{Key: service.SettingQueryAugmentPrompt, Type: "prompt", Description: "Dynamic half for the query-augmentation phase. Named placeholder {content} is substituted with the memory content (string replace). The model returns a JSON array of strings.", Category: "enrichment_prompts"},
+	// Each phase exposes one tunable system prompt: the full static instruction
+	// (role, rules, and the complete output contract/schema), sent as the system
+	// message. The dynamic memory data is wrapped by a hardcoded per-phase code
+	// template into the user message and is not a setting; the system prompt is
+	// the only operator-tunable LLM template.
+	{Key: service.SettingDreamContradictionSystemPrompt, Type: "prompt", Description: "System prompt for the contradiction-detection phase: the task plus the JSON output schema (`contradicts`, `winner` \"a\"/\"b\"/\"tie\"/null, `explanation`). The two statements are supplied as the user message.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamSynthesisSystemPrompt, Type: "prompt", Description: "System prompt for the consolidation synthesis phase: merge the sources into one synthesis with no commentary and output only the synthesized text. The source content is supplied as the user message.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamAlignmentSystemPrompt, Type: "prompt", Description: "System prompt for alignment scoring: the scoring task plus the JSON output schema (`alignment` float in [-1.0, 1.0], `reasoning`). The synthesis and evidence are supplied as the user message.", Category: "dreaming_prompts"},
+	{Key: service.SettingDreamNoveltyJudgeSystemPrompt, Type: "prompt", Description: "System prompt for the novelty audit: what counts as a novel fact, the hard rules, and the JSON output schema (`novel_facts` array, empty when duplicative). The synthesis and sources are supplied as the user message.", Category: "dreaming_prompts"},
+	{Key: service.SettingIngestionDecisionSystemPrompt, Type: "prompt", Description: "System prompt for the ingestion-decision phase: the ADD/UPDATE/DELETE/NONE choices, hard rules, and the JSON output schema {\"operation\":\"ADD|UPDATE|DELETE|NONE\",\"target_id\":\"uuid|null\",\"rationale\":\"string\"}. The new memory and candidate list are supplied as the user message.", Category: "enrichment_prompts"},
+	{Key: service.SettingFactSystemPrompt, Type: "prompt", Description: "System prompt for fact extraction: the fact JSON shape, the hard rules, and the \"return only JSON\" contract. The input content is supplied as the user message.", Category: "enrichment_prompts"},
+	{Key: service.SettingEntitySystemPrompt, Type: "prompt", Description: "System prompt for entity and relationship extraction: the entities/relationships JSON shape and the \"return only JSON\" contract. The input content is supplied as the user message.", Category: "enrichment_prompts"},
+	{Key: service.SettingQueryAugmentSystemPrompt, Type: "prompt", Description: "System prompt for the query-augmentation phase: the task and the strict JSON-array output rules. The requested query count and memory content are supplied as the user message.", Category: "enrichment_prompts"},
 }
 
 func init() {

@@ -1,35 +1,73 @@
 package service
 
 import (
+	"strings"
 	"testing"
-
-	"github.com/nram-ai/nram/internal/provider"
 )
 
-// TestPromptSplitReconstructsCombined verifies that for every phase the
-// system-instruction half joined with the dynamic half (via the canonical
-// separator) reproduces the original combined default byte for byte, and that
-// the registered defaults are the split halves. This guards the authored split:
-// the system and dynamic halves must remain a clean, reversible partition of
-// the pre-split single-message form.
-func TestPromptSplitReconstructsCombined(t *testing.T) {
-	for _, p := range promptSplitDefaults {
-		if p.combined == "" {
-			t.Fatalf("%s: combined default not captured at init", p.combinedKey)
+// systemPromptKeys are the eight per-phase tunable system-prompt keys. After the
+// v0.3.0 clean cut the system prompt is the only tunable LLM template; the
+// dynamic data wrapper is hardcoded code, not a setting.
+var systemPromptKeys = []string{
+	SettingFactSystemPrompt,
+	SettingEntitySystemPrompt,
+	SettingIngestionDecisionSystemPrompt,
+	SettingQueryAugmentSystemPrompt,
+	SettingDreamContradictionSystemPrompt,
+	SettingDreamSynthesisSystemPrompt,
+	SettingDreamAlignmentSystemPrompt,
+	SettingDreamNoveltyJudgeSystemPrompt,
+}
+
+// TestSystemPromptDefaultsAreVerbFree verifies that every phase registers a
+// non-empty system-prompt default and that none contains a printf verb. The
+// system prompt is pure static text sent as the system message; the dynamic data
+// is injected by a per-phase code wrapper into the user message, so a stray '%'
+// in the tunable prompt could only be an authoring mistake (and would corrupt any
+// fmt path the value flows through).
+func TestSystemPromptDefaultsAreVerbFree(t *testing.T) {
+	for _, key := range systemPromptKeys {
+		def, ok := GetDefault(key)
+		if !ok {
+			t.Errorf("%s: no registered default", key)
+			continue
 		}
-		gotSystem := settingDefaults[p.systemKey]
-		gotDynamic := settingDefaults[p.combinedKey]
-		if gotSystem != p.systemText {
-			t.Errorf("%s: system default does not match authored systemText", p.systemKey)
+		if strings.TrimSpace(def) == "" {
+			t.Errorf("%s: default is empty", key)
 		}
-		rejoined := gotSystem + provider.PromptSplitSeparator + gotDynamic
-		if rejoined != p.combined {
-			t.Errorf("%s: split halves do not rejoin to the original combined default", p.combinedKey)
+		if strings.Contains(def, "%") {
+			t.Errorf("%s: system prompt must be verb-free static text but contains '%%'", key)
 		}
-		// The dynamic half must be a strict, non-empty suffix of the combined
-		// default (the system half plus a blank line was trimmed off the front).
-		if gotDynamic == "" || gotDynamic == p.combined {
-			t.Errorf("%s: dynamic half was not trimmed from the combined default", p.combinedKey)
+	}
+}
+
+// TestSystemPromptDefaultsCarryOutputContract verifies that each phase's output
+// contract lives in the system prompt (not the data wrapper, which the clean cut
+// moved into code). A regression here would mean the model is no longer told the
+// required output shape.
+func TestSystemPromptDefaultsCarryOutputContract(t *testing.T) {
+	cases := map[string]string{
+		SettingFactSystemPrompt:               "Return ONLY valid JSON",
+		SettingEntitySystemPrompt:             "Return ONLY valid JSON",
+		SettingIngestionDecisionSystemPrompt:  `"operation": "ADD"`,
+		SettingQueryAugmentSystemPrompt:       "OUTPUT FORMAT",
+		SettingDreamContradictionSystemPrompt: `"contradicts"`,
+		SettingDreamSynthesisSystemPrompt:     "Output ONLY the synthesized text",
+		SettingDreamAlignmentSystemPrompt:     `"alignment"`,
+		SettingDreamNoveltyJudgeSystemPrompt:  `"novel_facts"`,
+	}
+	for key, marker := range cases {
+		def, _ := GetDefault(key)
+		if !strings.Contains(def, marker) {
+			t.Errorf("%s: system prompt is missing its output contract marker %q", key, marker)
 		}
+	}
+}
+
+// TestRenderExtractionUser verifies the hardcoded fact/entity data wrapper.
+func TestRenderExtractionUser(t *testing.T) {
+	got := RenderExtractionUser("hello world")
+	if got != "Text:\nhello world" {
+		t.Errorf("unexpected extraction user message: %q", got)
 	}
 }

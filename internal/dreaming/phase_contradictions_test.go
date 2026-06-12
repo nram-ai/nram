@@ -1171,13 +1171,11 @@ func (f *fakeContradictionVectorStore) TruncateAllVectors(_ context.Context) err
 func (f *fakeContradictionVectorStore) Ping(_ context.Context) error               { return nil }
 
 // paraphraseSettings returns a settings stub that turns paraphrase fast-path
-// on at the configured threshold and supplies the contradiction prompt
-// template the phase fmt.Sprintfs onto pair contents. Threshold defaults
-// to 0.97 to mirror the production default.
+// on at the configured threshold. The contradiction system prompt falls back to
+// its registered default; the user message is built by the phase's hardcoded
+// code wrapper. Threshold defaults to 0.97 to mirror the production default.
 func paraphraseSettings(enabled bool, threshold float64) *staticDreamSettings {
-	values := map[string]string{
-		service.SettingDreamContradictionPrompt: "Compare:\nA: %s\nB: %s\nReturn JSON.",
-	}
+	values := map[string]string{}
 	if enabled {
 		values[service.SettingDreamContradictionParaphraseEnabled] = "true"
 	}

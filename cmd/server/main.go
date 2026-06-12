@@ -251,20 +251,6 @@ func main() {
 		log.Printf("warning: settings seed failed: %v", err)
 	}
 
-	// One-time migration of prompt rows written before the v0.2.0 system/user
-	// prompt split: rewrite any prompt still holding the old combined default to
-	// the new dynamic-only default so the split applies cleanly, then warn for
-	// genuine operator-customized prompts that need manual migration. Idempotent.
-	{
-		ctx := context.Background()
-		if n, err := settingsSvc.ReconcileSplitPromptDefaults(ctx); err != nil {
-			log.Printf("warning: prompt-split default reconciliation failed (will retry next boot): %v", err)
-		} else if n > 0 {
-			log.Printf("prompt-split migration: adopted new split defaults for %d unmodified prompt(s)", n)
-		}
-		settingsSvc.WarnOnSplitPromptOverrides(ctx)
-	}
-
 	// One-time canonicalization of existing relationships.relation values so rows
 	// written before write-time canonicalization (and the admin graph viz, which
 	// reads stored relations verbatim) are clean and merged. Guarded by a marker
@@ -1069,18 +1055,6 @@ func main() {
 			Store:          enrichmentAdminStore,
 			FactProvider:   factProvider,
 			EntityProvider: entityProvider,
-			FactPromptDefault: func(ctx context.Context) string {
-				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingFactPrompt, "global")
-			},
-			EntityPromptDefault: func(ctx context.Context) string {
-				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingEntityPrompt, "global")
-			},
-			QueryAugmentPromptDef: func(ctx context.Context) string {
-				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingQueryAugmentPrompt, "global")
-			},
-			IngestionPromptDefault: func(ctx context.Context) string {
-				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingIngestionDecisionPrompt, "global")
-			},
 			FactSystemPromptDefault: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingFactSystemPrompt, "global")
 			},

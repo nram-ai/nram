@@ -86,10 +86,27 @@ type geminiContent struct {
 
 // geminiGenerationConfig holds generation parameters for Gemini.
 type geminiGenerationConfig struct {
-	MaxOutputTokens  int      `json:"maxOutputTokens,omitempty"`
-	Temperature      *float64 `json:"temperature,omitempty"`
-	StopSequences    []string `json:"stopSequences,omitempty"`
-	ResponseMimeType string   `json:"responseMimeType,omitempty"`
+	MaxOutputTokens  int                   `json:"maxOutputTokens,omitempty"`
+	Temperature      *float64              `json:"temperature,omitempty"`
+	StopSequences    []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType string                `json:"responseMimeType,omitempty"`
+	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+// geminiThinkingConfig controls the model's thinking pass. ThinkingBudget:0
+// disables thinking; see geminiThinkingOffSupported for which models accept it.
+type geminiThinkingConfig struct {
+	ThinkingBudget *int `json:"thinkingBudget,omitempty"`
+}
+
+// geminiThinkingOffSupported reports whether thinkingBudget:0 is a valid
+// "disable thinking" value for the model. Only the Gemini 2.5 Flash family
+// accepts 0: Gemini 2.5 Pro requires a budget >= 128, pre-2.5 models reject
+// thinkingConfig outright, and 3.x uses a different control (thinkingLevel).
+// Allowlisting by name means a model that cannot disable thinking is never sent
+// an invalid value that would fail the call; it just keeps its default behavior.
+func geminiThinkingOffSupported(model string) bool {
+	return strings.Contains(strings.ToLower(model), "2.5-flash")
 }
 
 // geminiGenerateRequest is the request body for generateContent.
@@ -204,7 +221,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		SystemInstruction: systemInstruction,
 	}
 
-	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 || req.JSONMode {
+	disableThinking := geminiThinkingOffSupported(model)
+	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 || req.JSONMode || disableThinking {
 		gc := &geminiGenerationConfig{}
 		if req.MaxTokens > 0 {
 			gc.MaxOutputTokens = req.MaxTokens
@@ -218,6 +236,12 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		}
 		if req.JSONMode {
 			gc.ResponseMimeType = "application/json"
+		}
+		if disableThinking {
+			// These are extraction/decision/synthesis calls; the thinking pass is
+			// wasted tokens. Force it off where the model supports it.
+			zero := 0
+			gc.ThinkingConfig = &geminiThinkingConfig{ThinkingBudget: &zero}
 		}
 		body.GenerationConfig = gc
 	}

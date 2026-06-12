@@ -182,7 +182,6 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	}
 
 	systemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamContradictionSystemPrompt)
-	promptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamContradictionPrompt)
 
 	// Index stale by ID so haircut/supersede updates can be mirrored back.
 	// The post-loop stamp pass writes Update on each stale[i].Mem with all
@@ -230,7 +229,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// Pre-flight budget check using the 4-bytes-per-token heuristic on
 		// the prompt plus the per-call output cap. Prevents starting calls
 		// we can't afford to record.
-		userPrompt := fmt.Sprintf(promptTemplate, pair[0].Content, pair[1].Content)
+		userPrompt := service.RenderContradictionUser(pair[0].Content, pair[1].Content)
 		estPrompt := systemPrompt + provider.PromptSplitSeparator + userPrompt
 		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {

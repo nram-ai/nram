@@ -228,9 +228,7 @@ func (w *updatingMemoryWriter) MutateInLock(_ context.Context, id uuid.UUID, _ u
 // tests. Callers can mutate the returned struct's ints map to set per-test
 // values like SettingDreamNoveltyBackfillPerCycle and judge max tokens.
 func noveltySettings(enabled bool) *staticDreamSettings {
-	values := map[string]string{
-		service.SettingDreamNoveltyJudgePrompt: `{"novel_facts": []} synth=%s sources=%s`,
-	}
+	values := map[string]string{}
 	if enabled {
 		values[service.SettingDreamNoveltyEnabled] = "true"
 	}
@@ -1053,9 +1051,7 @@ func TestIsPersistentEmbedError(t *testing.T) {
 // can mutate the returned struct to override individual values.
 func reinforceSettings() *staticDreamSettings {
 	return &staticDreamSettings{
-		values: map[string]string{
-			service.SettingDreamAlignmentPrompt: "synthesis: %s\nevidence: %s",
-		},
+		values: map[string]string{},
 		floats: map[string]float64{
 			service.SettingDreamInitialConfidence:     0.3,
 			service.SettingDreamSupersessionThreshold: 0.85,
@@ -1507,10 +1503,7 @@ func TestCollectReinforceStale_PartitionsMixedSet(t *testing.T) {
 // tests. Callers can mutate the returned struct to disable novelty (omit
 // the SettingDreamNoveltyEnabled key) or override thresholds.
 func consolidateSettings(noveltyEnabled bool) *staticDreamSettings {
-	values := map[string]string{
-		service.SettingDreamSynthesisPrompt:    "synth: %s",
-		service.SettingDreamNoveltyJudgePrompt: "judge: %s vs %s",
-	}
+	values := map[string]string{}
 	if noveltyEnabled {
 		values[service.SettingDreamNoveltyEnabled] = "true"
 	}

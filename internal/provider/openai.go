@@ -91,6 +91,11 @@ type openaiResponseFormat struct {
 	Type string `json:"type"`
 }
 
+// ollamaReasoningEffortOff is the reasoning_effort value sent on every Ollama
+// chat call to disable the model's thinking pass. Declared as a package var so
+// its address can be taken for the pointer field.
+var ollamaReasoningEffortOff = "none"
+
 // openaiChatRequest is the request body for POST /v1/chat/completions.
 //
 // RepeatPenalty, TopK, MinP are Ollama-extension fields. They are populated
@@ -112,6 +117,25 @@ type openaiChatRequest struct {
 	// (gated by ProviderTypeOllama at the call site).
 	KeepAlive *string `json:"keep_alive,omitempty"`
 	NumCtx    *int    `json:"num_ctx,omitempty"`
+	// ReasoningEffort disables the model's thinking pass. Recent Ollama releases
+	// default thinking ON for reasoning-capable models (e.g. qwen3), which adds a
+	// long, unused reasoning trace before every answer. On Ollama's OpenAI-compat
+	// endpoint the only knob that disables it is reasoning_effort:"none" (the
+	// native think:false field and chat_template_kwargs are both ignored there,
+	// verified against Ollama). Gated by ProviderTypeOllama: strict OpenAI rejects
+	// reasoning_effort on non-reasoning models, so it is never sent to them.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+	// Reasoning is OpenRouter's unified reasoning control. {"enabled": false}
+	// disables the model's reasoning pass; OpenRouter normalizes it across
+	// providers and ignores it for models without optional reasoning. Gated by
+	// ProviderTypeOpenRouter. Models that mandate reasoning reject it (rare; not
+	// used for extraction/decision tasks).
+	Reasoning *openrouterReasoning `json:"reasoning,omitempty"`
+}
+
+// openrouterReasoning is the body of OpenRouter's `reasoning` request field.
+type openrouterReasoning struct {
+	Enabled bool `json:"enabled"`
 }
 
 // openaiChatChoice is a single choice in a chat completion response.
@@ -218,6 +242,15 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		if nc := p.ollamaNumCtx(req.NumCtx); nc != nil {
 			body.NumCtx = nc
 		}
+		// Force thinking off (see ReasoningEffort field doc). These are
+		// extraction/decision/synthesis calls that never benefit from a reasoning
+		// trace, and recent Ollama defaults it on, adding tens of seconds per call.
+		body.ReasoningEffort = &ollamaReasoningEffortOff
+	}
+	if p.config.ProviderType == ProviderTypeOpenRouter {
+		// Force reasoning off for the same reason; OpenRouter's unified `reasoning`
+		// field disables it across the models that support toggling.
+		body.Reasoning = &openrouterReasoning{Enabled: false}
 	}
 
 	var chatResp openaiChatResponse

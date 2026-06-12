@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.2.1
+  version: 0.3.0
   license:
     name: MIT
 
@@ -5556,7 +5556,6 @@ components:
         - "auth.session_token_ttl_seconds"
         - "cascade.cache_ttl_seconds"
         - "dreaming.alignment.temperature"
-        - "dreaming.alignment_prompt"
         - "dreaming.alignment_system_prompt"
         - "dreaming.augmentation_backfill.budget_fraction"
         - "dreaming.augmentation_backfill.cap_per_cycle"
@@ -5578,7 +5577,6 @@ components:
         - "dreaming.contradiction.temperature"
         - "dreaming.contradiction.tie_haircut"
         - "dreaming.contradiction.winner_haircut"
-        - "dreaming.contradiction_prompt"
         - "dreaming.contradiction_system_prompt"
         - "dreaming.cooldown_seconds"
         - "dreaming.embedding_backfill.budget_fraction"
@@ -5602,7 +5600,6 @@ components:
         - "dreaming.novelty.enabled"
         - "dreaming.novelty.judge.temperature"
         - "dreaming.novelty.judge_max_tokens"
-        - "dreaming.novelty.judge_prompt"
         - "dreaming.novelty.judge_system_prompt"
         - "dreaming.paraphrase.cap_per_cycle"
         - "dreaming.paraphrase.enabled"
@@ -5620,7 +5617,6 @@ components:
         - "dreaming.stuck_threshold_seconds"
         - "dreaming.supersession_threshold"
         - "dreaming.synthesis.temperature"
-        - "dreaming.synthesis_prompt"
         - "dreaming.synthesis_system_prompt"
         - "dreaming.transitive.budget_fraction"
         - "dreaming.transitive.max_per_cycle"
@@ -5648,7 +5644,6 @@ components:
         - "enrichment.entity_extraction.repeat_penalty"
         - "enrichment.entity_extraction.sync.temperature"
         - "enrichment.entity_extraction.top_k"
-        - "enrichment.entity_prompt"
         - "enrichment.entity_system_prompt"
         - "enrichment.extracted_fact_backfill_batch_size"
         - "enrichment.extracted_fact_guard_enabled"
@@ -5659,12 +5654,10 @@ components:
         - "enrichment.fact_extraction.repeat_penalty"
         - "enrichment.fact_extraction.sync.temperature"
         - "enrichment.fact_extraction.top_k"
-        - "enrichment.fact_prompt"
         - "enrichment.fact_system_prompt"
         - "enrichment.failed_retention_days"
         - "enrichment.ingestion.rationale_max_len"
         - "enrichment.ingestion_decision.enabled"
-        - "enrichment.ingestion_decision.prompt"
         - "enrichment.ingestion_decision.shadow_mode"
         - "enrichment.ingestion_decision.system_prompt"
         - "enrichment.ingestion_decision.temperature"
@@ -5675,7 +5668,6 @@ components:
         - "enrichment.query_augment.enabled"
         - "enrichment.query_augment.max_input_chars"
         - "enrichment.query_augment.max_tokens"
-        - "enrichment.query_augment.prompt"
         - "enrichment.query_augment.system_prompt"
         - "enrichment.stuck_scan_limit"
         - "enrichment.stuck_sweep_seconds"
@@ -5874,12 +5866,19 @@ components:
       properties:
         type:
           type: string
-          enum: [fact, entity]
-        prompt:
+          enum: [fact, entity, augment, ingestion]
+        system_prompt:
           type: string
-          description: Custom prompt (uses default if empty)
+          description: >-
+            Tunable instruction sent as the system message. Empty falls back to
+            the phase's registered system-prompt default. The dynamic user
+            message is built from the phase's hardcoded code wrapper applied to
+            sample_input.
         sample_input:
           type: string
+        count:
+          type: integer
+          description: Number of queries to generate; only used when type is "augment" (default 4).
 
     EnrichmentTestPromptResponse:
       type: object

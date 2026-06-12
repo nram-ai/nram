@@ -507,9 +507,9 @@ func (c *capturingLLMProvider) Models() []string { return []string{"mock"} }
 func TestEnrichmentTestPrompt_AugmentUsesDedicatedProvider(t *testing.T) {
 	capLLM := &capturingLLMProvider{content: `["how does x work?", "what is x?"]`}
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
-		Store:                 &mockEnrichmentAdminStore{},
-		QueryAugmentProvider:  func() provider.LLMProvider { return capLLM },
-		QueryAugmentPromptDef: func(_ context.Context) string { return "Generate {N} queries for: {content}" },
+		Store:                       &mockEnrichmentAdminStore{},
+		QueryAugmentProvider:        func() provider.LLMProvider { return capLLM },
+		QueryAugmentSystemPromptDef: func(_ context.Context) string { return "You are a query augmenter. Output a JSON array of strings." },
 	})
 
 	body := `{"type":"augment","sample_input":"some memory content"}`
@@ -540,8 +540,8 @@ func TestEnrichmentTestPrompt_IngestionUsesDedicatedProvider(t *testing.T) {
 	h := NewAdminEnrichmentHandler(EnrichmentAdminConfig{
 		Store:             &mockEnrichmentAdminStore{},
 		IngestionProvider: func() provider.LLMProvider { return capLLM },
-		IngestionPromptDefault: func(_ context.Context) string {
-			return "Up to %d candidates. New memory: %s Candidates: %s"
+		IngestionSystemPromptDefault: func(_ context.Context) string {
+			return "You are an ingestion decision engine. Output JSON only."
 		},
 	})
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   useSettings,
   useSettingsSchema,
@@ -13,36 +13,28 @@ import { faCheck, faXmark, faSpinner } from "../lib/icons";
 // Constants
 // ---------------------------------------------------------------------------
 
-// Canonical prompt keys. Both fact and entity prompts now have schema entries
-// with backend-registered defaults, so the editor reads description and
-// default value straight from useSettingsSchema, so no UI fallback is needed.
-const FACT_PROMPT_KEY = "enrichment.fact_prompt";
-const ENTITY_PROMPT_KEY = "enrichment.entity_prompt";
-const AUGMENT_PROMPT_KEY = "enrichment.query_augment.prompt";
-const INGESTION_PROMPT_KEY = "enrichment.ingestion_decision.prompt";
-
-// System-instruction companion keys (the static, cacheable half of each phase's
-// prompt). Each is edited alongside its dynamic data template below.
+// The system prompt is the only tunable LLM template per phase (v0.3.0 clean
+// cut). It holds the full static instruction: role, rules, and the output
+// contract/schema. The dynamic memory data is wrapped by a hardcoded per-phase
+// code template into the user message and is not editable here.
 const FACT_SYSTEM_PROMPT_KEY = "enrichment.fact_system_prompt";
 const ENTITY_SYSTEM_PROMPT_KEY = "enrichment.entity_system_prompt";
 const AUGMENT_SYSTEM_PROMPT_KEY = "enrichment.query_augment.system_prompt";
 const INGESTION_SYSTEM_PROMPT_KEY = "enrichment.ingestion_decision.system_prompt";
 
 interface SimplePromptSpec {
-  key: string;
   systemKey: string;
   title: string;
 }
 
 // Title is UI-only; the prompt body default and the per-key description are
-// resolved from the admin settings schema at render time so the editor
-// cannot drift from the runtime cascade in service.GetDefault. systemKey is the
-// static instruction half, rendered as a paired card above the dynamic half.
+// resolved from the admin settings schema at render time so the editor cannot
+// drift from the runtime cascade in service.GetDefault.
 const DREAMING_PROMPTS: SimplePromptSpec[] = [
-  { key: "dreaming.contradiction_prompt", systemKey: "dreaming.contradiction_system_prompt", title: "Contradiction Detection" },
-  { key: "dreaming.synthesis_prompt", systemKey: "dreaming.synthesis_system_prompt", title: "Memory Synthesis" },
-  { key: "dreaming.alignment_prompt", systemKey: "dreaming.alignment_system_prompt", title: "Alignment Scoring" },
-  { key: "dreaming.novelty.judge_prompt", systemKey: "dreaming.novelty.judge_system_prompt", title: "Novelty Judge" },
+  { systemKey: "dreaming.contradiction_system_prompt", title: "Contradiction Detection" },
+  { systemKey: "dreaming.synthesis_system_prompt", title: "Memory Synthesis" },
+  { systemKey: "dreaming.alignment_system_prompt", title: "Alignment Scoring" },
+  { systemKey: "dreaming.novelty.judge_system_prompt", title: "Novelty Judge" },
 ];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
@@ -270,7 +262,7 @@ function PromptEditorCard({
           value={editValue}
           onChange={setEditValue}
           rows={14}
-          placeholder="Enter extraction prompt..."
+          placeholder="Enter system prompt..."
         />
 
         {/* Action buttons */}
@@ -338,8 +330,9 @@ function PromptEditorCard({
           Test with Sample Input
         </h3>
         <p className="text-xs text-muted-foreground">
-          Enter sample memory content below and run the prompt through the
-          configured LLM provider to see parsed output.
+          Enter sample memory content below and run the saved system prompt
+          through the configured LLM provider to see parsed output. The sample
+          is wrapped in the phase's data template automatically.
         </p>
 
         <textarea
@@ -472,7 +465,7 @@ function SimplePromptEditorCard({
           value={editValue}
           onChange={setEditValue}
           rows={10}
-          placeholder="Enter prompt..."
+          placeholder="Enter system prompt..."
         />
 
         <div className="flex items-center justify-between">
@@ -536,29 +529,6 @@ function SimplePromptEditorCard({
 }
 
 // ---------------------------------------------------------------------------
-// Prompt Pair Group
-// ---------------------------------------------------------------------------
-
-// PromptPairGroup wraps a phase's two halves (system instructions + dynamic
-// data template) in a single labeled container so it reads as one unit rather
-// than two unrelated stacked cards. The muted container lets the inner cards
-// (bg-card) stand out as the two parts of the same prompt.
-function PromptPairGroup({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-muted/30 p-3 sm:p-4">
-      <h3 className="mb-3 px-1 text-sm font-semibold text-foreground">{title}</h3>
-      <div className="space-y-3">{children}</div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -591,13 +561,9 @@ export default function PromptTemplates() {
   const [testingAugment, setTestingAugment] = useState(false);
   const [testingIngestion, setTestingIngestion] = useState(false);
 
-  // Track the current saved prompt values for testing. A test reconstructs the
-  // combined prompt (system + blank line + dynamic) so it exercises exactly what
-  // the runtime sends; the dynamic half alone is missing the instructions.
-  const factPromptRef = useRef("");
-  const entityPromptRef = useRef("");
-  const augmentPromptRef = useRef("");
-  const ingestionPromptRef = useRef("");
+  // Track the current saved system-prompt values for testing. A test sends the
+  // saved system prompt; the sample input is wrapped by the phase's code data
+  // template server-side, so the test exercises exactly what the runtime sends.
   const factSystemPromptRef = useRef("");
   const entitySystemPromptRef = useRef("");
   const augmentSystemPromptRef = useRef("");
@@ -634,36 +600,9 @@ export default function PromptTemplates() {
   const settings = settingsQuery.data?.data ?? [];
   const settingsMap = new Map(settings.map((s) => [s.key, s]));
 
-  // Resolve prompt data. Defaults come from the registered schema; the
-  // empty-string fallback is only reached if the schema entry is missing,
-  // which would itself be a registration bug surfaced at server boot.
-  const factPromptData = resolvePromptData(
-    [FACT_PROMPT_KEY],
-    schemas,
-    settingsMap,
-    "",
-  );
-  const entityPromptData = resolvePromptData(
-    [ENTITY_PROMPT_KEY],
-    schemas,
-    settingsMap,
-    "",
-  );
-  const augmentPromptData = resolvePromptData(
-    [AUGMENT_PROMPT_KEY],
-    schemas,
-    settingsMap,
-    "",
-  );
-  const ingestionPromptData = resolvePromptData(
-    [INGESTION_PROMPT_KEY],
-    schemas,
-    settingsMap,
-    "",
-  );
-
-  // System-instruction halves (static, cacheable). Rendered as a paired card
-  // above each dynamic data template.
+  // Resolve system-prompt data. Defaults come from the registered schema; the
+  // empty-string fallback is only reached if the schema entry is missing, which
+  // would itself be a registration bug surfaced at server boot.
   const factSystemPromptData = resolvePromptData([FACT_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
   const entitySystemPromptData = resolvePromptData([ENTITY_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
   const augmentSystemPromptData = resolvePromptData([AUGMENT_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
@@ -671,23 +610,10 @@ export default function PromptTemplates() {
 
   const dreamingPrompts = DREAMING_PROMPTS.map((spec) => ({
     spec,
-    data: resolvePromptData([spec.key], schemas, settingsMap, ""),
     systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
   }));
 
   // Keep refs updated for test calls.
-  if (factPromptData) {
-    factPromptRef.current = factPromptData.currentValue;
-  }
-  if (entityPromptData) {
-    entityPromptRef.current = entityPromptData.currentValue;
-  }
-  if (augmentPromptData) {
-    augmentPromptRef.current = augmentPromptData.currentValue;
-  }
-  if (ingestionPromptData) {
-    ingestionPromptRef.current = ingestionPromptData.currentValue;
-  }
   factSystemPromptRef.current = factSystemPromptData.currentValue;
   entitySystemPromptRef.current = entitySystemPromptData.currentValue;
   augmentSystemPromptRef.current = augmentSystemPromptData.currentValue;
@@ -700,7 +626,6 @@ export default function PromptTemplates() {
     testMutation.mutate(
       {
         type: "fact",
-        prompt: factPromptRef.current,
         systemPrompt: factSystemPromptRef.current,
         sampleInput: factSampleInput,
       },
@@ -729,7 +654,6 @@ export default function PromptTemplates() {
     testMutation.mutate(
       {
         type: "augment",
-        prompt: augmentPromptRef.current,
         systemPrompt: augmentSystemPromptRef.current,
         sampleInput: augmentSampleInput,
         // Server defaults to 4 when count is omitted, matching
@@ -761,7 +685,6 @@ export default function PromptTemplates() {
     testMutation.mutate(
       {
         type: "ingestion",
-        prompt: ingestionPromptRef.current,
         systemPrompt: ingestionSystemPromptRef.current,
         sampleInput: ingestionSampleInput,
       },
@@ -790,7 +713,6 @@ export default function PromptTemplates() {
     testMutation.mutate(
       {
         type: "entity",
-        prompt: entityPromptRef.current,
         systemPrompt: entitySystemPromptRef.current,
         sampleInput: entitySampleInput,
       },
@@ -820,10 +742,10 @@ export default function PromptTemplates() {
           Prompt Templates
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          The system prompts the model uses for enrichment and dreaming.
-          Enrichment prompts decide how facts and entities are pulled out of
-          new memories. Dreaming prompts decide how the model consolidates
-          knowledge in the background.
+          The system prompts the model uses for enrichment and dreaming. Each
+          phase exposes one tunable system prompt holding the full instruction
+          and output contract; the memory data is wrapped into the user message
+          by a fixed code template and is not editable here.
         </p>
       </div>
 
@@ -846,128 +768,78 @@ export default function PromptTemplates() {
       {/* Content */}
       {!isLoading && !isError && (
         <div className="space-y-8">
-          {/* Each phase is split into a static System Instructions card (the
-              cacheable prefix) and a Data Template card (carrying the
-              placeholders, with the live test harness). */}
+          {/* Fact Extraction */}
+          <PromptEditorCard
+            title="Fact Extraction"
+            description={factSystemPromptData.description}
+            promptData={factSystemPromptData}
+            onSave={handleSave}
+            saving={updateMutation.isPending}
+            onTest={handleTestFact}
+            testing={testingFact}
+            testResult={factTestResult}
+            sampleInput={factSampleInput}
+            onSampleInputChange={setFactSampleInput}
+          />
 
-          {/* Fact Extraction Prompt */}
-          {factPromptData && (
-            <PromptPairGroup title="Fact Extraction">
-              <SimplePromptEditorCard
-                title="System Instructions"
-                description={factSystemPromptData.description}
-                promptData={factSystemPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-              />
-              <PromptEditorCard
-                title="Data Template"
-                description="This prompt instructs the LLM to extract discrete, standalone facts from memory content. Facts are stored as separate memories with confidence scores."
-                promptData={factPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-                onTest={handleTestFact}
-                testing={testingFact}
-                testResult={factTestResult}
-                sampleInput={factSampleInput}
-                onSampleInputChange={setFactSampleInput}
-              />
-            </PromptPairGroup>
-          )}
+          {/* Entity Extraction */}
+          <PromptEditorCard
+            title="Entity Extraction"
+            description={entitySystemPromptData.description}
+            promptData={entitySystemPromptData}
+            onSave={handleSave}
+            saving={updateMutation.isPending}
+            onTest={handleTestEntity}
+            testing={testingEntity}
+            testResult={entityTestResult}
+            sampleInput={entitySampleInput}
+            onSampleInputChange={setEntitySampleInput}
+          />
 
-          {/* Entity Extraction Prompt */}
-          {entityPromptData && (
-            <PromptPairGroup title="Entity Extraction">
-              <SimplePromptEditorCard
-                title="System Instructions"
-                description={entitySystemPromptData.description}
-                promptData={entitySystemPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-              />
-              <PromptEditorCard
-                title="Data Template"
-                description="This prompt instructs the LLM to identify entities (people, organizations, technologies, places) and their relationships from memory content. Results populate the knowledge graph."
-                promptData={entityPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-                onTest={handleTestEntity}
-                testing={testingEntity}
-                testResult={entityTestResult}
-                sampleInput={entitySampleInput}
-                onSampleInputChange={setEntitySampleInput}
-              />
-            </PromptPairGroup>
-          )}
-
-          {/* Query Augmentation Prompt. Template uses named placeholders
-              {content} and {N}, not %s, so operators can safely include
-              literal '%' in the body. */}
-          {augmentPromptData && (
-            <PromptPairGroup title="Query Augmentation">
-              <SimplePromptEditorCard
-                title="System Instructions"
-                description={augmentSystemPromptData.description}
-                promptData={augmentSystemPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-              />
-              <PromptEditorCard
-                title="Data Template"
-                description="Generates short paraphrased queries the augmentation phase prepends to memory content before embedding, so a single vector captures the fact and the ways someone would ask about it. Off by default; enable in Settings then use Backfill to re-embed pre-flag memories."
-                promptData={augmentPromptData}
-                onSave={handleSave}
-                saving={updateMutation.isPending}
-                onTest={handleTestAugment}
-                testing={testingAugment}
-                testResult={augmentTestResult}
-                sampleInput={augmentSampleInput}
-                onSampleInputChange={setAugmentSampleInput}
-              />
-            </PromptPairGroup>
-          )}
+          {/* Query Augmentation */}
+          <PromptEditorCard
+            title="Query Augmentation"
+            description={augmentSystemPromptData.description}
+            promptData={augmentSystemPromptData}
+            onSave={handleSave}
+            saving={updateMutation.isPending}
+            onTest={handleTestAugment}
+            testing={testingAugment}
+            testResult={augmentTestResult}
+            sampleInput={augmentSampleInput}
+            onSampleInputChange={setAugmentSampleInput}
+          />
 
           {/* Enrichment Prompts Section */}
-          {ingestionPromptData && (
-            <div className="border-t border-border pt-8">
-              <div className="mb-6">
-                <h2 className="text-xl font-semibold tracking-tight">
-                  Enrichment Prompts
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Additional prompts used by the enrichment pipeline beyond
-                  fact and entity extraction. The ingestion-decision prompt
-                  drives the ADD/UPDATE/DELETE/NONE judgment on near-duplicate
-                  matches at write time. The test runs the prompt with an empty
-                  candidate list against the ingestion-decision provider slot
-                  (configured under Provider Configuration), so it exercises the
-                  prompt and the model that slot resolves to.
-                </p>
-              </div>
-
-              <PromptPairGroup title="Ingestion Decision">
-                <SimplePromptEditorCard
-                  title="System Instructions"
-                  description={ingestionSystemPromptData.description}
-                  promptData={ingestionSystemPromptData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-                <PromptEditorCard
-                  title="Data Template"
-                  description={ingestionPromptData.description}
-                  promptData={ingestionPromptData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                  onTest={handleTestIngestion}
-                  testing={testingIngestion}
-                  testResult={ingestionTestResult}
-                  sampleInput={ingestionSampleInput}
-                  onSampleInputChange={setIngestionSampleInput}
-                />
-              </PromptPairGroup>
+          <div className="border-t border-border pt-8">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Enrichment Prompts
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Additional prompts used by the enrichment pipeline beyond fact
+                and entity extraction. The ingestion-decision prompt drives the
+                ADD/UPDATE/DELETE/NONE judgment on near-duplicate matches at
+                write time. The test runs with an empty candidate list against
+                the ingestion-decision provider slot (configured under Provider
+                Configuration), so it exercises the prompt and the model that
+                slot resolves to.
+              </p>
             </div>
-          )}
+
+            <PromptEditorCard
+              title="Ingestion Decision"
+              description={ingestionSystemPromptData.description}
+              promptData={ingestionSystemPromptData}
+              onSave={handleSave}
+              saving={updateMutation.isPending}
+              onTest={handleTestIngestion}
+              testing={testingIngestion}
+              testResult={ingestionTestResult}
+              sampleInput={ingestionSampleInput}
+              onSampleInputChange={setIngestionSampleInput}
+            />
+          </div>
 
           {/* Dreaming Prompts Section */}
           <div className="border-t border-border pt-8">
@@ -980,29 +852,20 @@ export default function PromptTemplates() {
                 memory consolidation. They control how the LLM detects
                 contradictions, synthesizes related memories, scores alignment
                 between new evidence and existing knowledge, and audits the
-                novelty of each synthesis. Prompts use %s placeholders for
-                content injection.
+                novelty of each synthesis.
               </p>
             </div>
 
             <div className="space-y-6">
-              {dreamingPrompts.map(({ spec, data, systemData }) => (
-                <PromptPairGroup key={spec.key} title={spec.title}>
-                  <SimplePromptEditorCard
-                    title="System Instructions"
-                    description={systemData.description}
-                    promptData={systemData}
-                    onSave={handleSave}
-                    saving={updateMutation.isPending}
-                  />
-                  <SimplePromptEditorCard
-                    title="Data Template"
-                    description={data.description}
-                    promptData={data}
-                    onSave={handleSave}
-                    saving={updateMutation.isPending}
-                  />
-                </PromptPairGroup>
+              {dreamingPrompts.map(({ spec, systemData }) => (
+                <SimplePromptEditorCard
+                  key={spec.systemKey}
+                  title={spec.title}
+                  description={systemData.description}
+                  promptData={systemData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
               ))}
             </div>
           </div>

@@ -60,9 +60,9 @@ type ConflictResult struct {
 // existing memories in the same namespace. When a contradiction is found it
 // creates a conflicts_with lineage record linking the two memories.
 //
-// The prompt template used here is shared with the dreaming contradiction
-// phase (service.SettingDreamContradictionPrompt). That prompt's JSON shape
-// also includes a "winner" field; the parser here drops it.
+// The system prompt used here is shared with the dreaming contradiction phase
+// (service.SettingDreamContradictionSystemPrompt). That prompt's JSON shape also
+// includes a "winner" field; the parser here drops it.
 type ConflictDetector struct {
 	vectorStore   VectorSearcher
 	memories      MemoryReader
@@ -132,7 +132,6 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 	}
 
 	systemPrompt := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionSystemPrompt, "global")
-	promptTemplate := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionPrompt, "global")
 	temperature := service.GetDefaultFloat(service.SettingEnrichmentConflictTemperature)
 	if cd.settings != nil {
 		temperature = cd.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentConflictTemperature, "global")
@@ -158,7 +157,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		}
 
 		// Ask the LLM whether the two statements contradict.
-		user := fmt.Sprintf(promptTemplate, memory.Content, candidate.Content)
+		user := service.RenderContradictionUser(memory.Content, candidate.Content)
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 			Messages:    provider.BuildMessages(systemPrompt, user),
 			MaxTokens:   256,

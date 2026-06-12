@@ -13,21 +13,20 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-func TestRenderQueryAugmentPrompt_SubstitutesPlaceholders(t *testing.T) {
-	tpl := "Generate {N} queries for: {content}. End."
-	out := RenderQueryAugmentPrompt(tpl, "a memory", 7)
-	if !strings.Contains(out, "Generate 7 queries") {
-		t.Fatalf("N placeholder not substituted: %q", out)
+func TestRenderQueryAugmentUser_SubstitutesCountAndContent(t *testing.T) {
+	out := RenderQueryAugmentUser("a memory", 7)
+	if !strings.Contains(out, "Generate 7 ") {
+		t.Fatalf("count not substituted: %q", out)
 	}
-	if !strings.Contains(out, "for: a memory.") {
-		t.Fatalf("content placeholder not substituted: %q", out)
+	if !strings.Contains(out, "a memory") {
+		t.Fatalf("content not substituted: %q", out)
 	}
 }
 
-func TestRenderQueryAugmentPrompt_NoPanicOnLiteralPercent(t *testing.T) {
-	// strings.Replace not fmt.Sprintf, so a literal % anywhere must round-trip.
-	tpl := "Coverage target: 90% recall. Memory: {content}. N={N}."
-	out := RenderQueryAugmentPrompt(tpl, "x", 3)
+func TestRenderQueryAugmentUser_NoPanicOnLiteralPercent(t *testing.T) {
+	// strings.Replace not fmt.Sprintf, so a literal % in the memory content
+	// must round-trip unmangled.
+	out := RenderQueryAugmentUser("Coverage target: 90% recall.", 3)
 	if !strings.Contains(out, "90% recall") {
 		t.Fatalf("literal %% mangled: %q", out)
 	}

@@ -119,18 +119,18 @@ function canonicalize(v: unknown): unknown {
 // vanish from this page.
 
 
-// Prompt-typed schema entries. Surfaced on the dedicated Prompt Templates page;
-// filtered out of the Settings page entirely so they cannot be edited in two
-// places.
+// Prompt-typed schema entries (the per-phase tunable system prompts). Surfaced
+// on the dedicated Prompt Templates page; filtered out of the Settings page
+// entirely so they cannot be edited in two places.
 const PROMPT_KEYS = new Set([
-  "enrichment.fact_prompt",
-  "enrichment.entity_prompt",
-  "enrichment.ingestion_decision.prompt",
-  "enrichment.query_augment.prompt",
-  "dreaming.contradiction_prompt",
-  "dreaming.synthesis_prompt",
-  "dreaming.alignment_prompt",
-  "dreaming.novelty.judge_prompt",
+  "enrichment.fact_system_prompt",
+  "enrichment.entity_system_prompt",
+  "enrichment.ingestion_decision.system_prompt",
+  "enrichment.query_augment.system_prompt",
+  "dreaming.contradiction_system_prompt",
+  "dreaming.synthesis_system_prompt",
+  "dreaming.alignment_system_prompt",
+  "dreaming.novelty.judge_system_prompt",
 ]);
 
 // Keys owned by another admin surface, filtered out of the Settings page so

@@ -934,7 +934,6 @@ describe("API Client E2E", () => {
       try {
         const res = await adminAPI.testExtractionPrompt(
           "fact",
-          "Extract facts from: {{content}}",
           "The sky is blue.",
         );
         expect(typeof res.latency_ms).toBe("number");

@@ -32,22 +32,15 @@ type EnrichmentAdminStore interface {
 
 // EnrichmentAdminConfig holds the dependencies for the enrichment admin handler.
 type EnrichmentAdminConfig struct {
-	Store                 EnrichmentAdminStore
-	FactProvider          func() provider.LLMProvider
-	EntityProvider        func() provider.LLMProvider
-	FactPromptDefault     func(ctx context.Context) string
-	EntityPromptDefault   func(ctx context.Context) string
-	QueryAugmentPromptDef func(ctx context.Context) string
+	Store          EnrichmentAdminStore
+	FactProvider   func() provider.LLMProvider
+	EntityProvider func() provider.LLMProvider
 
-	// IngestionPromptDefault resolves the operator-edited ingestion-decision
-	// prompt (or its registered default). Nil falls back to a bare-template
-	// error like the other prompt resolvers.
-	IngestionPromptDefault func(ctx context.Context) string
-
-	// The *SystemPromptDefault resolvers return the static instruction half for
-	// each phase (operator-edited value or registered default). The Test surface
-	// uses them when the request omits system_prompt, so a defaults run sends the
-	// same system+user split the runtime does.
+	// The *SystemPromptDefault resolvers return the tunable instruction for each
+	// phase (operator-edited value or registered default). The Test surface uses
+	// them when the request omits system_prompt, so a defaults run sends the same
+	// system prompt the runtime does. The dynamic user message is always built
+	// from the phase's hardcoded code wrapper.
 	FactSystemPromptDefault      func(ctx context.Context) string
 	EntitySystemPromptDefault    func(ctx context.Context) string
 	QueryAugmentSystemPromptDef  func(ctx context.Context) string
@@ -347,12 +340,12 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type   string `json:"type"`   // "fact", "entity", "augment", or "ingestion"
-	Prompt string `json:"prompt"` // custom dynamic-half prompt text (optional; uses default if empty)
-	// SystemPrompt is the static instruction half. Sent as a separate system
-	// message so the Test surface exercises the exact system+user split the
-	// runtime uses (provider.BuildMessages). Empty falls back to the phase's
-	// registered system-prompt default.
+	Type string `json:"type"` // "fact", "entity", "augment", or "ingestion"
+	// SystemPrompt is the tunable instruction, sent as the system message. The
+	// dynamic user message is built from the phase's hardcoded code wrapper
+	// applied to SampleInput, so the Test surface exercises the exact
+	// system+user split the runtime uses (provider.BuildMessages). Empty
+	// SystemPrompt falls back to the phase's registered system-prompt default.
 	SystemPrompt string `json:"system_prompt"`
 	SampleInput  string `json:"sample_input"`    // memory content to test against
 	Count        int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
@@ -370,13 +363,6 @@ type enrichmentTestPromptResponse struct {
 	Error     string `json:"error,omitempty"`
 	LatencyMs int64  `json:"latency_ms"`
 }
-
-// ingestionTestTopK is the candidate-count placeholder substituted into the
-// ingestion-decision prompt's "up to %d candidates" line for the Test surface.
-// The test runs with an empty candidate list (there is no real near-neighbour
-// search), so the value is cosmetic; it mirrors the phase's default top_k (see
-// resolveIngestionSettings) for parity with the live prompt text.
-const ingestionTestTopK = 5
 
 // handleEnrichmentTestPrompt handles POST /enrichment/test-prompt.
 // It sends the sample input through the configured LLM provider using the given prompt
@@ -404,7 +390,6 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 	}
 
 	var llmProvider provider.LLMProvider
-	var promptTemplate string
 
 	switch body.Type {
 	case "fact":
@@ -417,11 +402,6 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
 			return
 		}
-		if strings.TrimSpace(body.Prompt) != "" {
-			promptTemplate = body.Prompt
-		} else if cfg.FactPromptDefault != nil {
-			promptTemplate = cfg.FactPromptDefault(r.Context())
-		}
 	case "entity":
 		if cfg.EntityProvider == nil {
 			WriteError(w, ErrBadRequest("no entity extraction provider configured"))
@@ -431,11 +411,6 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		if llmProvider == nil {
 			WriteError(w, ErrBadRequest("entity extraction provider is not available"))
 			return
-		}
-		if strings.TrimSpace(body.Prompt) != "" {
-			promptTemplate = body.Prompt
-		} else if cfg.EntityPromptDefault != nil {
-			promptTemplate = cfg.EntityPromptDefault(r.Context())
 		}
 	case "augment":
 		// Augmentation runs against the query-augment provider slot (which
@@ -451,18 +426,13 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("query-augmentation provider is not available"))
 			return
 		}
-		if strings.TrimSpace(body.Prompt) != "" {
-			promptTemplate = body.Prompt
-		} else if cfg.QueryAugmentPromptDef != nil {
-			promptTemplate = cfg.QueryAugmentPromptDef(r.Context())
-		}
 	case "ingestion":
 		// The ingestion-decision phase runs against the ingestion-decision
 		// provider slot (which falls back to the fact provider when
 		// unconfigured), as the runtime phase does
-		// (internal/enrichment/phase_ingestion.go). The test runs the prompt
-		// with an empty candidate list, exercising the prompt without a real
-		// near-neighbour search.
+		// (internal/enrichment/phase_ingestion.go). The test runs with an empty
+		// candidate list, exercising the prompt without a real near-neighbour
+		// search.
 		if cfg.IngestionProvider == nil {
 			WriteError(w, ErrBadRequest("no ingestion-decision provider configured"))
 			return
@@ -472,22 +442,11 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("ingestion-decision provider is not available"))
 			return
 		}
-		if strings.TrimSpace(body.Prompt) != "" {
-			promptTemplate = body.Prompt
-		} else if cfg.IngestionPromptDefault != nil {
-			promptTemplate = cfg.IngestionPromptDefault(r.Context())
-		}
 	}
 
-	if promptTemplate == "" {
-		WriteError(w, ErrBadRequest("no prompt template available"))
-		return
-	}
-
-	// Static instruction half. The request carries it explicitly (the Prompt
-	// Templates page sends both editors); an empty value falls back to the
-	// phase's registered system-prompt default so a defaults run still matches
-	// the runtime split.
+	// Tunable instruction (system message). The request carries it explicitly
+	// (the Prompt Templates page sends the system-prompt editor); an empty value
+	// falls back to the phase's registered system-prompt default.
 	var systemTemplate string
 	if strings.TrimSpace(body.SystemPrompt) != "" {
 		systemTemplate = body.SystemPrompt
@@ -512,6 +471,11 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		}
 	}
 
+	if strings.TrimSpace(systemTemplate) == "" {
+		WriteError(w, ErrBadRequest("no system prompt available"))
+		return
+	}
+
 	count := body.Count
 	if count <= 0 {
 		count = 4
@@ -519,30 +483,21 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 
 	start := time.Now()
 
-	// Render both halves exactly as each runtime phase does, co-located per
-	// phase so the two stay in lockstep: augment substitutes the same named
-	// placeholders (RenderQueryAugmentPrompt), ingestion's dynamic half carries
-	// %d cap + %s content + %s candidate block (empty in the test) while its
-	// system half carries only the %d cap, and fact/entity render %s content
-	// with the system half passed verbatim.
-	var rendered, renderedSystem string
+	// Build the user message from each phase's hardcoded code wrapper so the
+	// Test surface sends exactly the runtime split (tunable system instruction +
+	// code-wrapped data). Ingestion runs with an empty candidate list.
+	var user string
 	switch body.Type {
 	case "augment":
-		rendered = enrichment.RenderQueryAugmentPrompt(promptTemplate, body.SampleInput, count)
-		renderedSystem = enrichment.RenderQueryAugmentPrompt(systemTemplate, body.SampleInput, count)
+		user = enrichment.RenderQueryAugmentUser(body.SampleInput, count)
 	case "ingestion":
-		rendered = fmt.Sprintf(promptTemplate, ingestionTestTopK, body.SampleInput, "")
-		// Guard the empty default so Sprintf doesn't emit a %!(EXTRA) artifact.
-		if systemTemplate != "" {
-			renderedSystem = fmt.Sprintf(systemTemplate, ingestionTestTopK)
-		}
-	default:
-		rendered = fmt.Sprintf(promptTemplate, body.SampleInput)
-		renderedSystem = systemTemplate
+		user = enrichment.RenderIngestionUser(body.SampleInput, nil)
+	default: // fact, entity
+		user = service.RenderExtractionUser(body.SampleInput)
 	}
 
 	completionReq := &provider.CompletionRequest{
-		Messages: provider.BuildMessages(renderedSystem, rendered),
+		Messages: provider.BuildMessages(systemTemplate, user),
 		// Model left empty: the resolved provider slot supplies its own model.
 		// 8192 leaves headroom for reasoning models (e.g. qwen3:8b) that spend
 		// output budget on a thinking pass before emitting the JSON/text answer;

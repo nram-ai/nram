@@ -1251,14 +1251,13 @@ export function useTestExtractionPrompt() {
     Error,
     {
       type: "fact" | "entity" | "augment" | "ingestion";
-      prompt: string;
       sampleInput: string;
       count?: number;
       systemPrompt?: string;
     }
   >({
-    mutationFn: ({ type, prompt, sampleInput, count, systemPrompt }) =>
-      adminAPI.testExtractionPrompt(type, prompt, sampleInput, count, systemPrompt),
+    mutationFn: ({ type, sampleInput, count, systemPrompt }) =>
+      adminAPI.testExtractionPrompt(type, sampleInput, count, systemPrompt),
   });
 }
 

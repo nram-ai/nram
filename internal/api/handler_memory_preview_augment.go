@@ -111,12 +111,14 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 			return
 		}
 
-		// Resolve prompt, count, and model from settings; fall back to
-		// registered defaults so an operator who hasn't edited any of them
-		// still gets the same shape the runtime phase produces.
-		prompt, _ := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentPrompt, "global")
-		if prompt == "" {
-			prompt, _ = service.GetDefault(service.SettingQueryAugmentPrompt)
+		// Resolve the tunable system prompt, count, and model from settings;
+		// fall back to registered defaults so an operator who hasn't edited any
+		// of them still gets the same shape the runtime phase produces. The
+		// dynamic user message is built from a hardcoded code wrapper (not a
+		// setting), exactly as the runtime phase does.
+		systemPrompt, _ := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentSystemPrompt, "global")
+		if systemPrompt == "" {
+			systemPrompt, _ = service.GetDefault(service.SettingQueryAugmentSystemPrompt)
 		}
 		count := service.GetDefaultInt(service.SettingQueryAugmentCount)
 		if v, err := cfg.Settings.Resolve(r.Context(), service.SettingQueryAugmentCount, "global"); err == nil && v != "" {
@@ -150,7 +152,10 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 			return
 		}
 
-		rendered := enrichment.RenderQueryAugmentPrompt(prompt, mem.Content, count)
+		user := enrichment.RenderQueryAugmentUser(mem.Content, count)
+		// RenderedPrompt shows the operator the full prompt the model sees: the
+		// tunable system instruction followed by the code-built user message.
+		rendered := systemPrompt + provider.PromptSplitSeparator + user
 		start := time.Now()
 		// JSONMode deliberately omitted; response_format=json_object on the
 		// OpenAI-compat shim forces an object response, which contradicts the
@@ -158,7 +163,7 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		// into a degenerate keys-as-queries loop until max_tokens truncates.
 		// See enrichment.runQueryAugment for the full diagnosis.
 		resp, err := llm.Complete(provider.WithOperation(r.Context(), provider.OperationQueryAugment), &provider.CompletionRequest{
-			Messages: []provider.Message{{Role: "user", Content: rendered}},
+			Messages: provider.BuildMessages(systemPrompt, user),
 			// Model left empty: the query-augmentation provider slot supplies it.
 			MaxTokens: maxTokens,
 		})

@@ -339,7 +339,6 @@ func (p *ConsolidationPhase) reinforce(
 	alignmentTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamAlignmentTemperature, "global")
 
 	alignmentSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamAlignmentSystemPrompt)
-	alignmentPromptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamAlignmentPrompt)
 
 	visited := 0
 	for i := range stale {
@@ -358,7 +357,7 @@ func (p *ConsolidationPhase) reinforce(
 		}
 
 		// Pre-flight budget check using the same prompt we'll send.
-		userPrompt := renderAlignmentPrompt(alignmentPromptTemplate, &synthesis, sample)
+		userPrompt := renderAlignmentPrompt(&synthesis, sample)
 		estCost := EstimateTokens(alignmentSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
@@ -444,12 +443,12 @@ func (p *ConsolidationPhase) reinforce(
 
 // renderAlignmentPrompt builds the alignment-scoring prompt so it can be
 // inspected for budget estimation before the LLM call.
-func renderAlignmentPrompt(template string, synthesis *model.Memory, evidence []model.Memory) string {
+func renderAlignmentPrompt(synthesis *model.Memory, evidence []model.Memory) string {
 	var evidenceTexts []string
 	for _, e := range evidence {
 		evidenceTexts = append(evidenceTexts, e.Content)
 	}
-	return fmt.Sprintf(template, synthesis.Content, strings.Join(evidenceTexts, "\n---\n"))
+	return fmt.Sprintf(alignmentUserWrapper, synthesis.Content, strings.Join(evidenceTexts, "\n---\n"))
 }
 
 // scoreAlignment asks the LLM how strongly recent evidence supports or
@@ -1322,7 +1321,6 @@ func (p *ConsolidationPhase) consolidate(
 	synthesisTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamSynthesisTemperature, "global")
 
 	synthesisSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamSynthesisSystemPrompt)
-	synthesisPromptTemplate := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamSynthesisPrompt)
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
 	clustersVisited := 0
@@ -1336,7 +1334,7 @@ func (p *ConsolidationPhase) consolidate(
 		}
 		clustersVisited++
 
-		userPrompt := renderSynthesisPrompt(synthesisPromptTemplate, cluster)
+		userPrompt := renderSynthesisPrompt(cluster)
 		estCost := EstimateTokens(synthesisSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
@@ -1556,12 +1554,12 @@ func (p *ConsolidationPhase) consolidate(
 
 // renderSynthesisPrompt builds the synthesis prompt so it can be inspected
 // for budget estimation before the LLM call.
-func renderSynthesisPrompt(template string, cluster []model.Memory) string {
+func renderSynthesisPrompt(cluster []model.Memory) string {
 	contents := make([]string, 0, len(cluster))
 	for _, m := range cluster {
 		contents = append(contents, m.Content)
 	}
-	return fmt.Sprintf(template, strings.Join(contents, "\n---\n"))
+	return fmt.Sprintf(synthesisUserWrapper, strings.Join(contents, "\n---\n"))
 }
 
 // synthesize asks the LLM to produce a consolidated summary from a cluster.
@@ -1720,19 +1718,18 @@ func (p *ConsolidationPhase) auditNovelty(
 		// Borderline ⇒ fall through to the LLM judge.
 	}
 
-	promptTpl, _ := p.settings.Resolve(ctx, service.SettingDreamNoveltyJudgePrompt, "global")
-	if promptTpl == "" {
-		// Without a judge prompt we cannot adjudicate borderline cases.
+	systemTpl := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamNoveltyJudgeSystemPrompt)
+	if systemTpl == "" {
+		// Without a judge instruction we cannot adjudicate borderline cases.
 		// Fail closed when the embedder pre-filter did not already decide.
 		return false, "no_judge_prompt", nil, embedTokens, nil
 	}
-	systemTpl := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamNoveltyJudgeSystemPrompt)
 
 	sourceTexts := make([]string, 0, len(sources))
 	for _, s := range sources {
 		sourceTexts = append(sourceTexts, s.Content)
 	}
-	user := fmt.Sprintf(promptTpl, candidate, strings.Join(sourceTexts, "\n---\n"))
+	user := fmt.Sprintf(noveltyUserWrapper, candidate, strings.Join(sourceTexts, "\n---\n"))
 	prompt := systemTpl + provider.PromptSplitSeparator + user
 
 	maxTokens := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")

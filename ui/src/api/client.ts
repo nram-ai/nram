@@ -1837,14 +1837,12 @@ export const adminAPI = {
     request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
     type: "fact" | "entity" | "augment" | "ingestion",
-    prompt: string,
     sampleInput: string,
     count?: number,
     systemPrompt?: string,
   ) =>
     request<ExtractionTestResult>("POST", "/admin/enrichment/test-prompt", {
       type,
-      prompt,
       system_prompt: systemPrompt ?? "",
       sample_input: sampleInput,
       ...(typeof count === "number" ? { count } : {}),
