@@ -156,11 +156,13 @@ RETRIEVAL: follow this order at each task start:
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
 2. recall: then search for detailed memories with natural language.
 3. list: browse/paginate when you need a full overview, not a query.
+If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory instead of re-querying.
 `)
 	} else if hasEnrichment {
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
 2. recall: then search using specific tags (no embedding provider).
 3. list: browse/paginate when you need a full overview, not a query.
+If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory instead of re-querying.
 `)
 	} else if hasEmbedding {
 		b.WriteString(`1. recall: search with natural language (semantic search is active).
@@ -172,7 +174,7 @@ RETRIEVAL: follow this order at each task start:
 `)
 	}
 
-	b.WriteString(`Recall before assuming preferences, before storing (to avoid duplicates), and whenever you lack context.
+	b.WriteString(`Recall before assumptions, before storing (avoid duplicates), and whenever you lack context.
 
 STORAGE (store / store_batch):
 - Preferences, conventions, decisions → store immediately
@@ -181,12 +183,12 @@ STORAGE (store / store_batch):
 - Project config, setup, environment → store
 - End of complex task → store summary of what and why
 
-Enrichment is fully server-managed: every stored memory is auto-enqueued for entity/relationship extraction. The worker drains the queue once enrichment.enabled is true and the providers are configured; until then jobs wait. No per-call opt-in or opt-out.
+Enrichment is fully server-managed: every new memory is auto-enqueued for entity/relationship extraction, drained once enrichment.enabled and the providers are configured. No per-call opt-in.
 
 KEY RULES:
-- ALWAYS call list_projects first to discover existing projects before storing.
-- Use EXISTING projects; do NOT create one per task/feature/topic. An unknown slug on store auto-creates a new project, which is rarely what you want.
-- Projects = major boundaries (repo, product, domain). Omit for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
+- ALWAYS call list_projects first; reuse the existing project that fits.
+- Create a new project only for a genuinely new major boundary (repo, product, domain), never per task/feature/topic or an unknown slug (silently auto-creates one).
+- Omit project for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
 - Use tags/metadata for sub-categorization, not new projects.
 - Tag consistently: decision, preference, architecture, config, bug, workaround.`)
 

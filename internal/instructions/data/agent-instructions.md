@@ -28,10 +28,11 @@ Recall scoping: omit project = global + about_me; with project = project + globa
 **WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate
 - When you need context beyond what recall returns
+- When recall is noisy or misses a fact you expect: walk from the key concept to the source memory behind its relationships (fetch its source_memory id with get) instead of re-querying recall
 
 **KEY RULES:**
 - ALWAYS call list_projects first to discover existing projects before storing
-- Use an EXISTING project whenever one fits; do NOT create a new project for each task, feature, or topic
+- Reuse the existing project that fits; create a new project only for a genuinely new major boundary, never one per task, feature, or topic
 - Projects are for major boundaries (one per repo, product, or domain: e.g. "myapp", "dotfiles"). Omit for "global"
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention

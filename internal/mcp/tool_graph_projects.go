@@ -91,7 +91,7 @@ func registerMemoryGraph(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[graphResponse]()),
-		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect, especially when recall alone does not surface enough context."),
+		mcp.WithDescription("Explore entity relationships in the knowledge graph. Use to discover how people, technologies, and concepts connect. Reach for it whenever recall is noisy or misses a fact you expect to exist: query the key concept, follow its relationships to the entity that should hold the fact, then fetch the source memory behind that relationship (its source_memory id) with get, instead of re-running recall with reworded prose."),
 		mcp.WithString("entity", mcp.Required(), mcp.Description("Entity name or search query")),
 		mcp.WithString("project", mcp.Description("Project slug to scope the search")),
 		mcp.WithNumber("depth", mcp.Description("Graph traversal depth (default recall.graph.default_depth=2, server-capped at recall.graph.max_depth, default 5).")),
