@@ -106,20 +106,27 @@ function getTypeColor(entityType: string) {
   return ENTITY_TYPE_COLORS[entityType.toLowerCase()] || DEFAULT_TYPE_COLOR;
 }
 
-// Relationship colors
-const RELATION_COLORS: Record<string, string> = {
-  works_for: "#60a5fa",
-  knows: "#4ade80",
-  part_of: "#fbbf24",
-  related_to: "#818cf8",
-  uses: "#f472b6",
-  created_by: "#34d399",
-  located_in: "#fb7185",
-  belongs_to: "#a78bfa",
-};
-
-function getRelationColor(relation: string) {
-  return RELATION_COLORS[relation.toLowerCase()] || "#4b5563";
+// Edge labels are free-form, canonicalized relations (model.CanonicalRelation:
+// lowercase, space-separated) drawn from thousands of distinct phrases, so no
+// fixed relation->color table can cover them. Derive a stable, decorative hue
+// from the relation string itself: the same relation always renders the same
+// color and distinct relations spread across the wheel. Saturation and
+// lightness are pinned so edges stay in the muted register of the backdrop
+// rather than reading as a rainbow; the exact relation is revealed on hover
+// via linkLabel, so no legend entry is implied.
+export function getRelationColor(relation: string): string {
+  if (!relation) return "#4b5563";
+  // FNV-1a (32-bit) over the lowercased relation; map the hash to a hue.
+  // Lowercasing mirrors the backend canonicalization so casing never splits
+  // a color.
+  let h = 0x811c9dc5;
+  const s = relation.toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const hue = (h >>> 0) % 360;
+  return `hsl(${hue}, 62%, 65%)`;
 }
 
 // Graph data types for 3D force graph
@@ -139,6 +146,10 @@ interface GraphLink {
   source: string;
   target: string;
   relation: string;
+  // Decorative hashed color, computed once when links are built so the three
+  // ForceGraph color accessors (line, particles, arrow) read it instead of
+  // re-hashing the relation on every link every frame.
+  color: string;
   weight: number;
   id: string;
 }
@@ -721,6 +732,7 @@ function GraphVisualization() {
         source: r.source_id,
         target: r.target_id,
         relation: r.relation,
+        color: getRelationColor(r.relation),
         weight: r.weight,
         id: r.id,
       }));
@@ -928,17 +940,17 @@ function GraphVisualization() {
                 </div>`
               ) as any}
               onNodeClick={onNodeClick as any}
-              linkColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkColor={((link: GraphLink) => link.color) as any}
               linkWidth={((link: GraphLink) => Math.max(0.3, Math.min(link.weight * 0.4, 2))) as any}
               linkOpacity={0.4}
               linkCurvature={0.15}
               linkDirectionalParticles={((link: GraphLink) => link.weight >= 2 ? 2 : 0) as any}
               linkDirectionalParticleSpeed={0.005}
               linkDirectionalParticleWidth={1.5}
-              linkDirectionalParticleColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkDirectionalParticleColor={((link: GraphLink) => link.color) as any}
               linkDirectionalArrowLength={3}
               linkDirectionalArrowRelPos={1}
-              linkDirectionalArrowColor={((link: GraphLink) => getRelationColor(link.relation)) as any}
+              linkDirectionalArrowColor={((link: GraphLink) => link.color) as any}
               linkLabel={((link: GraphLink) =>
                 `<span style="background:rgba(0,0,0,0.8);padding:3px 8px;border-radius:4px;color:#9ca3af;font-size:11px;">${link.relation}</span>`
               ) as any}
