@@ -623,6 +623,14 @@ const (
 // Pure static text with no fmt verbs; the dynamic memory data is injected by the
 // per-phase code wrapper into the user message.
 const (
+	// minifiedJSONInstruction is appended to every JSON-returning system prompt
+	// so the model emits compact JSON. Pretty-printing wastes ~35-43% of output
+	// tokens on whitespace; nram parses these responses with encoding/json,
+	// which ignores formatting, so this is pure output-token (and latency)
+	// savings. The string-value clause stops the model from stripping spaces
+	// inside content, queries, rationales, and explanations.
+	minifiedJSONInstruction = "Return the JSON minified onto a single line: no spaces, newlines, or indentation between JSON tokens. Do not change whitespace inside string values."
+
 	factSystemPromptText = `You are a fact extraction engine. Given a text, extract all discrete facts as a JSON array. Each fact should be a JSON object with these fields:
 - "content": the fact statement (string)
 - "confidence": how confident you are in this fact, 0.0 to 1.0 (number)
@@ -634,7 +642,7 @@ Hard rules:
 - Tag-only deltas are NOT a reason to emit a fact. If the only thing you would add is a new tag on otherwise-identical content, return an empty array; the calling system merges tags from suppressed facts into the parent automatically.
 - Only emit facts that introduce a new entity, relationship, quantity, date, cause, consequence, or other proposition not already explicit in the input.
 
-Return ONLY valid JSON. Do not include markdown fences or explanation.`
+Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
 	entitySystemPromptText = `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
 
@@ -650,7 +658,7 @@ Return a JSON object with two fields:
   - "weight": confidence/strength 0.0 to 1.0 (number)
   - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
 
-Return ONLY valid JSON. Do not include markdown fences or explanation.`
+Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
 	ingestionDecisionSystemPromptText = `You are an ingestion decision engine. You do NOT converse. You output JSON only.
 
@@ -680,13 +688,13 @@ Hard rules:
 - Rationale: one short sentence (under 200 characters) naming the candidate ID compared against.
 
 Output ONLY this JSON, nothing else:
-{"operation": "ADD", "target_id": null, "rationale": "..."}
+{"operation":"ADD","target_id":null,"rationale":"..."}
 or
-{"operation": "UPDATE", "target_id": "candidate-uuid", "rationale": "..."}
+{"operation":"UPDATE","target_id":"candidate-uuid","rationale":"..."}
 or
-{"operation": "DELETE", "target_id": "candidate-uuid", "rationale": "..."}
+{"operation":"DELETE","target_id":"candidate-uuid","rationale":"..."}
 or
-{"operation": "NONE", "target_id": null, "rationale": "..."}`
+{"operation":"NONE","target_id":null,"rationale":"..."}` + "\n\n" + minifiedJSONInstruction
 
 	queryAugmentSystemPromptText = `You are a query augmentation engine. You do NOT converse. You output JSON only.
 
@@ -698,10 +706,10 @@ OUTPUT FORMAT, read carefully:
 - No prose before or after the array. No markdown fences (no ` + "```" + `). No trailing commas. No comments.
 - Use \" to escape a literal double quote inside an element.
 
-CORRECT:   ["what time does X start", "X start time", "schedule for X"]
+CORRECT:   ["what time does X start","X start time","schedule for X"]
 WRONG (missing quotes):   [what time does X start, X start time, schedule for X]
 WRONG (single quotes):    ['what time does X start', 'X start time']
-WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + ``
+WRONG (fenced / prose):   Here you go: ` + "```json" + ` [...] ` + "```" + "\n\n" + minifiedJSONInstruction
 
 	contradictionSystemPromptText = `You are a contradiction detector. You do NOT converse. You output JSON only.
 
@@ -710,13 +718,13 @@ Determine if the two statements below contradict each other.
 When they contradict, also identify which is more likely correct and set "winner" to "a", "b", or "tie". Use "tie" when the contradiction is real but neither side is clearly right (subjective claims, partial overlap, claims about different time periods, equally plausible interpretations).
 
 Output ONLY this JSON, nothing else:
-{"contradicts": true, "winner": "a", "explanation": "reason"}
+{"contradicts":true,"winner":"a","explanation":"reason"}
 or
-{"contradicts": true, "winner": "b", "explanation": "reason"}
+{"contradicts":true,"winner":"b","explanation":"reason"}
 or
-{"contradicts": true, "winner": "tie", "explanation": "reason"}
+{"contradicts":true,"winner":"tie","explanation":"reason"}
 or
-{"contradicts": false, "winner": null, "explanation": "reason"}`
+{"contradicts":false,"winner":null,"explanation":"reason"}` + "\n\n" + minifiedJSONInstruction
 
 	synthesisSystemPromptText = `You are a knowledge synthesizer. You do NOT converse, greet, or ask questions. You output ONLY the synthesized text.
 
@@ -729,12 +737,12 @@ Output ONLY the synthesized text:`
 Score how strongly the evidence supports or contradicts the synthesis.
 
 Output ONLY this JSON, nothing else:
-{"alignment": 0.0, "reasoning": "brief reason"}
+{"alignment":0.0,"reasoning":"brief reason"}
 
 alignment must be a float:
 1.0 = strong support
 0.0 = neutral/unrelated
--1.0 = strong contradiction`
+-1.0 = strong contradiction` + "\n\n" + minifiedJSONInstruction
 
 	noveltyJudgeSystemPromptText = `You are a novelty auditor. You do NOT converse. You output JSON only.
 
@@ -748,9 +756,9 @@ Hard rules:
 - When in doubt, return an empty array.
 
 Output ONLY this JSON, nothing else:
-{"novel_facts": ["fact 1", "fact 2"]}
+{"novel_facts":["fact 1","fact 2"]}
 
-Empty array if every fact in the synthesis is already present in the sources.`
+Empty array if every fact in the synthesis is already present in the sources.` + "\n\n" + minifiedJSONInstruction
 )
 
 // settingDefaults provides built-in default values for well-known settings.

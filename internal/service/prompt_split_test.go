@@ -49,7 +49,7 @@ func TestSystemPromptDefaultsCarryOutputContract(t *testing.T) {
 	cases := map[string]string{
 		SettingFactSystemPrompt:               "Return ONLY valid JSON",
 		SettingEntitySystemPrompt:             "Return ONLY valid JSON",
-		SettingIngestionDecisionSystemPrompt:  `"operation": "ADD"`,
+		SettingIngestionDecisionSystemPrompt:  `"operation":"ADD"`,
 		SettingQueryAugmentSystemPrompt:       "OUTPUT FORMAT",
 		SettingDreamContradictionSystemPrompt: `"contradicts"`,
 		SettingDreamSynthesisSystemPrompt:     "Output ONLY the synthesized text",
@@ -61,6 +61,34 @@ func TestSystemPromptDefaultsCarryOutputContract(t *testing.T) {
 		if !strings.Contains(def, marker) {
 			t.Errorf("%s: system prompt is missing its output contract marker %q", key, marker)
 		}
+	}
+}
+
+// jsonSystemPromptKeys are the seven JSON-returning phases. The eighth phase,
+// dream synthesis, emits prose and must NOT carry the minify directive.
+var jsonSystemPromptKeys = []string{
+	SettingFactSystemPrompt,
+	SettingEntitySystemPrompt,
+	SettingIngestionDecisionSystemPrompt,
+	SettingQueryAugmentSystemPrompt,
+	SettingDreamContradictionSystemPrompt,
+	SettingDreamAlignmentSystemPrompt,
+	SettingDreamNoveltyJudgeSystemPrompt,
+}
+
+// TestJSONSystemPromptsRequestMinified verifies every JSON-returning phase
+// instructs the model to emit minified output (the output-token saving this
+// change exists for), and that the prose synthesis phase does not.
+func TestJSONSystemPromptsRequestMinified(t *testing.T) {
+	const marker = "minified onto a single line"
+	for _, key := range jsonSystemPromptKeys {
+		def, _ := GetDefault(key)
+		if !strings.Contains(def, marker) {
+			t.Errorf("%s: JSON system prompt must request minified output (missing %q)", key, marker)
+		}
+	}
+	if def, _ := GetDefault(SettingDreamSynthesisSystemPrompt); strings.Contains(def, marker) {
+		t.Errorf("%s: prose synthesis prompt must NOT carry the minify directive", SettingDreamSynthesisSystemPrompt)
 	}
 }
 
