@@ -199,6 +199,67 @@ func TestCachingEmbedding_TTLExpiry(t *testing.T) {
 	}
 }
 
+func TestCachingEmbedding_RecorderCountsHitsAndMisses(t *testing.T) {
+	inner := &fakeEmbedder{name: "fake"}
+	cfg := &EmbedCacheConfig{Enabled: true, MaxEntries: 100}
+	c := newTestCache(inner, cfg)
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	var hits, misses int
+	c.store.recorder = func(hit bool, n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if n <= 0 {
+			t.Errorf("recorder fired with non-positive n=%d", n)
+		}
+		if hit {
+			hits += n
+		} else {
+			misses += n
+		}
+	}
+
+	// Cold call: one input, full miss.
+	if _, err := c.Embed(ctx, &EmbeddingRequest{Input: []string{"a"}}); err != nil {
+		t.Fatalf("cold: %v", err)
+	}
+	// Warm call: same input, full hit.
+	if _, err := c.Embed(ctx, &EmbeddingRequest{Input: []string{"a"}}); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+	// Mixed batch: "a" hits, "b" and "c" miss.
+	if _, err := c.Embed(ctx, &EmbeddingRequest{Input: []string{"a", "b", "c"}}); err != nil {
+		t.Fatalf("mixed: %v", err)
+	}
+
+	mu.Lock()
+	gotHits, gotMisses := hits, misses
+	mu.Unlock()
+	// hits:   0 (cold) + 1 (warm) + 1 (mixed: a)   = 2
+	// misses: 1 (cold) + 0 (warm) + 2 (mixed: b,c) = 3
+	if gotHits != 2 || gotMisses != 3 {
+		t.Fatalf("hits=%d misses=%d, want hits=2 misses=3", gotHits, gotMisses)
+	}
+}
+
+func TestCachingEmbedding_DisabledRecordsNoLookups(t *testing.T) {
+	inner := &fakeEmbedder{name: "fake"}
+	cfg := &EmbedCacheConfig{Enabled: false, MaxEntries: 100}
+	c := newTestCache(inner, cfg)
+	ctx := context.Background()
+
+	var lookups int
+	c.store.recorder = func(_ bool, n int) { lookups += n }
+
+	if _, err := c.Embed(ctx, &EmbeddingRequest{Input: []string{"x"}}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if lookups != 0 {
+		t.Fatalf("recorder fired %d lookups on a disabled cache, want 0", lookups)
+	}
+}
+
 func TestCachingEmbedding_ConcurrentIdenticalMissesCollapse(t *testing.T) {
 	inner := &fakeEmbedder{name: "fake", gate: make(chan struct{})}
 	cfg := &EmbedCacheConfig{Enabled: true, MaxEntries: 100}

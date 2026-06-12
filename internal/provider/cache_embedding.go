@@ -23,6 +23,14 @@ type EmbedCacheConfig struct {
 	TTL        time.Duration
 }
 
+// EmbedCacheRecorder is fired once per Embed call for each lookup result so a
+// caller (the Prometheus layer) can observe the cache hit rate. hit reports
+// whether the inputs were served from the cache; n is how many input strings
+// that result covers. It is never called when the cache is disabled. A nil
+// recorder disables observation while leaving caching intact, mirroring
+// TokenCounter.
+type EmbedCacheRecorder func(hit bool, n int)
+
 // embedCacheStore is the process-wide LRU shared across embedding-provider
 // rebuilds. The CachingEmbedding wrapper is reconstructed on every Registry
 // Reload around the freshly built inner chain, but the store (and therefore the
@@ -31,6 +39,10 @@ type EmbedCacheConfig struct {
 // stale entries age out under the LRU bound rather than returning wrong vectors.
 type embedCacheStore struct {
 	cfg func(context.Context) EmbedCacheConfig
+	// recorder observes hit/miss results for metrics. nil disables
+	// observation. Installed once with the store (see WithEmbeddingCache) and
+	// read without locking, so it must not change after startup.
+	recorder EmbedCacheRecorder
 
 	mu    sync.Mutex
 	ll    *list.List               // front = most recently used
@@ -50,6 +62,16 @@ func newEmbedCacheStore(cfg func(context.Context) EmbedCacheConfig) *embedCacheS
 		ll:    list.New(),
 		items: make(map[string]*list.Element),
 	}
+}
+
+// record reports n lookups with the given result to the recorder when one is
+// installed and n is positive. Nil-safe so metrics-less builds (and tests)
+// skip observation cleanly.
+func (s *embedCacheStore) record(hit bool, n int) {
+	if s.recorder == nil || n <= 0 {
+		return
+	}
+	s.recorder(hit, n)
 }
 
 // get returns the cached vector for key, refreshing its LRU position. Expired
@@ -164,6 +186,12 @@ func (c *CachingEmbedding) Embed(ctx context.Context, req *EmbeddingRequest) (*E
 		}
 		missIdx = append(missIdx, i)
 	}
+
+	// Record the per-input hit/miss split for the cache hit-rate metric. Both
+	// the full-hit and mixed paths flow through here; the disabled and
+	// empty-input paths returned above and are intentionally not counted.
+	c.store.record(true, len(req.Input)-len(missIdx))
+	c.store.record(false, len(missIdx))
 
 	if len(missIdx) == 0 {
 		// Full hit: no provider call, no usage.

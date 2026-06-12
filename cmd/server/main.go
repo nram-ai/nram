@@ -319,6 +319,16 @@ func main() {
 		registry.WithEmbeddingWrapper(func(ep provider.EmbeddingProvider) provider.EmbeddingProvider {
 			return metrics.WrapEmbeddingProvider(ep, promMetrics)
 		})
+		// Observe embedding-cache hit/miss so the Metrics page can show the
+		// hit rate. Fired by the cache wrapper, which sits outside the usage
+		// recorder, so a hit increments this without landing a token_usage row.
+		registry.WithEmbedCacheCounter(func(hit bool, n int) {
+			result := "miss"
+			if hit {
+				result = "hit"
+			}
+			promMetrics.EmbeddingCacheLookups.WithLabelValues(result).Add(float64(n))
+		})
 		// Install the exact-match embedding cache (outermost, so a full hit
 		// records no token_usage row). Config is read live from settings on
 		// every Embed, so the admin toggle and size/TTL knobs take effect

@@ -187,6 +187,8 @@ func TestBusinessCounters(t *testing.T) {
 	m.EnrichmentsTotal.WithLabelValues("failed").Inc()
 	m.EmbeddingsTotal.WithLabelValues("success").Inc()
 	m.EmbeddingDuration.Observe(0.123)
+	m.EmbeddingCacheLookups.WithLabelValues("hit").Add(3)
+	m.EmbeddingCacheLookups.WithLabelValues("miss").Add(1)
 	m.TokensUsedTotal.WithLabelValues("openai", "embedding").Add(500)
 	m.VectorSearchDuration.Observe(0.045)
 
@@ -265,6 +267,25 @@ func TestBusinessCounters(t *testing.T) {
 	}
 	if got := fam.GetMetric()[0].GetHistogram().GetSampleCount(); got != 1 {
 		t.Errorf("nram_embedding_duration_seconds: expected 1 sample, got %v", got)
+	}
+
+	fam, ok = families["nram_embedding_cache_lookups_total"]
+	if !ok {
+		t.Fatal("nram_embedding_cache_lookups_total not found")
+	}
+	cacheByResult := map[string]float64{}
+	for _, met := range fam.GetMetric() {
+		for _, lp := range met.GetLabel() {
+			if lp.GetName() == "result" {
+				cacheByResult[lp.GetValue()] = met.GetCounter().GetValue()
+			}
+		}
+	}
+	if cacheByResult["hit"] != 3 {
+		t.Errorf("embedding cache hit: expected 3, got %v", cacheByResult["hit"])
+	}
+	if cacheByResult["miss"] != 1 {
+		t.Errorf("embedding cache miss: expected 1, got %v", cacheByResult["miss"])
 	}
 
 	fam, ok = families["nram_tokens_used_total"]

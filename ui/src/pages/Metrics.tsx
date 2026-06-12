@@ -14,6 +14,7 @@ import {
   parsePrometheusText,
   findFamily,
   sumBaseSamples,
+  sumLabeledSamples,
   suffixValue,
   type MetricFamily,
 } from "../lib/promParser";
@@ -84,6 +85,11 @@ const LABELED_TABLE_FAMILIES: {
     description: "By outcome status",
   },
   {
+    name: "nram_embedding_cache_lookups_total",
+    title: "Embedding Cache",
+    description: "Exact-match cache lookups by result (hit|miss)",
+  },
+  {
     name: "nram_mcp_tool_result_truncation_total",
     title: "MCP Tool Result Truncations",
     description: "By tool and degradation tier",
@@ -146,6 +152,24 @@ function StatCard({
 // ---------------------------------------------------------------------------
 
 function SummaryCards({ families }: { families: MetricFamily[] }) {
+  const cacheHits = sumLabeledSamples(
+    families,
+    "nram_embedding_cache_lookups_total",
+    "result",
+    "hit",
+  );
+  const cacheMisses = sumLabeledSamples(
+    families,
+    "nram_embedding_cache_lookups_total",
+    "result",
+    "miss",
+  );
+  const cacheLookups = cacheHits + cacheMisses;
+  const cacheHitRate =
+    cacheLookups > 0
+      ? `${((cacheHits / cacheLookups) * 100).toFixed(1)}%`
+      : "No data";
+
   const cards = [
     {
       label: "In-Flight Requests",
@@ -181,6 +205,11 @@ function SummaryCards({ families }: { families: MetricFamily[] }) {
       label: "Embeddings",
       value: formatNumber(sumBaseSamples(families, "nram_embeddings_total")),
       color: "text-indigo-600 dark:text-indigo-400",
+    },
+    {
+      label: "Embedding Cache Hit Rate",
+      value: cacheHitRate,
+      color: "text-success",
     },
     {
       label: "Tokens Used",

@@ -158,6 +158,12 @@ type Registry struct {
 	// Reload, mirroring embedWrapper. The wrapper around each rebuilt inner
 	// chain is recreated per Reload, but the store persists.
 	embedStore atomic.Pointer[embedCacheStore]
+	// embedCacheCounter observes embedding-cache hit/miss results for
+	// Prometheus. nil disables the metric while leaving caching intact.
+	// Atomic for the same reasons as tokenCounter, so the indirect closure
+	// handed to the persistent embedStore reads the latest value regardless
+	// of the order WithEmbedCacheCounter and WithEmbeddingCache are called.
+	embedCacheCounter atomic.Pointer[EmbedCacheRecorder]
 }
 
 // NewRegistry instantiates providers from config, wraps each in a circuit
@@ -464,6 +470,19 @@ func (r *Registry) indirectTokenCounter() TokenCounter {
 	}
 }
 
+// indirectEmbedCacheCounter returns an EmbedCacheRecorder closure that derefs
+// r's atomic counter on every call, so the recorder installed on the
+// persistent embedStore picks up the value regardless of whether
+// WithEmbedCacheCounter ran before or after WithEmbeddingCache. Nil-firing
+// when no counter is installed.
+func (r *Registry) indirectEmbedCacheCounter() EmbedCacheRecorder {
+	return func(hit bool, n int) {
+		if ptr := r.embedCacheCounter.Load(); ptr != nil {
+			(*ptr)(hit, n)
+		}
+	}
+}
+
 func (r *Registry) wrapLLM(inner LLMProvider) LLMProvider {
 	if r.recorder == nil {
 		return inner
@@ -502,6 +521,19 @@ func (r *Registry) WithTokenCounter(c TokenCounter) *Registry {
 	return r
 }
 
+// WithEmbedCacheCounter installs the callback fired for each embedding-cache
+// lookup so Prometheus can track the hit rate. Passing nil disables the
+// metric. Safe to call before or after WithEmbeddingCache: the store reads the
+// recorder through an indirect closure that derefs this atomic live.
+func (r *Registry) WithEmbedCacheCounter(c EmbedCacheRecorder) *Registry {
+	if c == nil {
+		r.embedCacheCounter.Store(nil)
+	} else {
+		r.embedCacheCounter.Store(&c)
+	}
+	return r
+}
+
 // WithEmbeddingCache installs the process-wide exact-match embedding cache,
 // reading its live configuration (enabled/size/TTL) through cfg on every Embed
 // call. Passing nil disables caching. Call before the post-construction Reload
@@ -511,7 +543,9 @@ func (r *Registry) WithEmbeddingCache(cfg func(context.Context) EmbedCacheConfig
 		r.embedStore.Store(nil)
 		return r
 	}
-	r.embedStore.Store(newEmbedCacheStore(cfg))
+	store := newEmbedCacheStore(cfg)
+	store.recorder = r.indirectEmbedCacheCounter()
+	r.embedStore.Store(store)
 	return r
 }
 

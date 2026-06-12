@@ -43,14 +43,20 @@ type Metrics struct {
 	MCPToolResultTruncations *prometheus.CounterVec
 
 	// Business metrics
-	MemoriesTotal        prometheus.Counter
-	MemoriesRecalled     prometheus.Counter
-	MemoriesForgotten    prometheus.Counter
-	EnrichmentsTotal     *prometheus.CounterVec
-	EmbeddingsTotal      *prometheus.CounterVec
-	EmbeddingDuration    prometheus.Histogram
-	TokensUsedTotal      *prometheus.CounterVec
-	VectorSearchDuration prometheus.Histogram
+	MemoriesTotal     prometheus.Counter
+	MemoriesRecalled  prometheus.Counter
+	MemoriesForgotten prometheus.Counter
+	EnrichmentsTotal  *prometheus.CounterVec
+	EmbeddingsTotal   *prometheus.CounterVec
+	EmbeddingDuration prometheus.Histogram
+	// EmbeddingCacheLookups counts exact-match embedding-cache lookups by
+	// result, labeled "hit" (served from the in-process LRU, no upstream
+	// call) or "miss" (forwarded to the provider). Hits over total lookups
+	// is the cache hit rate. Cumulative since process start; it resets on
+	// restart like every other counter here.
+	EmbeddingCacheLookups *prometheus.CounterVec
+	TokensUsedTotal       *prometheus.CounterVec
+	VectorSearchDuration  prometheus.Histogram
 
 	// Deprecated aliases. Earlier nram releases exposed
 	// nram_memories_recalled and nram_memories_forgotten without the
@@ -116,6 +122,11 @@ func New() *Metrics {
 			Buckets: prometheus.DefBuckets,
 		}),
 
+		EmbeddingCacheLookups: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "nram_embedding_cache_lookups_total",
+			Help: "Exact-match embedding-cache lookups by result (hit|miss). One increment per input string looked up; hits over total is the cache hit rate.",
+		}, []string{"result"}),
+
 		TokensUsedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "nram_tokens_used_total",
 			Help: "Total number of tokens consumed.",
@@ -152,6 +163,7 @@ func New() *Metrics {
 		m.EnrichmentsTotal,
 		m.EmbeddingsTotal,
 		m.EmbeddingDuration,
+		m.EmbeddingCacheLookups,
 		m.TokensUsedTotal,
 		m.VectorSearchDuration,
 		m.MCPToolResultTruncations,

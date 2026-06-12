@@ -255,6 +255,30 @@ export function sumBaseSamples(
     .reduce((acc, s) => acc + s.value, 0);
 }
 
+/**
+ * Sum the values of a family's base samples whose given label equals value.
+ * Returns 0 when the family is absent. The labeled counterpart to
+ * {@link sumBaseSamples}, for collapsing one slice of a labeled counter (e.g. a
+ * single result="hit" series) to a total.
+ */
+export function sumLabeledSamples(
+  families: MetricFamily[],
+  name: string,
+  label: string,
+  value: string,
+): number {
+  const fam = findFamily(families, name);
+  if (!fam) return 0;
+  return fam.samples
+    .filter(
+      (s) =>
+        s.suffix === undefined &&
+        s.labels[label] === value &&
+        Number.isFinite(s.value),
+    )
+    .reduce((acc, s) => acc + s.value, 0);
+}
+
 /** Value of the single companion sample carrying the given suffix. */
 export function suffixValue(
   family: MetricFamily,
