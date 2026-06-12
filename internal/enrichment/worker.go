@@ -1591,12 +1591,26 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 	return collected
 }
 
-// runEmbedBatch runs one embed provider call covering every pendingJob's
-// parent + child-fact contents AND every entity canonical, chunking at
-// embedInputCap, then writes all vectors via UpsertBatch. Memory and entity
-// items share the same provider call to keep RTT cost at one per batch.
-// Per-job token usage is attributed with a largest-remainder allocation so
-// the per-job rows sum to exactly the provider-billed aggregate.
+// releaseClaimedPendings releases every still-claimed pending in a batch back
+// to the queue (skipping short-circuited ones), so a transient failure on one
+// memory retries the whole claimed batch rather than finalizing the rest.
+func (wp *WorkerPool) releaseClaimedPendings(ctx context.Context, pendings []*pendingJob) {
+	for _, p := range pendings {
+		if p.shortCircuitDelete() {
+			continue
+		}
+		if relErr := wp.queue.Release(ctx, p.job.ID, p.workerID); relErr != nil {
+			logClaimLostOr(relErr, "enrichment: queue release after transient embed failure",
+				"job", p.job.ID, "worker", p.workerID)
+		}
+	}
+}
+
+// runEmbedBatch embeds each pendingJob's parent + entity contents in a
+// separate provider call stamped with that memory's id — within-memory
+// batching (parent + entities + child facts, chunked at embedInputCap) is
+// preserved, cross-memory batching is given up so each token_usage row
+// attributes to its memory — then writes all vectors via UpsertBatch.
 func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob) {
 	if len(pendings) == 0 {
 		return
@@ -1655,44 +1669,40 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		}
 	}
 
-	var (
-		embeddings [][]float32
-		modelName  string
-	)
+	var embeddings [][]float32
 	if len(inputs) > 0 {
 		dim := storage.BestEmbeddingDimension(ep.Dimensions())
-		var (
-			usage provider.TokenUsage
-			err   error
-		)
-		// For batched embed across multiple pendings, attribute the call to
-		// the first pending's namespace so the row has a non-nil
-		// namespace_id. Per-job split is intentionally not recovered here;
-		// per-batch granularity is sufficient for analytics, and request_id
-		// correlation can recover finer attribution when needed.
-		batchCtx := ctx
-		if len(pendings) > 0 {
-			batchCtx = provider.WithNamespaceID(batchCtx, pendings[0].mem.NamespaceID)
-		}
+		embeddings = make([][]float32, len(inputs))
 		embedStarted := time.Now()
-		embeddings, _, modelName, err = wp.embedChunked(batchCtx, ep, inputs, dim)
-		_ = modelName
-		_ = usage
-		if err != nil {
-			wp.logBreakerOrError(ctx, "enrichment: batched embed",
-				err, "jobs", len(pendings), "inputs", len(inputs))
-			if isTransientLLMErr(err) {
-				for _, p := range pendings {
-					if p.shortCircuitDelete() {
-						continue
-					}
-					if relErr := wp.queue.Release(ctx, p.job.ID, p.workerID); relErr != nil {
-						logClaimLostOr(relErr, "enrichment: queue release after transient embed failure",
-							"job", p.job.ID, "worker", p.workerID)
-					}
-				}
+		// Embed each pending's own inputs (parent + its entities) in a separate
+		// call stamped with that memory's id, so the recorded token_usage row
+		// attributes to the memory. Within-memory batching (parent + entities in
+		// one call) is preserved; only cross-memory batching is given up, which
+		// is cheap relative to the LLM phases and is what lets per-memory phase
+		// metrics attribute the embedding cost. Results are written back into the
+		// shared embeddings slice at each pending's offsets so the downstream
+		// slicing (p.embedStart / p.embedEntStart) is unchanged.
+		for _, p := range pendings {
+			if p.shortCircuitDelete() {
+				continue
 			}
-			return
+			start, end := p.embedStart, p.embedEntStart+len(p.entities)
+			if start >= end {
+				continue // parent reused from the ingestion phase and no entities
+			}
+			embedCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, p.mem.NamespaceID), p.mem.ID)
+			vecs, _, _, err := wp.embedChunked(embedCtx, ep, inputs[start:end], dim)
+			if err != nil {
+				wp.logBreakerOrError(ctx, "enrichment: batched embed",
+					err, "job", p.job.ID, "memory", p.mem.ID, "inputs", end-start)
+				// A transient failure on any memory releases the whole claimed
+				// batch for retry (the un-embedded memories must not finalize).
+				if isTransientLLMErr(err) {
+					wp.releaseClaimedPendings(ctx, pendings)
+				}
+				return
+			}
+			copy(embeddings[start:end], vecs)
 		}
 		slog.Info("enrichment: embedded",
 			"jobs", len(pendings),

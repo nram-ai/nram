@@ -1114,9 +1114,27 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 
 	// Token usage: fact_extraction + entity_extraction + query_augment +
 	// embedding = 4 records (query augmentation defaults on and runs on the
-	// parent before embedding).
+	// parent before embedding). Each must attribute to the parent memory;
+	// query_augment and embedding are the regression guard (both previously
+	// wrote token_usage rows with memory_id=NULL, so those phases never
+	// attached to a memory in the per-phase metrics views).
 	if len(h.tokens.records) != 4 {
 		t.Errorf("expected 4 token usage records, got %d", len(h.tokens.records))
+	}
+	for _, op := range []string{"fact_extraction", "entity_extraction", "query_augment", "embedding"} {
+		found := false
+		for _, r := range h.tokens.records {
+			if r.Operation != op {
+				continue
+			}
+			found = true
+			if r.MemoryID == nil || *r.MemoryID != mem.ID {
+				t.Errorf("%s token_usage memory_id = %v, want %s", op, r.MemoryID, mem.ID)
+			}
+		}
+		if !found {
+			t.Errorf("no token_usage record for phase %q", op)
+		}
 	}
 }
 
@@ -2579,13 +2597,13 @@ func TestWorkerPool_PauseStopsClaiming(t *testing.T) {
 // parent + child IDs. This is the throughput-preservation guarantee from the
 // 60s-bug fix: removing sync embed from the write path must not turn a
 // 100-item batch_store into 100 embed API calls.
-func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
-	// Count embed invocations and capture the batched input size.
+func TestProcessBatch_PerMemoryEmbed(t *testing.T) {
+	// The final embed issues one call per memory (within-memory batching is
+	// preserved; cross-memory batching is given up) so each embedding
+	// token_usage row attributes to its own memory. Count embed invocations.
 	var embedCallCount int
-	var lastInputSize int
 	embedProv := &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
 		embedCallCount++
-		lastInputSize = len(req.Input)
 		embs := make([][]float32, len(req.Input))
 		for i := range req.Input {
 			embs[i] = []float32{float32(i), float32(i) + 0.1, float32(i) + 0.2}
@@ -2597,9 +2615,8 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 		}, nil
 	}}
 
-	// Fact + entity stubs return empty payloads so each job produces
-	// exactly one input (the parent's own content) for the shared embed
-	// call. The all-three gate stays open with the stubs in place.
+	// Fact + entity stubs return empty payloads so each job produces exactly
+	// one input (the parent's own content) for its own embed call.
 	h := newTestHarness(noopFactLLM(), noopEntityLLM(), embedProv)
 
 	jobs := make([]*model.EnrichmentJob, 0, 3)
@@ -2615,11 +2632,9 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 
 	h.pool.processBatch(context.Background(), "w-0", jobs)
 
-	if embedCallCount != 1 {
-		t.Fatalf("expected 1 shared embed call for %d jobs, got %d", len(jobs), embedCallCount)
-	}
-	if lastInputSize != len(jobs) {
-		t.Fatalf("expected batched embed input size %d (one per parent), got %d", len(jobs), lastInputSize)
+	// One embed call per memory (no cross-memory batching).
+	if embedCallCount != len(jobs) {
+		t.Fatalf("expected %d per-memory embed calls, got %d", len(jobs), embedCallCount)
 	}
 
 	if len(h.vectors.vectors) != len(jobs) {
@@ -2636,19 +2651,26 @@ func TestProcessBatch_SingleSharedEmbed(t *testing.T) {
 		t.Errorf("expected %d completed jobs, got %d", len(jobs), len(h.queue.completed))
 	}
 
-	// One batched embed call → one aggregate token_usage row. Per-job
-	// attribution was removed when recording centralized in the
-	// UsageRecordingProvider middleware (see plan: "aggregate-only is
-	// the correct trade"). Per-job attribution can be recovered via
-	// request_id correlation when needed.
-	var embedRecords int
+	// Each memory's embedding token_usage row must attribute to that memory.
+	// Regression guard: the batch embed previously stamped only pendings[0]'s
+	// namespace and left memory_id NULL, so per-memory phase metrics could not
+	// surface the embedding cost.
+	gotEmbedMems := make(map[uuid.UUID]bool)
 	for _, r := range h.tokens.records {
-		if r.Operation == "embedding" {
-			embedRecords++
+		if r.Operation != "embedding" {
+			continue
 		}
+		if r.MemoryID == nil {
+			t.Errorf("embedding token_usage has nil memory_id")
+			continue
+		}
+		if !wantParentIDs[*r.MemoryID] {
+			t.Errorf("embedding token_usage memory_id %s not in parent set", *r.MemoryID)
+		}
+		gotEmbedMems[*r.MemoryID] = true
 	}
-	if embedRecords != 1 {
-		t.Errorf("expected 1 aggregate embedding usage record, got %d", embedRecords)
+	if len(gotEmbedMems) != len(jobs) {
+		t.Errorf("expected a distinct embedding usage row per memory (%d), got %d", len(jobs), len(gotEmbedMems))
 	}
 }
 

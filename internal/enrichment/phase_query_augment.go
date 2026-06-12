@@ -386,7 +386,13 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	}
 
 	start := time.Now()
-	augmentCtx := provider.WithOperation(ctx, provider.OperationQueryAugment)
+	// Stamp the memory/namespace so the recorded token_usage row attributes to
+	// this memory (query augmentation runs from the batch-level ctx, which
+	// otherwise carries no memory_id, so the query_augment phase would be
+	// unattributable in per-memory views).
+	augmentCtx := provider.WithOperation(
+		provider.WithMemoryID(provider.WithNamespaceID(ctx, mem.NamespaceID), mem.ID),
+		provider.OperationQueryAugment)
 	resp, err := llm.Complete(augmentCtx, req)
 	latency := time.Since(start)
 	if err != nil {
