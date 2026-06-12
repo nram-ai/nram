@@ -20,7 +20,7 @@ import { firePulse } from "../components/NeuralNetwork/networkBus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faChevronDown, faChevronRight } from "../lib/icons";
 import type { DreamCycle, DreamLog, DreamPhaseSummary } from "../api/client";
-import { formatNumber, truncateId } from "../lib/formatters";
+import { formatLatencyMs, formatNumber, truncateId } from "../lib/formatters";
 import { copyToClipboard } from "../lib/clipboard";
 import {
   PHASE_LABELS,
@@ -300,11 +300,7 @@ function PhaseSummaryRowExpandable({
         </td>
         <td className="px-3 py-2 font-mono text-xs">{ps.operations}</td>
         <td className="px-3 py-2 text-muted-foreground">
-          {pending
-            ? "-"
-            : ps.duration_ms < 1000
-              ? `${ps.duration_ms}ms`
-              : `${(ps.duration_ms / 1000).toFixed(1)}s`}
+          {pending ? "-" : formatLatencyMs(ps.duration_ms)}
         </td>
         <td className="px-3 py-2">
           {pending ? <span className="text-xs text-muted-foreground">-</span> : <ResidualCell ps={ps} />}
@@ -1214,9 +1210,7 @@ function LiveActivitySection({ state }: { state?: LiveCycleState }) {
                 <span className={statusCls}>{status}</span>
                 {finished && c.latency_ms !== undefined && (
                   <span className="font-mono text-[11px] text-muted-foreground">
-                    {c.latency_ms < 1000
-                      ? `${c.latency_ms}ms`
-                      : `${(c.latency_ms / 1000).toFixed(1)}s`}
+                    {formatLatencyMs(c.latency_ms)}
                   </span>
                 )}
                 {c.tokens && (

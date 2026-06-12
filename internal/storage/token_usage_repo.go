@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -125,6 +126,46 @@ func (r *TokenUsageRepo) QueryByScope(ctx context.Context, scope string, from, t
 	rows, err := r.db.Query(ctx, query, scope, fromStr, toStr)
 	if err != nil {
 		return nil, fmt.Errorf("token usage query by scope: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return r.scanTokenUsages(rows)
+}
+
+// ListByMemoryIDs returns token_usage rows for the given memories restricted to
+// the provided operations, ordered by created_at DESC. Batched (single query
+// with IN clauses) to avoid N+1 over a queue page; memoryIDs is expected to be
+// page-sized. Returns nil when either filter list is empty.
+func (r *TokenUsageRepo) ListByMemoryIDs(ctx context.Context, memoryIDs []uuid.UUID, operations []string) ([]model.TokenUsage, error) {
+	if len(memoryIDs) == 0 || len(operations) == 0 {
+		return nil, nil
+	}
+
+	// Reuse the shared UUID IN-list builder for the memory IDs; the operation
+	// strings continue the Postgres placeholder numbering after them.
+	memPlaceholders, memArgs := uuidInPlaceholders(r.db, memoryIDs, 1)
+
+	pg := r.db.Backend() == BackendPostgres
+	opPlaceholders := make([]string, len(operations))
+	args := make([]any, 0, len(memArgs)+len(operations))
+	args = append(args, memArgs...)
+	for i, op := range operations {
+		if pg {
+			opPlaceholders[i] = fmt.Sprintf("$%d", len(memoryIDs)+1+i)
+		} else {
+			opPlaceholders[i] = "?"
+		}
+		args = append(args, op)
+	}
+
+	query := selectTokenUsageColumns + ` FROM token_usage
+		WHERE memory_id IN (` + strings.Join(memPlaceholders, ", ") + `)
+		AND operation IN (` + strings.Join(opPlaceholders, ", ") + `)
+		ORDER BY created_at DESC`
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("token usage list by memory ids: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 

@@ -1396,6 +1396,25 @@ export interface EnrichmentQueueItem {
   // not augmented") or when the memory has been deleted.
   augmented_queries?: string[];
   augmented_embedding_at?: string;
+  // Per-phase LLM/embedding latency and token usage for this job's most recent
+  // run, read from the recorded token_usage rows. Omitted when no usage rows
+  // match the memory (pending job, skipped phase, or a row predating the
+  // feature). One entry per operation, ordered by pipeline phase.
+  phase_metrics?: EnrichmentPhaseMetric[];
+}
+
+// One enrichment phase's measured cost, mapped from a token_usage row.
+// operation is the canonical provider operation name: "ingestion_decision",
+// "fact_extraction", "entity_extraction", "query_augment", "embedding".
+export interface EnrichmentPhaseMetric {
+  operation: string;
+  model?: string;
+  provider?: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  latency_ms?: number;
+  success: boolean;
+  at: string;
 }
 
 export interface EnrichmentQueueStatus {

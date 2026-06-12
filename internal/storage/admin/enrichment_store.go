@@ -5,15 +5,37 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
+
+// enrichmentPhaseOperations are the token_usage operation names surfaced as
+// per-phase metrics on a queue item, in canonical pipeline order (which also
+// drives the rendered ordering in attachPhaseMetrics). Derived from the
+// canonical provider list so the two never drift.
+var enrichmentPhaseOperations = phaseOpStrings(provider.EnrichmentPhaseOperations())
+
+func phaseOpStrings(ops []provider.Operation) []string {
+	out := make([]string, len(ops))
+	for i, op := range ops {
+		out[i] = string(op)
+	}
+	return out
+}
+
+// phaseMetricLowerBoundSlack absorbs the second-level truncation of
+// token_usage.created_at (stored as RFC3339 to the second) when comparing
+// against a job's claimed/created timestamp, so a row recorded in the same
+// second as the claim is not falsely excluded.
+const phaseMetricLowerBoundSlack = 5 * time.Second
 
 // EnrichmentAdminStore implements api.EnrichmentAdminStore by wrapping
 // EnrichmentQueueRepo and SettingsRepo. settingsSvc resolves
@@ -24,6 +46,7 @@ type EnrichmentAdminStore struct {
 	settingsRepo *storage.SettingsRepo
 	settingsSvc  *service.SettingsService
 	db           storage.DB
+	tokenRepo    *storage.TokenUsageRepo
 }
 
 // NewEnrichmentAdminStore creates a new EnrichmentAdminStore.
@@ -38,7 +61,113 @@ func NewEnrichmentAdminStore(
 		settingsRepo: settingsRepo,
 		settingsSvc:  settingsSvc,
 		db:           db,
+		tokenRepo:    storage.NewTokenUsageRepo(db),
 	}
+}
+
+// attachPhaseMetrics hydrates each item's PhaseMetrics from the token_usage
+// rows the provider middleware records per LLM/embedding call. Best-effort: on
+// any failure it logs and leaves PhaseMetrics empty rather than failing the
+// queue request. Batched into one query over the page's memory IDs.
+//
+// For each item it keeps the most recent row per operation (rows arrive
+// created_at DESC), scoped to the current run by discarding rows older than the
+// job's claimed_at (or created_at when not processing), minus a small slack.
+// This yields empty metrics for pending jobs (no rows yet) and the latest run's
+// metrics otherwise.
+func (s *EnrichmentAdminStore) attachPhaseMetrics(ctx context.Context, items []api.EnrichmentQueueItem) {
+	if len(items) == 0 {
+		return
+	}
+
+	memIDs := make([]uuid.UUID, 0, len(items))
+	seenMem := make(map[uuid.UUID]bool, len(items))
+	for _, it := range items {
+		if !seenMem[it.MemoryID] {
+			seenMem[it.MemoryID] = true
+			memIDs = append(memIDs, it.MemoryID)
+		}
+	}
+
+	rows, err := s.tokenRepo.ListByMemoryIDs(ctx, memIDs, enrichmentPhaseOperations)
+	if err != nil {
+		slog.Warn("enrichment: attach phase metrics", "err", err, "memories", len(memIDs))
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+
+	byMem := make(map[uuid.UUID][]model.TokenUsage, len(memIDs))
+	for _, r := range rows {
+		if r.MemoryID == nil {
+			continue
+		}
+		byMem[*r.MemoryID] = append(byMem[*r.MemoryID], r)
+	}
+
+	for i := range items {
+		memRows := byMem[items[i].MemoryID]
+		if len(memRows) == 0 {
+			continue
+		}
+
+		lower := items[i].CreatedAt
+		if items[i].ClaimedAt != nil {
+			lower = *items[i].ClaimedAt
+		}
+		lower = lower.Add(-phaseMetricLowerBoundSlack)
+
+		// memRows are created_at DESC, so the first row matching an operation
+		// is its most recent. Walking operations in canonical pipeline order
+		// yields metrics already ordered and deduped, no order-map or sort.
+		metrics := make([]api.EnrichmentPhaseMetric, 0, len(enrichmentPhaseOperations))
+		for _, op := range enrichmentPhaseOperations {
+			for _, r := range memRows {
+				if r.Operation != op {
+					continue
+				}
+				if r.CreatedAt.Before(lower) {
+					break // its newest row predates this run; skip the op
+				}
+				metrics = append(metrics, api.EnrichmentPhaseMetric{
+					Operation:        r.Operation,
+					Model:            r.Model,
+					Provider:         r.Provider,
+					PromptTokens:     r.TokensInput,
+					CompletionTokens: r.TokensOutput,
+					LatencyMs:        r.LatencyMs,
+					Success:          r.Success,
+					At:               r.CreatedAt,
+				})
+				break
+			}
+		}
+		if len(metrics) == 0 {
+			continue
+		}
+		items[i].PhaseMetrics = metrics
+	}
+}
+
+// scanQueueItems drains a queue-list result set into items and attaches
+// per-phase token metrics. It centralizes the scan loop and the
+// attachPhaseMetrics post-pass so the three queue-status builders (self, org,
+// system) cannot drift or forget the attach. threshold and now are resolved
+// once here since every caller uses the same values.
+func (s *EnrichmentAdminStore) scanQueueItems(ctx context.Context, rows *sql.Rows, withName bool) ([]api.EnrichmentQueueItem, error) {
+	threshold := s.staleThresholdMs(ctx)
+	now := time.Now().UTC()
+	items := []api.EnrichmentQueueItem{}
+	for rows.Next() {
+		item, err := s.scanQueueItem(rows, withName, threshold, now)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	s.attachPhaseMetrics(ctx, items)
+	return items, nil
 }
 
 // hydrateQueueItem builds the api-layer EnrichmentQueueItem from a queue
@@ -345,15 +474,9 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	}
 	defer func() { _ = rows.Close() }()
 
-	threshold := s.staleThresholdMs(ctx)
-	now := time.Now().UTC()
-	queueItems := []api.EnrichmentQueueItem{}
-	for rows.Next() {
-		item, err := s.scanQueueItem(rows, true, threshold, now)
-		if err != nil {
-			return nil, fmt.Errorf("self queue scan: %w", err)
-		}
-		queueItems = append(queueItems, item)
+	queueItems, err := s.scanQueueItems(ctx, rows, true)
+	if err != nil {
+		return nil, fmt.Errorf("self queue scan: %w", err)
 	}
 
 	paused, _ := s.IsPaused(ctx)
@@ -405,15 +528,9 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.Queue
 	}
 	defer func() { _ = rows.Close() }()
 
-	threshold := s.staleThresholdMs(ctx)
-	now := time.Now().UTC()
-	queueItems := []api.EnrichmentQueueItem{}
-	for rows.Next() {
-		item, err := s.scanQueueItem(rows, false, threshold, now)
-		if err != nil {
-			return nil, fmt.Errorf("queue status scan: %w", err)
-		}
-		queueItems = append(queueItems, item)
+	queueItems, err := s.scanQueueItems(ctx, rows, false)
+	if err != nil {
+		return nil, fmt.Errorf("queue status scan: %w", err)
 	}
 
 	paused, _ := s.IsPaused(ctx)
@@ -504,15 +621,9 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 	}
 	defer func() { _ = rows.Close() }()
 
-	threshold := s.staleThresholdMs(ctx)
-	now := time.Now().UTC()
-	queueItems := []api.EnrichmentQueueItem{}
-	for rows.Next() {
-		item, err := s.scanQueueItem(rows, false, threshold, now)
-		if err != nil {
-			return nil, fmt.Errorf("org queue scan: %w", err)
-		}
-		queueItems = append(queueItems, item)
+	queueItems, err := s.scanQueueItems(ctx, rows, false)
+	if err != nil {
+		return nil, fmt.Errorf("org queue scan: %w", err)
 	}
 
 	// Pause is a global flag. Surface it so the org tab can render the

@@ -2,10 +2,13 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -85,6 +88,99 @@ func TestEnrichment_SelfQueueStatus_PopulatesProjectFields(t *testing.T) {
 		}
 		if item.ProjectName != projectName {
 			t.Errorf("item[%d].ProjectName: got %q want %q", i, item.ProjectName, projectName)
+		}
+	}
+}
+
+// TestEnrichment_QueueStatus_AttachesPhaseMetrics asserts the read-time join
+// against token_usage hydrates per-phase latency/token metrics onto each queue
+// item, restricted to the canonical phase operations, in canonical order, and
+// excluding non-phase operations.
+func TestEnrichment_QueueStatus_AttachesPhaseMetrics(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+
+	queueRepo := storage.NewEnrichmentQueueRepo(db)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewEnrichmentAdminStore(queueRepo, settingsRepo, nil, db)
+
+	_, nsID := insertOrgWithNamespace(t, db, ctx)
+
+	memID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
+		memID.String(), nsID.String(), "x")
+	execSeed(t, db, ctx,
+		"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status) VALUES (?, ?, ?, ?)",
+		uuid.New().String(), memID.String(), nsID.String(), "completed")
+
+	tokenRepo := storage.NewTokenUsageRepo(db)
+	lat := 12345
+	rec := func(op string, in, out int) {
+		t.Helper()
+		id := memID
+		l := lat
+		if err := tokenRepo.Record(ctx, &model.TokenUsage{
+			NamespaceID:  nsID,
+			Operation:    op,
+			Provider:     "ollama",
+			Model:        "qwen3:8b-extract",
+			TokensInput:  in,
+			TokensOutput: out,
+			MemoryID:     &id,
+			LatencyMs:    &l,
+			Success:      true,
+		}); err != nil {
+			t.Fatalf("record %s: %v", op, err)
+		}
+	}
+	// Recorded out of canonical order; the helper must reorder them.
+	rec("entity_extraction", 580, 90)
+	rec("fact_extraction", 600, 120)
+	rec("ingestion_decision", 200, 30)
+	rec("memorize", 1, 1) // non-phase op; must not surface
+
+	resp, err := store.QueueStatus(ctx, api.QueueListParams{})
+	if err != nil {
+		t.Fatalf("QueueStatus: %v", err)
+	}
+	if resp == nil || len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", resp)
+	}
+
+	pm := resp.Items[0].PhaseMetrics
+	wantOrder := []string{"ingestion_decision", "fact_extraction", "entity_extraction"}
+	if len(pm) != len(wantOrder) {
+		t.Fatalf("expected %d phase metrics, got %d: %+v", len(wantOrder), len(pm), pm)
+	}
+	for i, w := range wantOrder {
+		if pm[i].Operation != w {
+			t.Fatalf("phase_metrics[%d].Operation = %q, want %q", i, pm[i].Operation, w)
+		}
+		if pm[i].Operation == "memorize" {
+			t.Fatalf("non-phase op surfaced")
+		}
+	}
+	if pm[1].PromptTokens != 600 || pm[1].CompletionTokens != 120 {
+		t.Fatalf("fact_extraction tokens: got %d/%d want 600/120",
+			pm[1].PromptTokens, pm[1].CompletionTokens)
+	}
+	if pm[1].LatencyMs == nil || *pm[1].LatencyMs != lat {
+		t.Fatalf("fact_extraction latency: got %v want %d", pm[1].LatencyMs, lat)
+	}
+
+	// Serialization guard: the UI consumes snake_case JSON keys, so confirm the
+	// struct tags marshal as the TS interface and OpenAPI schema expect.
+	raw, err := json.Marshal(resp.Items[0])
+	if err != nil {
+		t.Fatalf("marshal item: %v", err)
+	}
+	for _, key := range []string{
+		`"phase_metrics"`, `"operation"`, `"prompt_tokens"`,
+		`"completion_tokens"`, `"latency_ms"`,
+	} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("marshaled item missing JSON key %s: %s", key, raw)
 		}
 	}
 }

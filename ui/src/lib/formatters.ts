@@ -4,6 +4,13 @@ export function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
+// formatLatencyMs renders a millisecond duration compactly: "850ms" under a
+// second, "1.2s" at or above. Used for LLM / phase latency and cycle-duration
+// readouts so the unit switch lives in one place.
+export function formatLatencyMs(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
 // formatBytes renders a byte count as a human-readable size with up to
 // one decimal place. Negative or null inputs surface as "-" so callers
 // (table cells, summary lines) can pass `artifact_bytes` directly without

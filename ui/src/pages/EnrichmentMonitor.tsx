@@ -42,7 +42,7 @@ import type {
   EnrichmentQueueCounts,
   EnrichmentStatusFilter,
 } from "../api/client";
-import { truncateId } from "../lib/formatters";
+import { formatLatencyMs, truncateId } from "../lib/formatters";
 import { memoryFocusHref } from "../lib/dreaming";
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
@@ -438,6 +438,18 @@ const QUERY_AUGMENT_SKIP_LABELS: Record<string, string> = {
   parse_error: "LLM response unparseable",
 };
 
+// Human labels for the canonical token_usage operation names carried in
+// phase_metrics. ingestion_decision is a real phase but not in STEPS (it is
+// not recorded in steps_completed), so the Phase timings block is where its
+// cost surfaces.
+const PHASE_METRIC_LABELS: Record<string, string> = {
+  ingestion_decision: "Ingestion decision",
+  fact_extraction: "Fact extraction",
+  entity_extraction: "Entity extraction",
+  query_augment: "Query augmentation",
+  embedding: "Embedding",
+};
+
 function StepStatusIcon({
   ran,
   jobStatus,
@@ -509,6 +521,43 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
           })}
         </ul>
       </div>
+
+      {item.phase_metrics && item.phase_metrics.length > 0 && (
+        <div>
+          <h4 className="mb-1.5 font-medium text-muted-foreground">
+            Phase timings
+          </h4>
+          <ul className="space-y-1">
+            {item.phase_metrics.map((m) => (
+              <li
+                key={m.operation}
+                className="flex flex-wrap items-center gap-x-3 gap-y-0.5"
+              >
+                <span className="font-medium text-foreground">
+                  {PHASE_METRIC_LABELS[m.operation] ?? m.operation}
+                </span>
+                {typeof m.latency_ms === "number" && (
+                  <span className="text-muted-foreground">
+                    {formatLatencyMs(m.latency_ms)}
+                  </span>
+                )}
+                <span className="text-muted-foreground">
+                  {m.prompt_tokens.toLocaleString()} in /{" "}
+                  {m.completion_tokens.toLocaleString()} out
+                </span>
+                {m.model && (
+                  <span className="font-mono text-muted-foreground/80">
+                    {m.model}
+                  </span>
+                )}
+                {!m.success && (
+                  <span className="text-destructive">failed</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {(item.claimed_by || item.claimed_at || item.last_requeue_reason) && (
         <div className="grid grid-cols-1 gap-x-6 gap-y-1 text-muted-foreground md:grid-cols-3">

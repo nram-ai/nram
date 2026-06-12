@@ -507,3 +507,72 @@ func TestTokenUsageRepo_Purge_Empty(t *testing.T) {
 		}
 	})
 }
+
+func TestTokenUsageRepo_ListByMemoryIDs(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewTokenUsageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		memA := createTestMemoryForLineage(t, ctx, db, nsID)
+		memB := createTestMemoryForLineage(t, ctx, db, nsID)
+		memC := createTestMemoryForLineage(t, ctx, db, nsID) // not requested
+
+		rec := func(memID uuid.UUID, op string, in, out int) {
+			t.Helper()
+			id := memID
+			u := newTestTokenUsage(nsID)
+			u.Operation = op
+			u.MemoryID = &id
+			u.TokensInput = in
+			u.TokensOutput = out
+			if err := repo.Record(ctx, u); err != nil {
+				t.Fatalf("record %s/%s: %v", memID, op, err)
+			}
+		}
+
+		rec(memA, "fact_extraction", 100, 20)
+		rec(memA, "entity_extraction", 80, 10)
+		rec(memA, "embedding", 17, 0)
+		rec(memA, "memorize", 5, 5) // excluded by operations filter
+		rec(memB, "fact_extraction", 50, 5)
+		rec(memC, "fact_extraction", 9, 9) // excluded: memory not requested
+		// Row with nil memory_id is excluded by the memory_id IN (...) filter.
+		nilMem := newTestTokenUsage(nsID)
+		nilMem.Operation = "fact_extraction"
+		if err := repo.Record(ctx, nilMem); err != nil {
+			t.Fatalf("record nil-memory row: %v", err)
+		}
+
+		ops := []string{
+			"ingestion_decision", "fact_extraction", "entity_extraction",
+			"query_augment", "embedding",
+		}
+		rows, err := repo.ListByMemoryIDs(ctx, []uuid.UUID{memA, memB}, ops)
+		if err != nil {
+			t.Fatalf("ListByMemoryIDs: %v", err)
+		}
+
+		// memA: fact + entity + embedding (3); memB: fact (1). memorize and
+		// memC and the nil-memory row are all excluded.
+		if len(rows) != 4 {
+			t.Fatalf("expected 4 rows, got %d", len(rows))
+		}
+		for _, r := range rows {
+			if r.Operation == "memorize" {
+				t.Fatalf("memorize op should be filtered out")
+			}
+			if r.MemoryID == nil || (*r.MemoryID != memA && *r.MemoryID != memB) {
+				t.Fatalf("unexpected memory_id in result: %v", r.MemoryID)
+			}
+		}
+
+		// Empty filter lists short-circuit to nil.
+		if got, err := repo.ListByMemoryIDs(ctx, nil, ops); err != nil || got != nil {
+			t.Fatalf("empty memoryIDs: got %v err %v", got, err)
+		}
+		if got, err := repo.ListByMemoryIDs(ctx, []uuid.UUID{memA}, nil); err != nil || got != nil {
+			t.Fatalf("empty operations: got %v err %v", got, err)
+		}
+	})
+}

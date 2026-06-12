@@ -39,6 +39,21 @@ const (
 	OperationDreamNoveltyBackfill    Operation = "dream_novelty_backfill"
 )
 
+// EnrichmentPhaseOperations returns the operations that make up the
+// synchronous per-memory enrichment pipeline, in pipeline order. Kept next to
+// the operation constants so the canonical list does not drift in a consumer;
+// used to scope and order the per-phase token_usage metrics surfaced on the
+// enrichment queue.
+func EnrichmentPhaseOperations() []Operation {
+	return []Operation{
+		OperationIngestionDecision,
+		OperationFactExtraction,
+		OperationEntityExtraction,
+		OperationQueryAugment,
+		OperationEmbedding,
+	}
+}
+
 type ctxKey int
 
 const (

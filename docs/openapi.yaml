@@ -5857,8 +5857,43 @@ components:
               created_at:
                 type: string
                 format: date-time
+              phase_metrics:
+                type: array
+                description: >-
+                  Per-phase LLM/embedding latency and token usage for this
+                  job's most recent run, read from the recorded token_usage
+                  rows. Omitted when no usage rows match the memory (e.g. a
+                  pending job, a skipped phase, or a row predating the feature).
+                items:
+                  $ref: "#/components/schemas/EnrichmentPhaseMetric"
         paused:
           type: boolean
+
+    EnrichmentPhaseMetric:
+      type: object
+      description: One enrichment phase's measured LLM/embedding cost.
+      properties:
+        operation:
+          type: string
+          description: >-
+            Canonical provider operation name, e.g. ingestion_decision,
+            fact_extraction, entity_extraction, query_augment, embedding.
+        model:
+          type: string
+        provider:
+          type: string
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        latency_ms:
+          type: integer
+          format: int64
+        success:
+          type: boolean
+        at:
+          type: string
+          format: date-time
 
     EnrichmentTestPromptRequest:
       type: object

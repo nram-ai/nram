@@ -1134,11 +1134,16 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityErr error
 	)
 
+	var factLatency, entityLatency time.Duration
 	if !skipFact {
+		t0 := time.Now()
 		factEnv, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
+		factLatency = time.Since(t0)
 	}
 	if !skipEntity {
+		t0 := time.Now()
 		entEnv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
+		entityLatency = time.Since(t0)
 	}
 
 	var (
@@ -1164,6 +1169,35 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityUsage = &u
 		entityModel = entEnv.Model
 		entityProv = entEnv.ProviderName
+	}
+
+	// Per-phase observability: the fact/entity extraction calls otherwise emit
+	// no structured line (unlike ingestion_decision and query_augment), so the
+	// pre-embed duration cannot be attributed across phases from the logs.
+	if factEnv != nil {
+		slog.Info("enrichment: fact_extraction",
+			"job", job.ID,
+			"memory", mem.ID,
+			"facts", len(facts),
+			"model", factModel,
+			"provider", factProvider,
+			"prompt_tokens", factUsage.PromptTokens,
+			"completion_tokens", factUsage.CompletionTokens,
+			"finish_reason", factEnv.FinishReason,
+			"llm_latency_ms", factLatency.Milliseconds())
+	}
+	if entEnv != nil {
+		slog.Info("enrichment: entity_extraction",
+			"job", job.ID,
+			"memory", mem.ID,
+			"entities", len(entResult.Entities),
+			"relationships", len(entResult.Relationships),
+			"model", entityModel,
+			"provider", entityProv,
+			"prompt_tokens", entityUsage.PromptTokens,
+			"completion_tokens", entityUsage.CompletionTokens,
+			"finish_reason", entEnv.FinishReason,
+			"llm_latency_ms", entityLatency.Milliseconds())
 	}
 
 	if factErr != nil && entityErr != nil {

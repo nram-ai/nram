@@ -1,4 +1,5 @@
 import type { DreamLog } from "../api/client";
+import { formatLatencyMs } from "./formatters";
 
 export const PHASE_LABELS: Record<string, string> = {
   entity_dedup: "Entity Dedup",
@@ -181,10 +182,7 @@ export function formatFactValue(f: Fact): string {
     case "tokens":
       return typeof f.value === "number" ? `${formatCount(f.value)} tok` : String(f.value ?? "");
     case "duration_ms":
-      if (typeof f.value !== "number") return String(f.value ?? "");
-      return f.value < 1000
-        ? `${f.value}ms`
-        : `${(f.value / 1000).toFixed(1)}s`;
+      return typeof f.value === "number" ? formatLatencyMs(f.value) : String(f.value ?? "");
     default:
       return String(f.value ?? "");
   }

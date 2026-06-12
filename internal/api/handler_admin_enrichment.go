@@ -210,6 +210,27 @@ type EnrichmentQueueItem struct {
 	// memory has been soft-deleted still hydrates with both fields nil.
 	AugmentedQueries     []string   `json:"augmented_queries,omitempty"`
 	AugmentedEmbeddingAt *time.Time `json:"augmented_embedding_at,omitempty"`
+	// PhaseMetrics carries per-LLM-call latency and token usage for this job's
+	// enrichment phases (fact_extraction, entity_extraction, query_augment,
+	// ingestion_decision, embedding), read from the token_usage rows the
+	// provider middleware records. Best-effort: empty when no usage rows match
+	// the memory (e.g. the row predates the feature or the phase was skipped).
+	// One entry per operation, the most recent run scoped to this job.
+	PhaseMetrics []EnrichmentPhaseMetric `json:"phase_metrics,omitempty"`
+}
+
+// EnrichmentPhaseMetric is one enrichment phase's measured LLM cost, mapped
+// from a token_usage row. Operation is the canonical provider operation name
+// (see internal/provider/operation.go).
+type EnrichmentPhaseMetric struct {
+	Operation        string    `json:"operation"`
+	Model            string    `json:"model,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	LatencyMs        *int      `json:"latency_ms,omitempty"`
+	Success          bool      `json:"success"`
+	At               time.Time `json:"at"`
 }
 
 // enrichmentRetryRequest is the request body for POST /enrichment/retry.
