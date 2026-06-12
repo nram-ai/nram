@@ -482,12 +482,14 @@ func TestEnrichmentBackfillExtractedFactParaphrase_ServiceError_500(t *testing.T
 // handler asked the provider to use. When the request Model is empty it echoes
 // a sentinel, simulating a real provider falling back to its default model.
 type capturingLLMProvider struct {
-	gotModel string
-	content  string
+	gotModel     string
+	gotOperation provider.Operation
+	content      string
 }
 
-func (c *capturingLLMProvider) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+func (c *capturingLLMProvider) Complete(ctx context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	c.gotModel = req.Model
+	c.gotOperation, _ = provider.OperationFromContext(ctx)
 	respModel := req.Model
 	if respModel == "" {
 		respModel = "default-fact-model"
@@ -523,6 +525,9 @@ func TestEnrichmentTestPrompt_AugmentUsesDedicatedProvider(t *testing.T) {
 	if capLLM.gotModel != "" {
 		t.Errorf("augment test must send an empty model so the slot supplies it; got %q", capLLM.gotModel)
 	}
+	if capLLM.gotOperation != provider.OperationProbe {
+		t.Errorf("test-prompt must stamp the diagnostic operation so the usage recorder does not warn; got %q, want %q", capLLM.gotOperation, provider.OperationProbe)
+	}
 	var resp enrichmentTestPromptResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -555,6 +560,9 @@ func TestEnrichmentTestPrompt_IngestionUsesDedicatedProvider(t *testing.T) {
 	}
 	if capLLM.gotModel != "" {
 		t.Errorf("ingestion test must send an empty model so the slot supplies it; got %q", capLLM.gotModel)
+	}
+	if capLLM.gotOperation != provider.OperationProbe {
+		t.Errorf("test-prompt must stamp the diagnostic operation so the usage recorder does not warn; got %q, want %q", capLLM.gotOperation, provider.OperationProbe)
 	}
 	var resp enrichmentTestPromptResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {

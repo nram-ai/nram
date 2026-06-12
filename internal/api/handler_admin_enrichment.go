@@ -512,7 +512,13 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		JSONMode: body.Type == "augment" || body.Type == "ingestion",
 	}
 
-	resp, err := llmProvider.Complete(r.Context(), completionReq)
+	// Stamp the diagnostic operation so the usage recorder attributes this
+	// manual admin test call to system_probe instead of warning about a
+	// missing operation and recording it as "unknown".
+	resp, err := llmProvider.Complete(
+		provider.WithOperation(r.Context(), provider.OperationProbe),
+		completionReq,
+	)
 	if err != nil {
 		writeJSON(w, http.StatusOK, enrichmentTestPromptResponse{
 			Error:     fmt.Sprintf("LLM call failed: %v", err),
