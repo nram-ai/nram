@@ -107,7 +107,18 @@ function graphWith(nodeCount: number) {
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   }));
-  return queryStub({ entities, relationships: [] }) as ReturnType<typeof useApi.useGraph>;
+  // Chain the entities so every node has at least one edge. The page hides
+  // edgeless nodes from the render, and the live-layout reheat gate counts
+  // rendered nodes (graph3dData.nodes.length), so the fixture must connect
+  // them for the node count to drive the size-adaptive behaviour under test.
+  const relationships = Array.from({ length: Math.max(0, nodeCount - 1) }, (_v, i) => ({
+    id: `rel${i}`,
+    source_id: `ent${i}`,
+    target_id: `ent${i + 1}`,
+    relation: "related_to",
+    weight: 1,
+  }));
+  return queryStub({ entities, relationships }) as ReturnType<typeof useApi.useGraph>;
 }
 
 // Flush a single animation frame plus microtasks so requestReheat's rAF
