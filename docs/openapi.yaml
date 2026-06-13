@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.3.1
+  version: 0.3.2
   license:
     name: MIT
 
@@ -5640,20 +5640,14 @@ components:
         - "enrichment.enabled"
         - "enrichment.entity_extraction.async.temperature"
         - "enrichment.entity_extraction.max_tokens"
-        - "enrichment.entity_extraction.min_p"
-        - "enrichment.entity_extraction.repeat_penalty"
         - "enrichment.entity_extraction.sync.temperature"
-        - "enrichment.entity_extraction.top_k"
         - "enrichment.entity_system_prompt"
         - "enrichment.extracted_fact_backfill_batch_size"
         - "enrichment.extracted_fact_guard_enabled"
         - "enrichment.extracted_fact_paraphrase_threshold"
         - "enrichment.fact_extraction.async.temperature"
         - "enrichment.fact_extraction.max_tokens"
-        - "enrichment.fact_extraction.min_p"
-        - "enrichment.fact_extraction.repeat_penalty"
         - "enrichment.fact_extraction.sync.temperature"
-        - "enrichment.fact_extraction.top_k"
         - "enrichment.fact_system_prompt"
         - "enrichment.failed_retention_days"
         - "enrichment.ingestion.rationale_max_len"
@@ -5708,8 +5702,6 @@ components:
         - "provider.embedding_cache.enabled"
         - "provider.embedding_cache.max_entries"
         - "provider.embedding_cache.ttl_seconds"
-        - "provider.ollama.keep_alive"
-        - "provider.ollama.num_ctx"
         - "provider.prompt_cache.enabled"
         - "qdrant.addr"
         - "qdrant.api_key"

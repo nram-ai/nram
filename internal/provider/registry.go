@@ -43,11 +43,6 @@ type SlotConfig struct {
 	APIKey  string `json:"api_key"`
 	Model   string `json:"model"`
 	Timeout int    `json:"timeout"` // seconds, 0 = default
-	// KeepAlive and NumCtx are Ollama keep-warm controls applied to chat and
-	// embedding calls when Type is Ollama. Sourced from the global
-	// provider.ollama.* settings, not per-slot config.
-	KeepAlive string `json:"keep_alive,omitempty"`
-	NumCtx    int    `json:"num_ctx,omitempty"`
 	// PromptCacheEnabled marks the system prefix as cacheable on providers that
 	// accept an explicit hint (Anthropic). Sourced from the global
 	// provider.prompt_cache.enabled setting.
@@ -583,8 +578,6 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 			DefaultModel: config.Model,
 			Timeout:      slotTimeout(config.Timeout),
 			ProviderType: config.Type,
-			KeepAlive:    config.KeepAlive,
-			NumCtx:       config.NumCtx,
 		}), nil
 
 	case ProviderTypeGemini:
@@ -621,8 +614,6 @@ func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 			DefaultEmbeddingModel: config.Model,
 			Timeout:               slotTimeout(config.Timeout),
 			ProviderType:          config.Type,
-			KeepAlive:             config.KeepAlive,
-			NumCtx:                config.NumCtx,
 		}), nil
 
 	case ProviderTypeGemini:

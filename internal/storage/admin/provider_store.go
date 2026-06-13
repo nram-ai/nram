@@ -462,8 +462,6 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 // unavailable until it's repaired through the admin UI.
 func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.SettingsRepo) provider.RegistryConfig {
 	var cfg provider.RegistryConfig
-	keepAlive := providerSettingString(ctx, settingsRepo, service.SettingProviderOllamaKeepAlive)
-	numCtx := providerSettingInt(ctx, settingsRepo, service.SettingProviderOllamaNumCtx)
 	promptCache := providerSettingBool(ctx, settingsRepo, service.SettingProviderPromptCacheEnabled)
 	for _, def := range provider.Slots {
 		setting, err := settingsRepo.Get(ctx, def.SettingKey(), "global")
@@ -479,8 +477,6 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			BaseURL:            apiCfg.URL,
 			APIKey:             apiCfg.APIKey,
 			Model:              apiCfg.Model,
-			KeepAlive:          keepAlive,
-			NumCtx:             numCtx,
 			PromptCacheEnabled: promptCache,
 		}
 		if apiCfg.Timeout != nil {
@@ -489,19 +485,6 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 		cfg.SetSlotConfig(def.Name, sc)
 	}
 	return cfg
-}
-
-// providerSettingString resolves a string-typed global setting from the repo,
-// falling back to the registered default when unset or unparseable.
-func providerSettingString(ctx context.Context, repo *storage.SettingsRepo, key string) string {
-	if s, err := repo.Get(ctx, key, "global"); err == nil {
-		var v string
-		if json.Unmarshal(s.Value, &v) == nil && v != "" {
-			return v
-		}
-	}
-	def, _ := service.GetDefault(key)
-	return def
 }
 
 // providerSettingBool resolves a boolean-typed global setting from the repo,
@@ -515,21 +498,6 @@ func providerSettingBool(ctx context.Context, repo *storage.SettingsRepo, key st
 	}
 	def, _ := service.GetDefault(key)
 	return def == "true"
-}
-
-// providerSettingInt resolves a number-typed global setting from the repo,
-// falling back to the registered default when unset or unparseable.
-func providerSettingInt(ctx context.Context, repo *storage.SettingsRepo, key string) int {
-	if s, err := repo.Get(ctx, key, "global"); err == nil {
-		var v float64
-		if json.Unmarshal(s.Value, &v) == nil {
-			return int(v)
-		}
-	}
-	if def := service.GetDefaultInt(key); def >= 0 {
-		return def
-	}
-	return 0
 }
 
 func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) provider.RegistryConfig {

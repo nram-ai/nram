@@ -12,24 +12,17 @@ import (
 
 // CallOptions controls per-invocation LLM parameters for the extraction
 // helpers. Resolved per call so changes hot-reload within the cache TTL.
-// RepeatPenalty / TopK / MinP are Ollama extensions; nil pointer = omit.
 type CallOptions struct {
-	MaxTokens     int
-	Temperature   float64
-	RepeatPenalty *float64
-	TopK          *int
-	MinP          *float64
+	MaxTokens   int
+	Temperature float64
 }
 
-// callOptionKeys names the four settings keys that vary per
+// callOptionKeys names the per-call settings keys that vary per
 // (phase, sync-or-async-temperature) tuple. ResolveCallOptions reads each
 // in turn so all four extraction call sites share one resolution body.
 type callOptionKeys struct {
-	MaxTokens     string
-	Temperature   string
-	RepeatPenalty string
-	TopK          string
-	MinP          string
+	MaxTokens   string
+	Temperature string
 }
 
 // FactCallOptionKeys / EntityCallOptionKeys return the keys for the named
@@ -43,11 +36,8 @@ func FactCallOptionKeys(sync bool) callOptionKeys {
 		tmp = SettingFactExtractionSyncTemperature
 	}
 	return callOptionKeys{
-		MaxTokens:     SettingFactExtractionMaxTokens,
-		Temperature:   tmp,
-		RepeatPenalty: SettingFactExtractionRepeatPenalty,
-		TopK:          SettingFactExtractionTopK,
-		MinP:          SettingFactExtractionMinP,
+		MaxTokens:   SettingFactExtractionMaxTokens,
+		Temperature: tmp,
 	}
 }
 
@@ -57,32 +47,17 @@ func EntityCallOptionKeys(sync bool) callOptionKeys {
 		tmp = SettingEntityExtractionSyncTemperature
 	}
 	return callOptionKeys{
-		MaxTokens:     SettingEntityExtractionMaxTokens,
-		Temperature:   tmp,
-		RepeatPenalty: SettingEntityExtractionRepeatPenalty,
-		TopK:          SettingEntityExtractionTopK,
-		MinP:          SettingEntityExtractionMinP,
+		MaxTokens:   SettingEntityExtractionMaxTokens,
+		Temperature: tmp,
 	}
 }
 
-// ResolveCallOptions reads the five extraction tunables from the settings
-// cascade. RepeatPenalty / TopK / MinP land as nil when their resolved
-// value is non-positive (the zero-as-omit contract).
+// ResolveCallOptions reads the extraction tunables from the settings cascade.
 func ResolveCallOptions(ctx context.Context, s *SettingsService, keys callOptionKeys) CallOptions {
-	opts := CallOptions{
+	return CallOptions{
 		MaxTokens:   s.ResolveIntWithDefault(ctx, keys.MaxTokens, "global"),
 		Temperature: s.ResolveFloatWithDefault(ctx, keys.Temperature, "global"),
 	}
-	if rp := s.ResolveFloatWithDefault(ctx, keys.RepeatPenalty, "global"); rp > 0 {
-		opts.RepeatPenalty = &rp
-	}
-	if k := s.ResolveIntWithDefault(ctx, keys.TopK, "global"); k > 0 {
-		opts.TopK = &k
-	}
-	if mp := s.ResolveFloatWithDefault(ctx, keys.MinP, "global"); mp > 0 {
-		opts.MinP = &mp
-	}
-	return opts
 }
 
 // FactExtractionEnvelope carries the parsed result and the diagnostic
@@ -182,13 +157,10 @@ func AsExtractionFailure(err error) (*ExtractionFailure, bool) {
 // fact and entity helpers.
 func buildExtractionRequest(messages []provider.Message, opts CallOptions) *provider.CompletionRequest {
 	return &provider.CompletionRequest{
-		Messages:      messages,
-		MaxTokens:     opts.MaxTokens,
-		Temperature:   opts.Temperature,
-		JSONMode:      true,
-		RepeatPenalty: opts.RepeatPenalty,
-		TopK:          opts.TopK,
-		MinP:          opts.MinP,
+		Messages:    messages,
+		MaxTokens:   opts.MaxTokens,
+		Temperature: opts.Temperature,
+		JSONMode:    true,
 	}
 }
 

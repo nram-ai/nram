@@ -438,9 +438,9 @@ func searchSubstring(s, substr string) bool {
 }
 
 // TestOpenAIComplete_OllamaExtensionsGated_Ollama verifies that
-// repeat_penalty / top_k / min_p land in the request body when ProviderType
-// is "ollama". This is the gating that lets Issue 3a's anti-loop knobs
-// reach Ollama without leaking to strict OpenAI endpoints.
+// reasoning_effort lands in the request body when ProviderType is "ollama".
+// This is the gating that disables the model's thinking pass on Ollama's
+// OpenAI-compat endpoint without leaking the field to strict OpenAI.
 func TestOpenAIComplete_OllamaExtensionsGated_Ollama(t *testing.T) {
 	var receivedBody map[string]any
 	srv := newTestServer(t, map[string]http.HandlerFunc{
@@ -467,41 +467,25 @@ func TestOpenAIComplete_OllamaExtensionsGated_Ollama(t *testing.T) {
 		Timeout:      5 * time.Second,
 	})
 
-	rp := 1.15
-	k := 30
-	mp := 0.05
 	_, err := p.Complete(context.Background(), &CompletionRequest{
-		Messages:      []Message{{Role: "user", Content: "ping"}},
-		MaxTokens:     128,
-		Temperature:   0.1,
-		RepeatPenalty: &rp,
-		TopK:          &k,
-		MinP:          &mp,
+		Messages:    []Message{{Role: "user", Content: "ping"}},
+		MaxTokens:   128,
+		Temperature: 0.1,
 	})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
-	if got, ok := receivedBody["repeat_penalty"]; !ok {
-		t.Errorf("expected repeat_penalty in request body for Ollama provider")
-	} else if got != 1.15 {
-		t.Errorf("repeat_penalty = %v, want 1.15", got)
-	}
-	if got, ok := receivedBody["top_k"]; !ok {
-		t.Errorf("expected top_k in request body for Ollama provider")
-	} else if got.(float64) != 30 {
-		t.Errorf("top_k = %v, want 30", got)
-	}
-	if got, ok := receivedBody["min_p"]; !ok {
-		t.Errorf("expected min_p in request body for Ollama provider")
-	} else if got != 0.05 {
-		t.Errorf("min_p = %v, want 0.05", got)
+	if got, ok := receivedBody["reasoning_effort"]; !ok {
+		t.Errorf("expected reasoning_effort in request body for Ollama provider")
+	} else if got != "none" {
+		t.Errorf("reasoning_effort = %v, want \"none\"", got)
 	}
 }
 
-// TestOpenAIComplete_OllamaExtensionsGated_OpenAI verifies that the same
-// pointer fields are stripped when ProviderType is "openai"; strict OpenAI
-// endpoints reject unknown fields, so leaking these would break operator
+// TestOpenAIComplete_OllamaExtensionsGated_OpenAI verifies that
+// reasoning_effort is stripped when ProviderType is "openai"; strict OpenAI
+// endpoints reject unknown fields, so leaking it would break operator
 // installs that point at api.openai.com.
 func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 	var receivedBody map[string]any
@@ -529,24 +513,16 @@ func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 		Timeout:      5 * time.Second,
 	})
 
-	rp := 1.15
-	k := 30
-	mp := 0.05
 	_, err := p.Complete(context.Background(), &CompletionRequest{
-		Messages:      []Message{{Role: "user", Content: "ping"}},
-		MaxTokens:     128,
-		Temperature:   0.1,
-		RepeatPenalty: &rp,
-		TopK:          &k,
-		MinP:          &mp,
+		Messages:    []Message{{Role: "user", Content: "ping"}},
+		MaxTokens:   128,
+		Temperature: 0.1,
 	})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
-	for _, key := range []string{"repeat_penalty", "top_k", "min_p"} {
-		if _, present := receivedBody[key]; present {
-			t.Errorf("OpenAI provider must not send Ollama extension %q; body had it", key)
-		}
+	if _, present := receivedBody["reasoning_effort"]; present {
+		t.Errorf("OpenAI provider must not send Ollama extension \"reasoning_effort\"; body had it")
 	}
 }

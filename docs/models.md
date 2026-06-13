@@ -93,6 +93,23 @@ Verify with `curl -s http://<ollama-host>:11434/api/ps` after a call; the loaded
 
 This must live on the Ollama server because nram inferences run through Ollama's OpenAI-compatibility endpoint (`/v1/chat/completions`, `/v1/embeddings`), and that path drops `keep_alive` from request bodies. Only the server-side env var controls eviction for `/v1/*` traffic.
 
+## Sampling parameters for extraction (`repeat_penalty`, `top_k`, `min_p`)
+
+The same OpenAI-compatibility endpoint also ignores the Ollama-native sampling extensions `repeat_penalty`, `top_k`, and `num_ctx`/`min_p` when they are passed in the request body, so nram does not expose them as settings. To curb runaway repetition on small models (the original reason these existed), bake the parameters into a Modelfile and point the extraction slot at the derived model:
+
+```
+FROM qwen3:8b
+PARAMETER repeat_penalty 1.15
+PARAMETER top_k 40
+PARAMETER min_p 0.05
+```
+
+```bash
+ollama create qwen3-8b-extract -f Modelfile
+```
+
+nram still controls `temperature` and `max_tokens` per call (both are standard OpenAI fields that the `/v1` path honors).
+
 ## Embedding dimensions
 
 You do not need to enter the embedding model's dimension count. nram auto-detects dimensions on the first call to a new embedding provider by sending a probe string and reading the response shape. The detected count appears in the provider status read-back after the first successful call.

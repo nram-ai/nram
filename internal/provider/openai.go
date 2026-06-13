@@ -32,17 +32,11 @@ type OpenAIConfig struct {
 	Timeout time.Duration
 
 	// ProviderType is the canonical type from registry.go ("openai", "ollama",
-	// "openrouter", "custom"). Gates Ollama-extension request fields
-	// (repeat_penalty, top_k, min_p, keep_alive, num_ctx) so they do not leak
-	// to strict OpenAI endpoints that reject unknown fields. Empty = treat as
-	// standard OpenAI-compatible (extensions omitted).
+	// "openrouter", "custom"). Gates provider-specific request extensions
+	// (reasoning_effort for Ollama, the reasoning field for OpenRouter) so they
+	// do not leak to strict OpenAI endpoints that reject unknown fields. Empty =
+	// treat as standard OpenAI-compatible (extensions omitted).
 	ProviderType string
-
-	// KeepAlive (e.g. "5m", "-1") and NumCtx are Ollama keep-warm controls
-	// applied to every chat and embedding call when ProviderType is Ollama.
-	// KeepAlive == "" and NumCtx <= 0 omit the respective field.
-	KeepAlive string
-	NumCtx    int
 }
 
 // OpenAIProvider implements both LLMProvider and EmbeddingProvider using any
@@ -97,11 +91,6 @@ type openaiResponseFormat struct {
 var ollamaReasoningEffortOff = "none"
 
 // openaiChatRequest is the request body for POST /v1/chat/completions.
-//
-// RepeatPenalty, TopK, MinP are Ollama-extension fields. They are populated
-// only when OpenAIConfig.ProviderType == ProviderTypeOllama; with omitempty +
-// pointer types, nil values disappear from the marshalled body so strict
-// OpenAI endpoints never see them.
 type openaiChatRequest struct {
 	Model          string                `json:"model"`
 	Messages       []openaiChatMessage   `json:"messages"`
@@ -109,14 +98,6 @@ type openaiChatRequest struct {
 	Temperature    *float64              `json:"temperature,omitempty"`
 	Stop           []string              `json:"stop,omitempty"`
 	ResponseFormat *openaiResponseFormat `json:"response_format,omitempty"`
-	RepeatPenalty  *float64              `json:"repeat_penalty,omitempty"`
-	TopK           *int                  `json:"top_k,omitempty"`
-	MinP           *float64              `json:"min_p,omitempty"`
-	// KeepAlive and NumCtx are Ollama-only extensions. Ollama reads them from
-	// the OpenAI-compatible chat body; strict OpenAI endpoints never see them
-	// (gated by ProviderTypeOllama at the call site).
-	KeepAlive *string `json:"keep_alive,omitempty"`
-	NumCtx    *int    `json:"num_ctx,omitempty"`
 	// ReasoningEffort disables the model's thinking pass. Recent Ollama releases
 	// default thinking ON for reasoning-capable models (e.g. qwen3), which adds a
 	// long, unused reasoning trace before every answer. On Ollama's OpenAI-compat
@@ -166,9 +147,6 @@ type openaiEmbeddingRequest struct {
 	Input      []string `json:"input"`
 	Model      string   `json:"model"`
 	Dimensions int      `json:"dimensions,omitempty"`
-	// KeepAlive is an Ollama-only extension to keep the embedding model
-	// resident between calls; gated by ProviderTypeOllama at the call site.
-	KeepAlive *string `json:"keep_alive,omitempty"`
 }
 
 // openaiEmbeddingData is a single embedding in the response.
@@ -233,15 +211,6 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		body.ResponseFormat = &openaiResponseFormat{Type: "json_object"}
 	}
 	if p.config.ProviderType == ProviderTypeOllama {
-		body.RepeatPenalty = req.RepeatPenalty
-		body.TopK = req.TopK
-		body.MinP = req.MinP
-		if ka := p.ollamaKeepAlive(req.KeepAlive); ka != nil {
-			body.KeepAlive = ka
-		}
-		if nc := p.ollamaNumCtx(req.NumCtx); nc != nil {
-			body.NumCtx = nc
-		}
 		// Force thinking off (see ReasoningEffort field doc). These are
 		// extraction/decision/synthesis calls that never benefit from a reasoning
 		// trace, and recent Ollama defaults it on, adding tens of seconds per call.
@@ -273,34 +242,6 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			TotalTokens:      chatResp.Usage.TotalTokens,
 		},
 	}, nil
-}
-
-// ollamaKeepAlive resolves the keep_alive value to send to Ollama: a non-empty
-// per-request override wins, otherwise the provider-config value; "" yields nil
-// (field omitted).
-func (p *OpenAIProvider) ollamaKeepAlive(reqVal *string) *string {
-	if reqVal != nil && *reqVal != "" {
-		return reqVal
-	}
-	if p.config.KeepAlive != "" {
-		v := p.config.KeepAlive
-		return &v
-	}
-	return nil
-}
-
-// ollamaNumCtx resolves the num_ctx value to send to Ollama: a positive
-// per-request override wins, otherwise the provider-config value; <= 0 yields
-// nil (field omitted, leaving the model/Modelfile default).
-func (p *OpenAIProvider) ollamaNumCtx(reqVal *int) *int {
-	if reqVal != nil && *reqVal > 0 {
-		return reqVal
-	}
-	if p.config.NumCtx > 0 {
-		v := p.config.NumCtx
-		return &v
-	}
-	return nil
 }
 
 // Name returns the provider identifier.
@@ -338,11 +279,6 @@ func (p *OpenAIProvider) Embed(ctx context.Context, req *EmbeddingRequest) (*Emb
 	}
 	if req.Dimension > 0 {
 		body.Dimensions = req.Dimension
-	}
-	if p.config.ProviderType == ProviderTypeOllama {
-		if ka := p.ollamaKeepAlive(nil); ka != nil {
-			body.KeepAlive = ka
-		}
 	}
 
 	var embResp openaiEmbeddingResponse

@@ -343,19 +343,11 @@ const (
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
 	// so changes hot-reload within the cascade cache TTL. max_tokens caps
 	// completion tokens; raise when high-density inputs hit
-	// finish_reason=length. repeat_penalty / top_k / min_p are Ollama
-	// extensions, gated by the provider type at the OpenAIProvider layer
-	// (strict OpenAI never sees them). Temperature is split sync vs async
+	// finish_reason=length. Temperature is split sync vs async
 	// to preserve pre-refactor behavior (sync was 0.1, async was 0.2);
 	// operators converge by setting both keys equal.
 	SettingFactExtractionMaxTokens          = "enrichment.fact_extraction.max_tokens"
 	SettingEntityExtractionMaxTokens        = "enrichment.entity_extraction.max_tokens"
-	SettingFactExtractionRepeatPenalty      = "enrichment.fact_extraction.repeat_penalty"
-	SettingEntityExtractionRepeatPenalty    = "enrichment.entity_extraction.repeat_penalty"
-	SettingFactExtractionTopK               = "enrichment.fact_extraction.top_k"
-	SettingEntityExtractionTopK             = "enrichment.entity_extraction.top_k"
-	SettingFactExtractionMinP               = "enrichment.fact_extraction.min_p"
-	SettingEntityExtractionMinP             = "enrichment.entity_extraction.min_p"
 	SettingFactExtractionSyncTemperature    = "enrichment.fact_extraction.sync.temperature"
 	SettingFactExtractionAsyncTemperature   = "enrichment.fact_extraction.async.temperature"
 	SettingEntityExtractionSyncTemperature  = "enrichment.entity_extraction.sync.temperature"
@@ -610,12 +602,6 @@ const (
 	// explicit cache hints (Anthropic cache_control) mark the system prefix as
 	// cacheable. Below a model's minimum cacheable prefix the hint is a no-op.
 	SettingProviderPromptCacheEnabled = "provider.prompt_cache.enabled"
-	// SettingProviderOllamaKeepAlive is the Ollama keep_alive value (e.g. "5m",
-	// "-1" to keep resident) so the model stays warm between calls.
-	SettingProviderOllamaKeepAlive = "provider.ollama.keep_alive"
-	// SettingProviderOllamaNumCtx overrides Ollama's context window per request
-	// (0 leaves it to the model/Modelfile default).
-	SettingProviderOllamaNumCtx = "provider.ollama.num_ctx"
 )
 
 // Default system-prompt text for each phase: the full static instruction (role,
@@ -887,8 +873,6 @@ var settingDefaults = map[string]string{
 	SettingEmbeddingCacheTTLSeconds: "900",
 
 	SettingProviderPromptCacheEnabled: "true",
-	SettingProviderOllamaKeepAlive:    "5m",
-	SettingProviderOllamaNumCtx:       "0",
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the
@@ -916,12 +900,6 @@ var settingDefaults = map[string]string{
 
 	SettingFactExtractionMaxTokens:          "4096",
 	SettingEntityExtractionMaxTokens:        "4096",
-	SettingFactExtractionRepeatPenalty:      "1.15",
-	SettingEntityExtractionRepeatPenalty:    "1.15",
-	SettingFactExtractionTopK:               "0",
-	SettingEntityExtractionTopK:             "0",
-	SettingFactExtractionMinP:               "0",
-	SettingEntityExtractionMinP:             "0",
 	SettingFactExtractionSyncTemperature:    "0.1",
 	SettingFactExtractionAsyncTemperature:   "0.2",
 	SettingEntityExtractionSyncTemperature:  "0.1",
