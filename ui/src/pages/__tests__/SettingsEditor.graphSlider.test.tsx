@@ -8,7 +8,7 @@
  * layout key to confirm it round-trips unchanged.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import { GraphLayoutSliderEditor } from "../SettingsEditor";
@@ -38,6 +38,15 @@ function linkSchema(): SettingSchema {
     max: 100,
     step: 1,
   };
+}
+
+// Advance fake timers inside act() so React deterministically flushes the
+// useDebounce state update -> onSave chain before the assertion, rather than
+// leaving the flush to race the assertion under parallel-suite load.
+async function flushTimers(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
 }
 
 afterEach(() => {
@@ -78,7 +87,7 @@ describe("GraphLayoutSliderEditor", () => {
     const slider = screen.getByRole("slider");
     // Operator drags Repulsion down to 60; stored charge must become -60.
     fireEvent.change(slider, { target: { value: "60" } });
-    await vi.advanceTimersByTimeAsync(500);
+    await flushTimers(500);
 
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith("graph.charge_strength", -60);
@@ -99,7 +108,7 @@ describe("GraphLayoutSliderEditor", () => {
     const slider = screen.getByRole("slider") as HTMLInputElement;
     expect(slider.value).toBe("100");
     fireEvent.change(slider, { target: { value: "30" } });
-    await vi.advanceTimersByTimeAsync(500);
+    await flushTimers(500);
 
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith("graph.link_distance", 30);
@@ -117,7 +126,7 @@ describe("GraphLayoutSliderEditor", () => {
         onSave={onSave}
       />,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
     expect(onSave).not.toHaveBeenCalled();
   });
 });

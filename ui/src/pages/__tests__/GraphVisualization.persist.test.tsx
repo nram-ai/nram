@@ -18,7 +18,7 @@
  * user interaction must still persist as before.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import GraphVisualization from "../GraphVisualization";
@@ -137,6 +137,16 @@ function queryStub<T>(data: T, isLoading = false): any {
   };
 }
 
+// Advance fake timers inside act() so React deterministically flushes the
+// state update -> passive effect -> mutate chain that a debounce fires. A bare
+// advanceTimersByTimeAsync leaves that flush to the scheduler, which races the
+// assertion under parallel-suite CPU load.
+async function flushTimers(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -197,7 +207,9 @@ describe("GraphVisualization layout persistence", () => {
     );
 
     // Flush effects and any pending timers from the loading render.
-    await vi.runAllTimersAsync();
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
 
     // Now resolve the projects query with a project carrying overrides.
     useMeProjectsMock.mockReturnValue(
@@ -213,7 +225,7 @@ describe("GraphVisualization layout persistence", () => {
     );
 
     // Settle the debounce window (300 ms) and any follow-on effects.
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     // The regression check: no PUT should have been fired purely as a
     // result of hydration. The user did not touch any slider.
@@ -250,7 +262,7 @@ describe("GraphVisualization layout persistence", () => {
     // Let hydration settle so any spurious writes (if the gate regressed)
     // would have been observed by now. We assert below that the only
     // write is the one from our deliberate slider change.
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     // Open the layout drawer. The button is wired to setLayoutDrawerOpen.
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
@@ -266,7 +278,7 @@ describe("GraphVisualization layout persistence", () => {
     // Advance past the 300 ms debounce window. waitFor cannot be used
     // under fake timers (its poll loop relies on wall-clock); we flush
     // pending timers and then assert directly.
-    await vi.advanceTimersByTimeAsync(500);
+    await flushTimers(500);
 
     expect(mutate).toHaveBeenCalledTimes(1);
 
@@ -309,7 +321,7 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
     const gravitySlider = screen.getAllByRole("slider")[0];
@@ -317,7 +329,7 @@ describe("GraphVisualization layout persistence", () => {
     // Drag the slider but do NOT advance through the full debounce
     // window. The pending debounce timer is the danger.
     fireEvent.change(gravitySlider, { target: { value: "2.5" } });
-    await vi.advanceTimersByTimeAsync(50);
+    await flushTimers(50);
 
     // Click Reset before the debounce would fire.
     fireEvent.click(screen.getByRole("button", { name: /Reset to system defaults/i }));
@@ -335,7 +347,7 @@ describe("GraphVisualization layout persistence", () => {
     // was NOT reset by handleResetLayout, the debounce would fire here
     // and a second mutation would land carrying the default value back
     // as an explicit override.
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     expect(mutate).toHaveBeenCalledTimes(resetCalls);
   });
@@ -361,7 +373,7 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
     const sliders = screen.getAllByRole("slider") as HTMLInputElement[];
@@ -395,13 +407,13 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
     // Sliders: [0] Gravity, [1] Repulsion, [2] Link distance.
     const linkSlider = screen.getAllByRole("slider")[2];
     fireEvent.change(linkSlider, { target: { value: "15" } });
-    await vi.advanceTimersByTimeAsync(500);
+    await flushTimers(500);
 
     expect(mutate).toHaveBeenCalledTimes(1);
     const call = mutate.mock.calls[0][0] as {
@@ -439,7 +451,7 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
 
@@ -481,7 +493,7 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
 
@@ -521,11 +533,11 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     fireEvent.click(screen.getByRole("button", { name: /Layout/i }));
     fireEvent.change(screen.getAllByRole("slider")[0], { target: { value: "0.75" } });
-    await vi.advanceTimersByTimeAsync(500);
+    await flushTimers(500);
 
     expect(mutate).toHaveBeenCalledTimes(1);
     const settings = (
@@ -558,7 +570,7 @@ describe("GraphVisualization layout persistence", () => {
         <GraphVisualization />
       </ProjectProvider>,
     );
-    await vi.advanceTimersByTimeAsync(1000);
+    await flushTimers(1000);
 
     // No Layout button is rendered for a reserved project.
     expect(screen.queryByRole("button", { name: /Layout/i })).toBeNull();
