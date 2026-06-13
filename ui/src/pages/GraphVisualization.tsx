@@ -733,14 +733,6 @@ function GraphVisualization() {
 
     const entityIds = new Set(graphData.entities.map((e) => e.id));
 
-    const nodes: GraphNode[] = graphData.entities.map((e) => ({
-      id: e.id,
-      name: e.name,
-      entityType: e.entity_type,
-      mentionCount: e.mention_count,
-      entity: e,
-    }));
-
     const links: GraphLink[] = (graphData.relationships || [])
       .filter((r) => entityIds.has(r.source_id) && entityIds.has(r.target_id))
       .map((r) => {
@@ -756,6 +748,27 @@ function GraphVisualization() {
           id: r.id,
         };
       });
+
+    // Only render nodes that have at least one visible edge. Edgeless nodes
+    // are either mention-only entities with no relationships, or entities the
+    // edge cap stranded by dropping their (weaker) edges; both render as
+    // disconnected dots, so drop them from the viz. The backend keeps the full
+    // entity inventory; this filter is rendering-only.
+    const linkedIds = new Set<string>();
+    for (const l of links) {
+      linkedIds.add(l.source as string);
+      linkedIds.add(l.target as string);
+    }
+
+    const nodes: GraphNode[] = graphData.entities
+      .filter((e) => linkedIds.has(e.id))
+      .map((e) => ({
+        id: e.id,
+        name: e.name,
+        entityType: e.entity_type,
+        mentionCount: e.mention_count,
+        entity: e,
+      }));
 
     return { nodes, links };
   }, [graphData]);
@@ -887,7 +900,7 @@ function GraphVisualization() {
       {selectedProjectId && !isLoading && !graphError && graphData?.truncated &&
         graphData.returned_edges !== undefined && graphData.total_edges !== undefined && (
           <div className="mb-2 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
-            Showing the top {graphData.returned_edges.toLocaleString()} of {graphData.total_edges.toLocaleString()} edges by weight.
+            Showing {graphData.returned_edges.toLocaleString()} of {graphData.total_edges.toLocaleString()} edges, prioritized to keep the graph connected.
           </div>
         )}
 

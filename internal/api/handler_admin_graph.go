@@ -357,22 +357,28 @@ func resolveLiveProvenance(ctx context.Context, store GraphMemoryStore, namespac
 }
 
 // applyEdgeCap enforces the graph.max_edges ceiling on a response payload.
-// When the eligible edge count exceeds maxEdges the function retains the
-// top-N edges by weight descending (with ID as tiebreaker so the selection
-// is stable across replicas and post-VACUUM row reorderings) and populates
-// the Truncated / TotalEdges / ReturnedEdges fields so the admin UI can
-// surface a partial-view banner. The cap exists because the THREE.js
-// force-graph renderer stalls past low thousands of edges; throttling the
-// data layer (the historical workaround was a low transitive
-// namespace_hard_cap) belongs on the rendering boundary, not on dream-cycle
-// work. maxEdges <= 0 disables the cap.
+// When the eligible edge count exceeds maxEdges the function selects a
+// connectivity-aware subset: a maximum-weight spanning forest first (Kruskal
+// over the weight-descending edge list), then the strongest remaining edges
+// until the budget is spent. The forest pass connects every node that has at
+// least one eligible edge using its highest-weight links, so when
+// nodesWithEdges - components <= maxEdges no node is stranded by the cap;
+// the fill pass then restores the "strongest edges win" character for the
+// bulk of the budget. Edge ID breaks weight ties so the selection is stable
+// across replicas and post-VACUUM row reorderings. The Truncated /
+// TotalEdges / ReturnedEdges fields are populated so the admin UI can surface
+// a partial-view banner. The cap exists because the THREE.js force-graph
+// renderer stalls past low thousands of edges; throttling the data layer (the
+// historical workaround was a low transitive namespace_hard_cap) belongs on
+// the rendering boundary, not on dream-cycle work. maxEdges <= 0 disables the
+// cap.
 //
 // Entities are returned unchanged regardless of whether truncation fires.
-// Filtering entities to only those touched by retained edges would silently
-// drop isolated nodes from large namespaces and change the response shape
-// at the cap boundary; operators investigating namespace inventory rely on
-// the entity set being a stable view of "what exists," independent of edge
-// rendering. The cap is an edge concern; entities pass through.
+// Filtering entities to only those touched by retained edges would change the
+// response shape at the cap boundary; operators investigating namespace
+// inventory rely on the entity set being a stable view of "what exists,"
+// independent of edge rendering. The cap is an edge concern; entities pass
+// through, and the viz hides any node left without a visible edge.
 //
 // The function does not mutate the input rels slice. The sort runs on a
 // copy so callers can safely retain the original ordering for telemetry,
@@ -391,13 +397,96 @@ func applyEdgeCap(entities []GraphEntity, rels []GraphRelationship, maxEdges int
 		}
 		return sorted[i].ID < sorted[j].ID
 	})
-	sorted = sorted[:maxEdges]
+
+	// Phase 1: mark the maximum-weight spanning forest. Walking the
+	// weight-descending list and keeping only edges that join two distinct
+	// components attaches every node-with-edges to the graph using its
+	// strongest available links.
+	uf := newUnionFind(len(entities))
+	forest := make([]bool, len(sorted))
+	forestCount := 0
+	for i := range sorted {
+		if forestCount == maxEdges {
+			break
+		}
+		if uf.union(sorted[i].SourceID, sorted[i].TargetID) {
+			forest[i] = true
+			forestCount++
+		}
+	}
+
+	// Phase 2: emit the forest edges plus the strongest remaining edges to
+	// fill the budget (the fill adds density within already-connected
+	// components without stranding anyone). A single weight-descending pass
+	// over the already-sorted list keeps the payload deterministic and
+	// replica-stable with no second sort.
+	fill := maxEdges - forestCount
+	chosen := make([]GraphRelationship, 0, maxEdges)
+	for i := range sorted {
+		if len(chosen) == maxEdges {
+			break
+		}
+		if forest[i] {
+			chosen = append(chosen, sorted[i])
+		} else if fill > 0 {
+			chosen = append(chosen, sorted[i])
+			fill--
+		}
+	}
 
 	return GraphResponse{
 		Entities:      entities,
-		Relationships: sorted,
+		Relationships: chosen,
 		Truncated:     true,
 		TotalEdges:    total,
-		ReturnedEdges: len(sorted),
+		ReturnedEdges: len(chosen),
 	}
+}
+
+// unionFind is a disjoint-set structure over entity IDs (string keys) used to
+// build the spanning forest in applyEdgeCap. Components are created lazily on
+// first reference, so only entities that appear in an edge are tracked.
+type unionFind struct {
+	parent map[string]string
+	rank   map[string]int
+}
+
+// newUnionFind sizes the backing maps for sizeHint distinct entities (an upper
+// bound is the namespace entity count) to avoid incremental rehashing.
+func newUnionFind(sizeHint int) *unionFind {
+	return &unionFind{
+		parent: make(map[string]string, sizeHint),
+		rank:   make(map[string]int, sizeHint),
+	}
+}
+
+// find returns the representative of x's component, creating a singleton
+// component for x on first reference and halving the path it walks.
+func (u *unionFind) find(x string) string {
+	if _, ok := u.parent[x]; !ok {
+		u.parent[x] = x
+		return x
+	}
+	for u.parent[x] != x {
+		u.parent[x] = u.parent[u.parent[x]]
+		x = u.parent[x]
+	}
+	return x
+}
+
+// union merges the components of a and b. It reports whether a merge happened;
+// false means they were already connected (the caller skips that edge).
+func (u *unionFind) union(a, b string) bool {
+	ra, rb := u.find(a), u.find(b)
+	if ra == rb {
+		return false
+	}
+	if u.rank[ra] < u.rank[rb] {
+		ra, rb = rb, ra
+	}
+	u.parent[rb] = ra
+	if u.rank[ra] == u.rank[rb] {
+		u.rank[ra]++
+	}
+	return true
 }
