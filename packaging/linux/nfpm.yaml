@@ -1,0 +1,41 @@
+# nfpm configuration for the Neural Ram (nram) Linux packages (.deb / .rpm).
+# scripts/ci/build_cross.sh renders the ${ARCH}/${VERSION}/${BINARY} placeholders
+# with sed into a per-build temp config before invoking `nfpm package`. nfpm maps
+# the GOARCH-style `arch` (amd64/arm64) to each packager's native arch
+# (deb amd64/arm64, rpm x86_64/aarch64).
+name: nram
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Brandon Lehmann
+vendor: Neural Ram
+homepage: https://github.com/nram-ai/nram
+license: MIT
+description: |
+  Neural Ram (nram) is a self-hosted, MIT-licensed memory server: a single Go
+  binary with OAuth, passkeys, multi-tenancy, knowledge-graph enrichment, a
+  background consolidation ("dreaming") cycle, and MCP over HTTP.
+
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/nram
+    file_info:
+      mode: 0755
+  - src: packaging/linux/nram.desktop
+    dst: /usr/share/applications/nram.desktop
+    file_info:
+      mode: 0644
+  - src: packaging/appicon/icon-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/nram.png
+    file_info:
+      mode: 0644
+  - src: packaging/appicon/icon-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/nram.png
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/linux/refresh-caches.sh
+  postremove: packaging/linux/refresh-caches.sh

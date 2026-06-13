@@ -28,6 +28,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
+source "$REPO_ROOT/scripts/ci/version.sh"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/dist}"
 PACKAGE="${PACKAGE:-0}"
@@ -65,6 +66,48 @@ fi
 
 echo "build_cross: version=$VERSION package=$PACKAGE output=$OUTPUT_DIR"
 
+# Pinned, pure-Go packaging tool versions, fetched with a @version suffix so
+# go.mod is never modified. goversioninfo (run inside gen_winres.sh) emits the
+# Windows icon/version resource; nfpm builds the Linux .deb/.rpm.
+NFPM_VERSION="v2.46.3"
+
+# Package-safe version for .deb/.rpm and macOS CFBundleShortVersionString. deb/rpm
+# versions must start with a digit, so a non-numeric VERSION (e.g. a git short SHA
+# on a local build) is given a synthetic 0.0.0+ prefix; '-' becomes '~' (valid
+# pre-release separator for both formats) and any other stray char becomes '_'.
+PKGVER="${VERSION#v}"
+case "$PKGVER" in [0-9]*) ;; *) PKGVER="0.0.0+${PKGVER}" ;; esac
+PKGVER="$(printf '%s' "$PKGVER" | tr '-' '~' | tr -c 'A-Za-z0-9.+~' '_')"
+
+# Numeric x.y.z for macOS CFBundleShortVersionString.
+SHORTVERSION="$(parse_version_numeric "$VERSION" | tr ' ' '.')"
+
+# Single EXIT trap cleans up the build-time artifacts/tools the steps below set.
+TOOLBIN=""
+cleanup() {
+  rm -f "$REPO_ROOT"/cmd/server/resource_windows_*.syso
+  [ -n "$TOOLBIN" ] && rm -rf "$TOOLBIN"
+}
+trap cleanup EXIT
+
+# Windows targets embed an icon + file metadata via resource_windows_<arch>.syso
+# files placed next to main() in cmd/server/ (build artifacts, never committed;
+# the trap removes them).
+if printf '%s\n' "${TARGETS[@]}" | grep -q '^windows/'; then
+  echo "build_cross: generating Windows resources"
+  VERSION="$VERSION" bash "$REPO_ROOT/scripts/ci/gen_winres.sh"
+fi
+
+# Build nfpm once into a temp GOBIN, rather than paying the `go run` link cost on
+# every per-arch, per-packager (deb/rpm) invocation in the loop below.
+NFPM_BIN=""
+if printf '%s\n' "${TARGETS[@]}" | grep -q '^linux/'; then
+  TOOLBIN="$(mktemp -d)"
+  echo "build_cross: installing nfpm $NFPM_VERSION"
+  GOBIN="$TOOLBIN" go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"
+  NFPM_BIN="$TOOLBIN/nfpm"
+fi
+
 for t in "${TARGETS[@]}"; do
   goos="${t%/*}"
   goarch="${t#*/}"
@@ -80,11 +123,40 @@ for t in "${TARGETS[@]}"; do
 
   name="nram_${VERSION}_${goos}_${goarch}"
   if [ "$PACKAGE" = "1" ]; then
-    if [ "$goos" = "windows" ]; then
-      (cd "$stage" && zip -q "$OUTPUT_DIR/${name}.zip" "nram${binext}")
-    else
-      tar -czf "$OUTPUT_DIR/${name}.tar.gz" -C "$stage" "nram${binext}"
-    fi
+    case "$goos" in
+      windows)
+        # Single .exe (icon + metadata already embedded via the .syso).
+        (cd "$stage" && zip -q "$OUTPUT_DIR/${name}.zip" "nram${binext}")
+        ;;
+      darwin)
+        # A bare Mach-O shows no icon; wrap it in a Neural Ram.app bundle so
+        # Finder/Dock render icon.icns.
+        app="$stage/Neural Ram.app"
+        mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+        cp "$binpath" "$app/Contents/MacOS/nram"
+        cp "$REPO_ROOT/packaging/appicon/icon.icns" "$app/Contents/Resources/icon.icns"
+        sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHORTVERSION__/${SHORTVERSION}/g" \
+          "$REPO_ROOT/packaging/appicon/Info.plist.template" > "$app/Contents/Info.plist"
+        tar -czf "$OUTPUT_DIR/${name}.tar.gz" -C "$stage" "Neural Ram.app"
+        ;;
+      linux)
+        # Raw-binary tarball (unchanged), plus native packages that install a
+        # desktop launcher + hicolor icons for real menu integration. Render the
+        # nfpm config with sed (the binary path and arch/version vary per build;
+        # nfpm's own env expansion does not cover the contents glob). The
+        # desktop/icon `src` paths stay relative and resolve from $REPO_ROOT (cwd).
+        tar -czf "$OUTPUT_DIR/${name}.tar.gz" -C "$stage" "nram${binext}"
+        nfpmcfg="$stage/nfpm.yaml"
+        sed -e "s|\${ARCH}|${goarch}|g" \
+            -e "s|\${VERSION}|${PKGVER}|g" \
+            -e "s|\${BINARY}|${binpath}|g" \
+          "$REPO_ROOT/packaging/linux/nfpm.yaml" > "$nfpmcfg"
+        for pkg in deb rpm; do
+          "$NFPM_BIN" package --config "$nfpmcfg" --packager "$pkg" \
+            --target "$OUTPUT_DIR/${name}.${pkg}"
+        done
+        ;;
+    esac
   else
     cp "$binpath" "$OUTPUT_DIR/${name}${binext}"
   fi

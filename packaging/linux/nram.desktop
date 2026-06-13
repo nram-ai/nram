@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Neural Ram
+GenericName=Memory Server
+Comment=Self-hosted memory server with knowledge graph and MCP over HTTP
+Exec=nram
+Icon=nram
+Terminal=true
+Categories=Development;Utility;
+Keywords=memory;mcp;knowledge-graph;ai;
+StartupNotify=false
