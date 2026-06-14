@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -41,7 +41,7 @@ func NewAdminGraphMaintenanceHandler(cfg GraphMaintenanceConfig) http.HandlerFun
 			}
 			health, err := cfg.Maintainer.GraphHealthStatus(r.Context())
 			if err != nil {
-				log.Printf("admin graph health: %v", err)
+				slog.Error("admin graph health failed", "err", err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{
 					"error": "failed to read graph health",
 				})
@@ -57,7 +57,7 @@ func NewAdminGraphMaintenanceHandler(cfg GraphMaintenanceConfig) http.HandlerFun
 			}
 			res, err := cfg.Maintainer.RepairGraph(r.Context())
 			if err != nil {
-				log.Printf("admin graph repair: %v", err)
+				slog.Error("admin graph repair failed", "err", err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{
 					"error": "graph repair failed",
 				})

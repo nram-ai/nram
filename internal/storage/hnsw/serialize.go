@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 
@@ -125,15 +125,14 @@ func Import(r io.Reader) (*Graph, error) {
 		return nil, err
 	}
 	if stats.AnyDropped() {
-		log.Printf(
-			"hnsw: import: repaired snapshot nodes=%d edges=%d forward_dropped=%d self_loops=%d dupes=%d over_long=%d ep_fixed=%d",
-			stats.NodesScanned,
-			stats.EdgesScanned,
-			stats.ForwardDropped,
-			stats.SelfLoopDropped,
-			stats.DupDropped,
-			stats.OverLongFriends,
-			stats.EpLevelFixed,
+		slog.Warn("hnsw: import: repaired snapshot",
+			"nodes", stats.NodesScanned,
+			"edges", stats.EdgesScanned,
+			"forward_dropped", stats.ForwardDropped,
+			"self_loops", stats.SelfLoopDropped,
+			"dupes", stats.DupDropped,
+			"over_long", stats.OverLongFriends,
+			"ep_fixed", stats.EpLevelFixed,
 		)
 	}
 	return g, nil

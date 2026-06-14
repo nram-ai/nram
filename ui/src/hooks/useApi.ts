@@ -70,6 +70,7 @@ import {
   type EnrichmentQueueCounts,
   type EnrichmentSortField,
   type EnrichmentStatusFilter,
+  type LogListParams,
 } from "../api/client";
 import {
   sharesAPI,
@@ -1220,6 +1221,44 @@ export function useEnrichmentStatusInfinite(opts: {
     },
     refetchInterval: opts.intervalMs ?? 10_000,
     placeholderData: keepPreviousData,
+  });
+}
+
+// LOGS_PAGE_SIZE is how many diagnostic log entries the Logs page pulls per
+// "Load more" / infinite-scroll fetch.
+export const LOGS_PAGE_SIZE = 100;
+
+// useLogsInfinite pages the diagnostic log store server-side. The filter set is
+// part of the query key, so changing any filter refetches from the first page.
+// placeholderData keeps prior pages visible during the poll refetch so the list
+// does not blank while new logs arrive.
+export function useLogsInfinite(opts: {
+  filter?: Omit<LogListParams, "limit" | "offset">;
+  pageSize?: number;
+  intervalMs?: number;
+}) {
+  const pageSize = opts.pageSize ?? LOGS_PAGE_SIZE;
+  const filter = opts.filter ?? {};
+  return useInfiniteQuery({
+    queryKey: ["admin", "logs", { filter, pageSize }],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      adminAPI.listLogs({ ...filter, limit: pageSize, offset: pageParam as number }),
+    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
+      const next = (lastPageParam as number) + pageSize;
+      return next >= lastPage.pagination.total ? undefined : next;
+    },
+    refetchInterval: opts.intervalMs ?? 15_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+// useLogFacets loads the filter dropdown values (levels + distinct components).
+export function useLogFacets() {
+  return useQuery({
+    queryKey: ["admin", "logs", "facets"],
+    queryFn: () => adminAPI.getLogFacets(),
+    staleTime: 60_000,
   });
 }
 

@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -94,7 +94,7 @@ func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 
 		stats, err := cfg.Store.DashboardStats(r.Context(), orgID, userID)
 		if err != nil {
-			log.Printf("api: AdminDashboard: %v", err)
+			slog.Error("api: AdminDashboard failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve dashboard stats"))
 			return
 		}
@@ -137,7 +137,7 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 
 		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID, userID)
 		if err != nil {
-			log.Printf("api: AdminActivity: %v", err)
+			slog.Error("api: AdminActivity failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve activity events"))
 			return
 		}

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -265,12 +265,12 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 	if s.vectorStore != nil {
 		for _, memID := range memoryIDs {
 			if err := s.vectorStore.Delete(ctx, storage.VectorKindMemory, memID); err != nil {
-				log.Printf("project delete: vector for memory %s: %v", memID, err)
+				slog.Warn("project delete: vector cleanup for memory failed", "memory", memID, "err", err)
 			}
 		}
 		for _, entID := range entityIDs {
 			if err := s.vectorStore.Delete(ctx, storage.VectorKindEntity, entID); err != nil {
-				log.Printf("project delete: vector for entity %s: %v", entID, err)
+				slog.Warn("project delete: vector cleanup for entity failed", "entity", entID, "err", err)
 			}
 		}
 	}
@@ -286,14 +286,14 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		owner, err := s.projectOwnerLookup.GetByNamespaceID(ctx, project.OwnerNamespaceID)
 		switch {
 		case err != nil:
-			log.Printf("project delete: share sweep skipped, owner lookup for namespace %s failed: %v", project.OwnerNamespaceID, err)
+			slog.Warn("project delete: share sweep skipped, owner lookup failed", "namespace", project.OwnerNamespaceID, "err", err)
 		case owner == nil:
-			log.Printf("project delete: share sweep skipped, no owner for namespace %s", project.OwnerNamespaceID)
+			slog.Warn("project delete: share sweep skipped, no owner for namespace", "namespace", project.OwnerNamespaceID)
 		default:
 			if n, sweepErr := s.shareSweeper.SweepZeroGrantShares(ctx, owner.ID); sweepErr != nil {
-				log.Printf("project delete: share sweep: %v", sweepErr)
+				slog.Warn("project delete: share sweep failed", "err", sweepErr)
 			} else if n > 0 {
-				log.Printf("project delete: revoked %d zero-grant share(s) for owner %s", n, owner.ID)
+				slog.Info("project delete: revoked zero-grant shares", "count", n, "owner", owner.ID)
 			}
 		}
 	}
@@ -307,8 +307,8 @@ func (s *ProjectDeleteService) Delete(ctx context.Context, req *ProjectDeleteReq
 		events.Emit(ctx, s.eventBus, events.ProjectDeleted, "project:"+project.ID.String(), json.RawMessage(data))
 	}
 
-	log.Printf("project delete: %s (%s) completed in %v, %d memories removed",
-		project.Slug, project.ID, time.Since(start), len(memoryIDs))
+	slog.Info("project delete: completed",
+		"slug", project.Slug, "project", project.ID, "duration", time.Since(start), "memories", len(memoryIDs))
 
 	return &ProjectDeleteResponse{
 		DeletedMemories: len(memoryIDs),

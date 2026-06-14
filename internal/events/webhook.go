@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -123,7 +123,7 @@ func (d *WebhookDeliverer) handleEvent(ctx context.Context, event Event) {
 
 	webhooks, err := d.store.ListActiveForEvent(ctx, nsID, event.Type)
 	if err != nil {
-		log.Printf("webhook deliverer: list webhooks for event %s: %v", event.Type, err)
+		slog.Warn("webhook deliverer: list webhooks for event failed", "event_type", event.Type, "err", err)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (d *WebhookDeliverer) handleEvent(ctx context.Context, event Event) {
 func (d *WebhookDeliverer) deliver(ctx context.Context, wh *model.Webhook, event Event) {
 	body, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("webhook deliverer: marshal event %s: %v", event.ID, err)
+		slog.Warn("webhook deliverer: marshal event failed", "event", event.ID, "err", err)
 		return
 	}
 
@@ -153,15 +153,15 @@ func (d *WebhookDeliverer) deliver(ctx context.Context, wh *model.Webhook, event
 		lastErr = d.sendRequest(ctx, wh, event, body)
 		if lastErr == nil {
 			if recordErr := d.store.RecordSuccess(ctx, wh.ID); recordErr != nil {
-				log.Printf("webhook deliverer: record success for %s: %v", wh.ID, recordErr)
+				slog.Warn("webhook deliverer: record success failed", "webhook", wh.ID, "err", recordErr)
 			}
 			return
 		}
 	}
 
-	log.Printf("webhook deliverer: delivery failed after %d attempts for webhook %s: %v", d.maxRetries, wh.ID, lastErr)
+	slog.Warn("webhook deliverer: delivery failed", "attempts", d.maxRetries, "webhook", wh.ID, "err", lastErr)
 	if recordErr := d.store.RecordFailure(ctx, wh.ID); recordErr != nil {
-		log.Printf("webhook deliverer: record failure for %s: %v", wh.ID, recordErr)
+		slog.Warn("webhook deliverer: record failure failed", "webhook", wh.ID, "err", recordErr)
 	}
 }
 

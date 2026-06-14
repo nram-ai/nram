@@ -555,6 +555,17 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        'eeeeeeee-0000-0000-0000-000000000001', 'json', 1, 'succeeded',
 		        '/tmp/export.json', 2048, 'abc123sha',
 		        '2025-04-10T00:00:00Z', '2025-04-10T00:01:00Z')`)
+
+	// ── log_entries ────────────────────────────────────────────────────────
+	// FK-free diagnostic logs. Row 1: structured attrs + populated tenant ids.
+	mustExec(`INSERT INTO log_entries (id, ts, level, component, message, attrs, project_id, namespace_id, user_id)
+		VALUES ('88888888-0000-0000-0000-000000000001', '2025-05-01T10:00:00Z', 'info', 'enrichment',
+		        'enrichment: batch claimed', '{"job":"j1","count":3}',
+		        'eeeeeeee-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001',
+		        'cccccccc-0000-0000-0000-000000000001')`)
+	// Row 2: minimal, NULL component + NULL tenant ids, default attrs.
+	mustExec(`INSERT INTO log_entries (id, ts, level, message)
+		VALUES ('88888888-0000-0000-0000-000000000002', '2025-05-01T10:01:00Z', 'error', 'extraction failed')`)
 }
 
 // cleanPostgres truncates all migrated tables in reverse dependency order so
@@ -564,6 +575,7 @@ func cleanPostgres(t *testing.T, db *sql.DB) {
 	ctx := context.Background()
 	// Reverse of migratedTables order to respect FK constraints.
 	tables := []string{
+		"log_entries",
 		"dream_project_dirty",
 		"dream_log_summaries",
 		"dream_logs",

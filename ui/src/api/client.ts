@@ -1613,6 +1613,80 @@ export interface PaginatedResponse<T> {
   };
 }
 
+// --- Diagnostic logs (operator-only) ---
+
+// LogEntry is one row from the diagnostic log store. attrs holds the structured
+// slog fields as an object (preserved verbatim, not flattened into message).
+export interface LogEntry {
+  id: string;
+  ts: string;
+  level: string;
+  component?: string;
+  message: string;
+  attrs: Record<string, unknown>;
+  project_id?: string;
+  namespace_id?: string;
+  user_id?: string;
+}
+
+// LogListParams narrows a logs query. level is an OR-set; from/to are RFC3339.
+export interface LogListParams {
+  level?: string[];
+  component?: string;
+  search?: string;
+  attrKey?: string;
+  attrValue?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// LogFacets supplies the Logs page filter dropdown values.
+export interface LogFacets {
+  levels: string[];
+  components: string[];
+}
+
+// buildLogQuery serializes LogListParams into a query string. Levels are
+// comma-joined (the backend also accepts repeated level params).
+export function buildLogQuery(params?: LogListParams): string {
+  const sp = new URLSearchParams();
+  if (params?.level && params.level.length > 0) sp.set("level", params.level.join(","));
+  if (params?.component) sp.set("component", params.component);
+  if (params?.search) sp.set("search", params.search);
+  if (params?.attrKey) sp.set("attr_key", params.attrKey);
+  if (params?.attrValue !== undefined) sp.set("attr_value", params.attrValue);
+  if (params?.from) sp.set("from", params.from);
+  if (params?.to) sp.set("to", params.to);
+  if (typeof params?.limit === "number") sp.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") sp.set("offset", String(params.offset));
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
+
+// downloadLogsExport streams the filtered log export through fetch (so the
+// Authorization header travels with the request) and triggers a browser
+// download. Filename comes from the Content-Disposition header.
+export async function downloadLogsExport(
+  format: "csv" | "json",
+  params?: LogListParams,
+): Promise<void> {
+  const sp = new URLSearchParams(buildLogQuery(params).replace(/^\?/, ""));
+  sp.set("format", format);
+  const res = await fetch(`${BASE_URL}/admin/logs/export?${sp.toString()}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new APIError(res.status, text || "log export failed");
+  }
+  const blob = await res.blob();
+  const filename =
+    parseAttachmentFilename(res.headers.get("Content-Disposition")) ?? `logs.${format}`;
+  triggerBlobDownload(blob, filename);
+}
+
 // --- Auth API ---
 
 export interface LoginRequest {
@@ -1843,6 +1917,11 @@ export const adminAPI = {
     request<DreamRollbackResponse>("POST", "/admin/dreaming/rollback", { cycle_id: cycleId }),
   abandonDreamCycle: (cycleId: string) =>
     request<DreamAbandonResponse>("POST", `/admin/dreaming/cycles/${cycleId}/abandon`),
+
+  // Diagnostic logs (operator-only)
+  listLogs: (params?: LogListParams) =>
+    request<PaginatedResponse<LogEntry>>("GET", `/admin/logs${buildLogQuery(params)}`),
+  getLogFacets: () => request<LogFacets>("GET", "/admin/logs/facets"),
 
   // Enrichment
   getEnrichmentStatus: (params?: EnrichmentQueueParams) =>

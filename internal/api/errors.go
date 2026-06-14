@@ -3,7 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 )
 
@@ -110,7 +110,7 @@ func WriteError(w http.ResponseWriter, err *APIError) {
 	}
 
 	if encErr := json.NewEncoder(w).Encode(envelope); encErr != nil {
-		log.Printf("api: failed to encode error response: %v", encErr)
+		slog.Error("api: failed to encode error response", "err", encErr)
 	}
 }
 
@@ -120,7 +120,7 @@ func ErrorMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("api: panic recovered: %v", rec)
+				slog.Error("api: panic recovered", "panic", rec)
 				WriteError(w, ErrInternal("an unexpected error occurred"))
 			}
 		}()

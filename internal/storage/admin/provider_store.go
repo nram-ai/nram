@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"strings"
 	"sync"
@@ -357,7 +356,7 @@ func (s *ProviderAdminStore) persistAndReload(ctx context.Context, slot string, 
 	if s.deps.Registry != nil {
 		newCfg := s.buildRegistryConfigFromDB(ctx)
 		if err := s.deps.Registry.Reload(newCfg); err != nil {
-			log.Printf("provider hot-reload failed: %v", err)
+			slog.Warn("provider hot-reload failed", "err", err)
 		}
 	}
 	return nil

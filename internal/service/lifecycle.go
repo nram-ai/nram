@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -242,7 +242,7 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 		// delete fires the FK ON DELETE SET NULL that would strand its edges.
 		if s.graphReaper != nil {
 			if _, err := s.graphReaper.ReapMemoryFootprint(ctx, mem.NamespaceID, mem.ID); err != nil {
-				log.Printf("lifecycle: reap graph footprint for %s: %v", mem.ID, err)
+				slog.Warn("lifecycle: reap graph footprint failed", "memory", mem.ID, "err", err)
 			}
 		}
 		if err := s.store.HardDelete(ctx, mem.ID, mem.NamespaceID); err != nil {
@@ -259,11 +259,12 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 	// RepairGraph via reapAndPrune so the two cannot diverge.
 	res, err := s.reapAndPrune(ctx, now.Add(-orphanGrace))
 	if err != nil {
-		log.Printf("lifecycle: graph cleanup: %v", err)
+		slog.Warn("lifecycle: graph cleanup failed", "err", err)
 	}
 	if res.RelationshipsReaped > 0 || res.DanglingDeleted > 0 || res.OrphanedEntities > 0 {
-		log.Printf("lifecycle: graph cleanup reaped %d lost-provenance, %d dangling, %d orphaned entities (orphan grace %s)",
-			res.RelationshipsReaped, res.DanglingDeleted, res.OrphanedEntities, orphanGrace)
+		slog.Info("lifecycle: graph cleanup",
+			"lost_provenance", res.RelationshipsReaped, "dangling", res.DanglingDeleted,
+			"orphaned_entities", res.OrphanedEntities, "orphan_grace", orphanGrace)
 	}
 
 	return expired, purged, nil

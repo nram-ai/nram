@@ -36,6 +36,7 @@ import {
   faCloudMoon,
   faChartLine,
   faBolt,
+  faFileLines,
   faFileImport,
   faUserAstronaut,
   faStar,
@@ -86,6 +87,7 @@ const Shares = React.lazy(() => import("./pages/Shares"));
 const PromptTemplates = React.lazy(() => import("./pages/PromptTemplates"));
 const DreamingMonitor = React.lazy(() => import("./pages/DreamingMonitor"));
 const Metrics = React.lazy(() => import("./pages/Metrics"));
+const Logs = React.lazy(() => import("./pages/Logs"));
 const MyAccount = React.lazy(() => import("./pages/MyAccount"));
 
 function RouteFallback({ fullScreen = false }: { fullScreen?: boolean }) {
@@ -184,6 +186,7 @@ const navItems: NavItem[] = [
   { path: "/dreaming", label: "Dreaming", section: "System", icon: faCloudMoon, requiresEnrichment: true },
   { path: "/analytics", label: "Analytics", section: "System", icon: faChartLine },
   { path: "/observability", label: "Metrics", section: "System", icon: faBolt, minRole: "administrator" },
+  { path: "/logs", label: "Logs", section: "System", icon: faFileLines, minRole: "administrator" },
   { path: "/import", label: "Bulk Import", section: "System", icon: faFileImport, writeOnly: true },
   { path: "/account", label: "My Account", section: "Account", icon: faUserAstronaut },
 ];
@@ -447,6 +450,7 @@ function AppLayout() {
                   <Route path="/entities" element={<EntityBrowser />} />
                   <Route path="/analytics" element={<Analytics />} />
                   <Route path="/observability" element={<RequireRole minRole="administrator"><Metrics /></RequireRole>} />
+                  <Route path="/logs" element={<RequireRole minRole="administrator"><Logs /></RequireRole>} />
                   <Route path="/import" element={<BulkImport />} />
                   <Route path="/webhooks" element={<RequireRole minRole="administrator"><WebhookManagement /></RequireRole>} />
                   <Route path="/oauth" element={<OAuthClients />} />

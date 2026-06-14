@@ -78,4 +78,7 @@ export {
   faFloppyDisk,
   faBolt,
   faTerminal,
+  faFileLines,
+  faFileCsv,
+  faFileCode,
 } from "@fortawesome/free-solid-svg-icons";

@@ -204,6 +204,47 @@ func TestAdminRouteAdminReturns200(t *testing.T) {
 	}
 }
 
+// TestAdminLogsRouteGating asserts the operator-only access contract for the
+// diagnostic Logs feature: an org_owner (the per-tenant top role) is denied,
+// while an administrator (the instance operator) reaches the handler.
+func TestAdminLogsRouteGating(t *testing.T) {
+	logsCalled := false
+	handlers := Handlers{
+		AdminLogs: func(w http.ResponseWriter, r *http.Request) {
+			logsCalled = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		},
+	}
+	r := newTestRouter(t, handlers)
+
+	// org_owner is below administrator and must be denied.
+	ownerToken := generateTestJWT(t, uuid.New(), auth.RoleOrgOwner)
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("org_owner on /v1/admin/logs: expected 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if logsCalled {
+		t.Fatal("logs handler must not run for org_owner")
+	}
+
+	// administrator (instance operator) is allowed through to the handler.
+	adminToken := generateTestJWT(t, uuid.New(), auth.RoleAdministrator)
+	req = httptest.NewRequest(http.MethodGet, "/v1/admin/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("administrator on /v1/admin/logs: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !logsCalled {
+		t.Fatal("logs handler should run for administrator")
+	}
+}
+
 func TestNotImplementedHandler(t *testing.T) {
 	// Leave all handlers nil; they should return 501.
 	r := newTestRouter(t, Handlers{})

@@ -3,7 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +19,7 @@ func Emit(ctx context.Context, bus EventBus, eventType, scope string, data any) 
 
 	raw, err := json.Marshal(sanitizeForJSON(data))
 	if err != nil {
-		log.Printf("events: failed to marshal event data for %s: %v", eventType, err)
+		slog.Warn("events: failed to marshal event data", "event_type", eventType, "err", err)
 		return
 	}
 
@@ -32,6 +32,6 @@ func Emit(ctx context.Context, bus EventBus, eventType, scope string, data any) 
 	}
 
 	if err := bus.Publish(ctx, event); err != nil {
-		log.Printf("events: failed to publish %s event: %v", eventType, err)
+		slog.Warn("events: failed to publish event", "event_type", eventType, "err", err)
 	}
 }

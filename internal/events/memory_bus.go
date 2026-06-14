@@ -2,7 +2,7 @@ package events
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 )
@@ -68,8 +68,8 @@ func (b *MemoryBus) Publish(_ context.Context, event Event) error {
 		select {
 		case sub.ch <- event:
 		default:
-			log.Printf("WARNING: dropping event %s (type=%s) for subscriber with scope %q: channel full",
-				event.ID, event.Type, sub.scope)
+			slog.Warn("events: dropping event for subscriber, channel full",
+				"event", event.ID, "event_type", event.Type, "scope", sub.scope)
 		}
 	}
 

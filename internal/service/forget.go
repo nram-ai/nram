@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -141,7 +141,7 @@ func (s *ForgetService) Forget(ctx context.Context, req *ForgetRequest) (*Forget
 		for _, id := range req.MemoryIDs {
 			n, err := s.deleteSingle(ctx, id, project.NamespaceID, req.HardDelete, visited)
 			if err != nil {
-				log.Printf("forget: delete %s: %v", id, err)
+				slog.Warn("forget: delete failed", "memory", id, "err", err)
 				continue
 			}
 			deleted += n
@@ -234,12 +234,12 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	// memories.superseded_by only fires under hard delete.
 	ancestorIDs, err := s.memories.FindBySupersededBy(ctx, namespaceID, id)
 	if err != nil {
-		log.Printf("cascade: find supersede ancestors for %s: %v", id, err)
+		slog.Warn("cascade: find supersede ancestors failed", "memory", id, "err", err)
 	}
 	for _, ancestorID := range ancestorIDs {
 		n, err := s.deleteSingle(ctx, ancestorID, namespaceID, hard, visited)
 		if err != nil {
-			log.Printf("cascade: delete ancestor %s of %s: %v", ancestorID, id, err)
+			slog.Warn("cascade: delete ancestor failed", "ancestor", ancestorID, "memory", id, "err", err)
 		}
 		cascaded += n
 	}
@@ -248,12 +248,12 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 	if s.lineageQuerier != nil {
 		childIDs, err := s.lineageQuerier.FindChildIDsByRelation(ctx, namespaceID, id, cascadeRelations)
 		if err != nil {
-			log.Printf("cascade: find children for %s: %v", id, err)
+			slog.Warn("cascade: find children failed", "memory", id, "err", err)
 		}
 		for _, childID := range childIDs {
 			n, err := s.deleteSingle(ctx, childID, namespaceID, hard, visited)
 			if err != nil {
-				log.Printf("cascade: delete child %s of %s: %v", childID, id, err)
+				slog.Warn("cascade: delete child failed", "child", childID, "memory", id, "err", err)
 			}
 			cascaded += n
 		}
@@ -266,7 +266,7 @@ func (s *ForgetService) deleteSingle(ctx context.Context, id uuid.UUID, namespac
 		// Best-effort: a reap failure must not block the memory delete.
 		if s.graphReaper != nil {
 			if _, err := s.graphReaper.ReapMemoryFootprint(ctx, namespaceID, id); err != nil {
-				log.Printf("forget: reap graph footprint for %s: %v", id, err)
+				slog.Warn("forget: reap graph footprint failed", "memory", id, "err", err)
 			}
 		}
 

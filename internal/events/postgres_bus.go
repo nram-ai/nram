@@ -3,7 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/google/uuid"
@@ -90,14 +90,14 @@ func (b *PostgresBus) listen(ctx context.Context) {
 
 	conn, err := b.pool.Acquire(ctx)
 	if err != nil {
-		log.Printf("ERROR: events: failed to acquire connection for LISTEN: %v", err)
+		slog.Error("events: failed to acquire connection for LISTEN", "err", err)
 		return
 	}
 	defer conn.Release()
 
 	_, err = conn.Exec(ctx, "LISTEN "+notifyChannel)
 	if err != nil {
-		log.Printf("ERROR: events: LISTEN failed: %v", err)
+		slog.Error("events: LISTEN failed", "err", err)
 		return
 	}
 
@@ -107,13 +107,13 @@ func (b *PostgresBus) listen(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("ERROR: events: WaitForNotification: %v", waitErr)
+			slog.Error("events: WaitForNotification failed", "err", waitErr)
 			return
 		}
 
 		var n pgNotification
 		if unmarshalErr := json.Unmarshal([]byte(notification.Payload), &n); unmarshalErr != nil {
-			log.Printf("WARNING: events: failed to unmarshal notification payload: %v", unmarshalErr)
+			slog.Warn("events: failed to unmarshal notification payload", "err", unmarshalErr)
 			continue
 		}
 
@@ -122,7 +122,7 @@ func (b *PostgresBus) listen(ctx context.Context) {
 		}
 
 		if pubErr := b.local.Publish(ctx, n.Event); pubErr != nil {
-			log.Printf("WARNING: events: failed to re-publish remote event: %v", pubErr)
+			slog.Warn("events: failed to re-publish remote event", "err", pubErr)
 		}
 	}
 }

@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"reflect"
@@ -23,7 +23,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	sanitized := sanitizeNils(v)
 	if err := json.NewEncoder(w).Encode(sanitized); err != nil {
-		log.Printf("api: failed to encode JSON response: %v", err)
+		slog.Error("api: failed to encode JSON response", "err", err)
 	}
 }
 

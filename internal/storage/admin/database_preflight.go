@@ -18,6 +18,10 @@ import (
 // when CASCADE is not used.
 var preflightTables = []string{
 	// Leaf / child tables first.
+	// log_entries is a standalone, FK-free diagnostic-log table; listed here so
+	// ResetTarget clears it and the preflight leftover-data check covers it. It
+	// is also copied by the migrator (see migratedTables / migrateLogEntries).
+	"log_entries",
 	"memory_vectors_384",
 	"memory_vectors_512",
 	"memory_vectors_768",

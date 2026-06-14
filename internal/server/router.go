@@ -200,6 +200,7 @@ type Handlers struct {
 	AdminGraph            http.HandlerFunc
 	AdminGraphMaintenance http.HandlerFunc
 	AdminDreaming         http.HandlerFunc
+	AdminLogs             http.HandlerFunc
 
 	// Tier-B (org-aggregate) handlers at /v1/orgs/{org_id}/{dashboard,
 	// activity,analytics,usage}. Caller must be RoleOrgOwner+ of the org.
@@ -598,6 +599,8 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/database/*", handler(handlers.AdminDatabase))
 			r.HandleFunc("/vector-migration", handler(handlers.AdminVectorMigration))
 			r.HandleFunc("/graph/*", handler(handlers.AdminGraphMaintenance))
+			r.HandleFunc("/logs", handler(handlers.AdminLogs))
+			r.HandleFunc("/logs/*", handler(handlers.AdminLogs))
 
 			// Tier-C (system-aggregate) data views: admin-only by virtue
 			// of being inside this /v1/admin route group. System totals +

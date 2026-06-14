@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -266,18 +266,17 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, Repai
 		g, stats, importErr := ImportWithStats(bytes.NewReader(graphData))
 		if importErr == nil {
 			if stats.AnyDropped() {
-				log.Printf(
-					"hnsw: cache: repaired snapshot kind=%s ns=%s dim=%d nodes=%d edges=%d forward_dropped=%d self_loops=%d dupes=%d over_long=%d ep_fixed=%d",
-					key.Kind, key.NamespaceID, key.Dimension,
-					stats.NodesScanned, stats.EdgesScanned,
-					stats.ForwardDropped, stats.SelfLoopDropped, stats.DupDropped,
-					stats.OverLongFriends, stats.EpLevelFixed,
+				slog.Warn("hnsw: cache: repaired snapshot",
+					"kind", key.Kind, "namespace", key.NamespaceID, "dim", key.Dimension,
+					"nodes", stats.NodesScanned, "edges", stats.EdgesScanned,
+					"forward_dropped", stats.ForwardDropped, "self_loops", stats.SelfLoopDropped,
+					"dupes", stats.DupDropped, "over_long", stats.OverLongFriends, "ep_fixed", stats.EpLevelFixed,
 				)
 			}
 			return g, stats, nil
 		}
 		// Snapshot corrupted; fall through to rebuild.
-		log.Printf("hnsw: cache: corrupted snapshot for kind=%s ns=%s dim=%d: %v", key.Kind, key.NamespaceID, key.Dimension, importErr)
+		slog.Warn("hnsw: cache: corrupted snapshot", "kind", key.Kind, "namespace", key.NamespaceID, "dim", key.Dimension, "err", importErr)
 	}
 
 	// Rebuild from the vector table.
@@ -356,7 +355,7 @@ func (c *IndexCache) evictLRU(ctx context.Context) {
 	if entry.dirty {
 		// Save before evicting. Best-effort; log errors.
 		if err := c.saveSnapshot(ctx, entry.key, entry.graph); err != nil {
-			log.Printf("hnsw: cache: evict save failed kind=%s ns=%s dim=%d: %v", entry.key.Kind, entry.key.NamespaceID, entry.key.Dimension, err)
+			slog.Warn("hnsw: cache: evict save failed", "kind", entry.key.Kind, "namespace", entry.key.NamespaceID, "dim", entry.key.Dimension, "err", err)
 		}
 	}
 
@@ -377,7 +376,7 @@ func (c *IndexCache) backgroundSnapshot() {
 			return
 		case <-ticker.C:
 			if err := c.FlushAll(context.Background()); err != nil {
-				log.Printf("hnsw: cache: background flush error: %v", err)
+				slog.Warn("hnsw: cache: background flush error", "err", err)
 			}
 		}
 	}

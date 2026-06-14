@@ -2,7 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"reflect"
 
 	"github.com/google/uuid"
@@ -43,7 +43,8 @@ func schemaFor[T any]() json.RawMessage {
 	// registers the tool without an outputSchema. Sibling warn-and-degrade
 	// pattern with the json.Marshal failure branch below.
 	if k := reflect.TypeOf(zero).Kind(); k != reflect.Struct {
-		log.Printf("mcp: schemaFor[%T] expects a struct type, got %v; tool will register without outputSchema", zero, k)
+		slog.Warn("mcp: schemaFor expects a struct type; tool will register without outputSchema",
+			"type", reflect.TypeOf(zero).String(), "kind", k.String())
 		return nil
 	}
 	r := &jsonschema.Reflector{
@@ -61,7 +62,8 @@ func schemaFor[T any]() json.RawMessage {
 	out, err := json.Marshal(s)
 	if err != nil {
 		// Degrade rather than crash the server. Log so operators see it.
-		log.Printf("mcp: schemaFor[%T] marshal failed: %v; tool will register without outputSchema", zero, err)
+		slog.Warn("mcp: schemaFor marshal failed; tool will register without outputSchema",
+			"type", reflect.TypeOf(zero).String(), "err", err)
 		return nil
 	}
 	return out

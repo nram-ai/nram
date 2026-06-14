@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"maps"
 	"sort"
 	"strings"
@@ -338,6 +338,7 @@ var migratedTables = []string{
 	"dream_logs",
 	"dream_log_summaries",
 	"dream_project_dirty",
+	"log_entries",
 }
 
 // Run copies all tables from SQLite to Postgres in dependency order.
@@ -380,6 +381,7 @@ func (m *DataMigrator) Run(ctx context.Context) error {
 		{"dream_logs", m.migrateDreamLogs},
 		{"dream_log_summaries", m.migrateDreamLogSummaries},
 		{"dream_project_dirty", m.migrateDreamProjectDirty},
+		{"log_entries", m.migrateLogEntries},
 		// Second pass: set memories.superseded_by now that all memories are inserted.
 		{"memories:superseded_by_pass2", m.migrateMemoriesSupersededByPass2},
 	}
@@ -1143,7 +1145,7 @@ func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
 
 		table, ok := supportedVectorDimensions[dimension]
 		if !ok {
-			log.Printf("migrateMemoryVectors: skipping memory %s with unsupported dimension %d", memoryID, dimension)
+			slog.Warn("migrateMemoryVectors: skipping memory with unsupported dimension", "memory", memoryID, "dim", dimension)
 			m.skipOrphan("memory_vectors", "unsupported_dimension")
 			skipped++
 			continue
@@ -1161,7 +1163,7 @@ func (m *DataMigrator) migrateMemoryVectors(ctx context.Context) error {
 	}
 
 	if skipped > 0 {
-		log.Printf("migrateMemoryVectors: skipped %d vectors with unsupported dimensions", skipped)
+		slog.Warn("migrateMemoryVectors: skipped vectors with unsupported dimensions", "skipped", skipped)
 	}
 
 	// Insert vectors into each Postgres dimension table.
@@ -1233,7 +1235,7 @@ func (m *DataMigrator) migrateEntityVectors(ctx context.Context) error {
 		}
 
 		if _, ok := supportedVectorDimensions[dimension]; !ok {
-			log.Printf("migrateEntityVectors: skipping entity %s with unsupported dimension %d", entityID, dimension)
+			slog.Warn("migrateEntityVectors: skipping entity with unsupported dimension", "entity", entityID, "dim", dimension)
 			m.skipOrphan("entity_vectors", "unsupported_dimension")
 			skipped++
 			continue
@@ -1252,7 +1254,7 @@ func (m *DataMigrator) migrateEntityVectors(ctx context.Context) error {
 	}
 
 	if skipped > 0 {
-		log.Printf("migrateEntityVectors: skipped %d vectors with unsupported dimensions", skipped)
+		slog.Warn("migrateEntityVectors: skipped vectors with unsupported dimensions", "skipped", skipped)
 	}
 
 	for table, vectors := range byTable {
@@ -2624,6 +2626,66 @@ func (m *DataMigrator) migrateDreamProjectDirty(ctx context.Context) error {
 			return fmt.Errorf("insert dream_project_dirty %s: %w", projectID, err)
 		}
 		m.markInsertedAnon("dream_project_dirty")
+	}
+	return tx.Commit()
+}
+
+// migrateLogEntries copies the log_entries diagnostic-log table. It is FK-free
+// and system-global, so there are no orphan checks: every row is copied
+// verbatim, with attrs sanitized to a JSON object and the nullable
+// component/project/namespace/user columns passed through as-is.
+func (m *DataMigrator) migrateLogEntries(ctx context.Context) error {
+	if ok, err := m.sourceTableExists(ctx, "log_entries"); err != nil {
+		return err
+	} else if !ok {
+		return nil
+	}
+	rows, err := m.src.QueryContext(ctx, `
+		SELECT id, ts, level, component, message, attrs, project_id, namespace_id, user_id FROM log_entries
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tx, err := m.dst.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO log_entries (id, ts, level, component, message, attrs, project_id, namespace_id, user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for rows.Next() {
+		var (
+			id, ts, level, message         string
+			component, attrs               sql.NullString
+			projectID, namespaceID, userID sql.NullString
+		)
+		if err := rows.Scan(&id, &ts, &level, &component, &message, &attrs,
+			&projectID, &namespaceID, &userID); err != nil {
+			return err
+		}
+		if _, err := stmt.ExecContext(ctx,
+			id, ts, level,
+			nullStringToInterface(component),
+			message,
+			sanitizeJSONB(attrs.String, "{}"),
+			nullStringToInterface(projectID),
+			nullStringToInterface(namespaceID),
+			nullStringToInterface(userID),
+		); err != nil {
+			return fmt.Errorf("insert log_entry %s: %w", id, err)
+		}
+		m.markInsertedAnon("log_entries")
 	}
 	return tx.Commit()
 }

@@ -401,6 +401,16 @@ const (
 	SettingEventsReplayCapacity       = "events.replay_capacity"
 	SettingEventsSSEKeepaliveSeconds  = "events.sse_keepalive_seconds"
 
+	// Diagnostic log store (log_entries). db_capture_enabled toggles writing
+	// diagnostic logs to the database in addition to the console; db_level is the
+	// minimum level captured to the table, independent of the console LOG_LEVEL;
+	// the two retention limits bound the rolling window (count is the hard cap,
+	// age is secondary). All hot-reloaded by the logging settings refresher.
+	SettingLoggingDBCaptureEnabled = "logging.db_capture_enabled"
+	SettingLoggingDBLevel          = "logging.db_level"
+	SettingLoggingRetentionMaxRows = "logging.retention_max_rows"
+	SettingLoggingRetentionMaxAge  = "logging.retention_max_age_days"
+
 	// Admin graph visualization minimum edge weight. Hot-reloadable.
 	SettingGraphDefaultMinWeight = "graph.default_min_weight"
 
@@ -926,6 +936,11 @@ var settingDefaults = map[string]string{
 	SettingEventsSubscriberBufferSize: "64",
 	SettingEventsReplayCapacity:       "256",
 	SettingEventsSSEKeepaliveSeconds:  "30",
+
+	SettingLoggingDBCaptureEnabled: "true",
+	SettingLoggingDBLevel:          "info",
+	SettingLoggingRetentionMaxRows: "100000",
+	SettingLoggingRetentionMaxAge:  "30",
 
 	SettingGraphDefaultMinWeight: "0.1",
 	SettingGraphMaxEdges:         "2000",

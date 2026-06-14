@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/nram-ai/nram/internal/dreaming"
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/logging"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/observability/metrics"
@@ -40,7 +40,7 @@ import (
 func runHeadlessBootstrap(ctx context.Context, store *adminstore.SetupStore, adminCfg config.AdminConfig) bool {
 	complete, err := store.IsSetupComplete(ctx)
 	if err != nil {
-		log.Printf("headless bootstrap: setup-status check failed: %v", err)
+		slog.Warn("boot: headless bootstrap setup-status check failed", "err", err)
 		return false
 	}
 	if complete {
@@ -51,37 +51,31 @@ func runHeadlessBootstrap(ctx context.Context, store *adminstore.SetupStore, adm
 	case adminCfg.Email == "" && adminCfg.Password == "":
 		return false
 	case adminCfg.Email == "" || adminCfg.Password == "":
-		log.Printf("headless bootstrap: skipping: both admin.email and admin.password (or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS) must be set")
+		slog.Warn("boot: headless bootstrap skipped, both admin.email and admin.password (or NRAM_ADMIN_EMAIL/NRAM_ADMIN_PASS) must be set")
 		return false
 	}
 
 	user, _, err := store.CompleteSetup(ctx, adminCfg.Email, adminCfg.Password)
 	if err != nil {
-		log.Printf("headless bootstrap: failed to create administrator %s: %v", adminCfg.Email, err)
+		slog.Error("boot: headless bootstrap failed to create administrator", "email", adminCfg.Email, "err", err)
 		return false
 	}
-	log.Printf("headless bootstrap: created administrator %s (id=%s)", user.Email, user.ID)
+	slog.Info("boot: headless bootstrap created administrator", "email", user.Email, "id", user.ID)
 	return true
 }
 
 // configureLogger installs a slog text handler at the level named by
-// cfg.LogLevel (info|debug|warn|error). Without this, slog defaults to INFO
-// and the cfg.LogLevel field is read but never honoured.
-func configureLogger(level string) {
-	var l slog.Level
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug", "trace":
-		l = slog.LevelDebug
-	case "warn", "warning":
-		l = slog.LevelWarn
-	case "error":
-		l = slog.LevelError
-	default:
-		l = slog.LevelInfo
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: l,
-	})))
+// cfg.LogLevel (info|debug|warn|error) and returns it. Without this, slog
+// defaults to INFO and the cfg.LogLevel field is read but never honoured. The
+// returned console handler is later wrapped by the fanout handler so diagnostic
+// logs also reach the log_entries table; until then it is the default so any
+// pre-database boot logging still prints.
+func configureLogger(level string) slog.Handler {
+	console := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logging.ParseLevel(level),
+	})
+	slog.SetDefault(slog.New(console))
+	return console
 }
 
 func main() {
@@ -105,7 +99,7 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	configureLogger(cfg.LogLevel)
+	consoleHandler := configureLogger(cfg.LogLevel)
 
 	db, err := storage.Open(cfg.Database)
 	if err != nil {
@@ -113,7 +107,7 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
-	log.Printf("database backend: %s", db.Backend())
+	slog.Info("boot: database backend", "backend", db.Backend())
 
 	// Handle the SQLite-to-Postgres data migration before starting the server.
 	// It lives here, not in internal/migration, because it delegates to the
@@ -133,7 +127,7 @@ func main() {
 		if status.Status != "complete" {
 			log.Fatalf("migrate-to-postgres: %s", status.Message)
 		}
-		log.Printf("migrate-to-postgres: %s", status.Message)
+		slog.Info("boot: migrate-to-postgres complete", "status", status.Message)
 		return
 	}
 
@@ -156,7 +150,7 @@ func main() {
 			log.Fatalf("auto-migration failed: %v", err)
 		}
 		_ = m.Close()
-		log.Println("migrations applied successfully")
+		slog.Info("boot: migrations applied successfully")
 	}
 
 	for _, arg := range os.Args[1:] {
@@ -165,7 +159,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("enrichment backfill failed: %v", err)
 			}
-			log.Printf("backfill: enqueued %d enrichment jobs", n)
+			slog.Info("boot: enrichment backfill enqueued jobs", "count", n)
 			return
 		}
 		if arg == "--reembed-all-memories" {
@@ -173,7 +167,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("reembed all memories failed: %v", err)
 			}
-			log.Printf("reembed: enqueued %d memory re-embed jobs (force, every live memory)", n)
+			slog.Info("boot: reembed enqueued memory re-embed jobs (force, every live memory)", "count", n)
 			return
 		}
 		if arg == "--normalize-memory-tags" {
@@ -181,7 +175,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("normalize memory tags failed: %v", err)
 			}
-			log.Printf("normalize-memory-tags: rewrote tags on %d memory rows", n)
+			slog.Info("boot: normalize-memory-tags rewrote tags on memory rows", "rows", n)
 			return
 		}
 	}
@@ -208,7 +202,7 @@ func main() {
 			total += n
 		}
 		if total > 0 {
-			log.Printf("content_hash backfill: populated %d rows", total)
+			slog.Info("boot: content_hash backfill populated rows", "rows", total)
 		}
 	}
 
@@ -222,7 +216,7 @@ func main() {
 		if err == nil {
 			for _, u := range users {
 				if err := projectRepo.EnsureReservedUnderUser(context.Background(), namespaceRepo, u.NamespaceID); err != nil {
-					log.Printf("ensure reserved projects for user %s: %v", u.ID, err)
+					slog.Warn("boot: ensure reserved projects failed", "user", u.ID, "err", err)
 				}
 			}
 		}
@@ -248,8 +242,62 @@ func main() {
 	// the full schema surface area instead of the subset operators have
 	// touched. Idempotent; never overwrites operator-set values.
 	if err := seedRegisteredSettings(context.Background(), settingsRepo); err != nil {
-		log.Printf("warning: settings seed failed: %v", err)
+		slog.Warn("boot: settings seed failed", "err", err)
 	}
+
+	// Install the SQL log sink. From here on, slog (and, via the bridge below,
+	// the stdlib log package) tees diagnostic logs to the log_entries table for
+	// the operator Logs page, in addition to the unchanged console output. The
+	// DB capture toggle and level are seeded from settings and refreshed live by
+	// a goroutine started further down, so admin changes apply without a restart.
+	// Done after the settings seed so the logging.* defaults exist.
+	logEntryRepo := storage.NewLogEntryRepo(db)
+	logDBConfig := logging.NewDBConfig(
+		settingsSvc.ResolveBoolWithDefault(context.Background(), service.SettingLoggingDBCaptureEnabled, "global"),
+		logging.ParseLevel(settingsSvc.ResolveStringWithDefault(context.Background(), service.SettingLoggingDBLevel, "global")),
+	)
+	logWriter := logging.NewAsyncWriter(logging.NewSQLSink(logEntryRepo), logging.WriterOptions{})
+	logWriter.Start()
+	slog.SetDefault(slog.New(logging.NewFanoutHandler(consoleHandler, logDBConfig, logWriter)))
+	// Capture any remaining stdlib log output through the same pipeline.
+	log.SetOutput(logging.StdBridge())
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = logWriter.Close(flushCtx)
+	}()
+
+	// Refresh the log sink's enabled flag and level from settings periodically so
+	// admin changes to logging.db_capture_enabled / logging.db_level take effect
+	// without a restart.
+	logRefreshCtx, logRefreshCancel := context.WithCancel(context.Background())
+	defer logRefreshCancel()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-logRefreshCtx.Done():
+				return
+			case <-ticker.C:
+				logDBConfig.SetEnabled(settingsSvc.ResolveBoolWithDefault(logRefreshCtx, service.SettingLoggingDBCaptureEnabled, "global"))
+				logDBConfig.SetLevel(logging.ParseLevel(settingsSvc.ResolveStringWithDefault(logRefreshCtx, service.SettingLoggingDBLevel, "global")))
+			}
+		}
+	}()
+
+	// Start the log-retention sweeper: prune the log_entries rolling window to
+	// the configured row cap (hard ceiling) and age limit, resolved live each
+	// pass. Runs hourly in its own goroutine.
+	logRetention := logging.NewRetentionSweeper(logEntryRepo, func(ctx context.Context) logging.RetentionLimits {
+		return logging.RetentionLimits{
+			MaxRows:    settingsSvc.ResolveIntWithDefault(ctx, service.SettingLoggingRetentionMaxRows, "global"),
+			MaxAgeDays: settingsSvc.ResolveIntWithDefault(ctx, service.SettingLoggingRetentionMaxAge, "global"),
+		}
+	})
+	logRetentionCtx, logRetentionCancel := context.WithCancel(context.Background())
+	defer logRetentionCancel()
+	go logRetention.Run(logRetentionCtx, time.Hour)
 
 	// One-time canonicalization of existing relationships.relation values so rows
 	// written before write-time canonicalization (and the admin graph viz, which
@@ -263,13 +311,13 @@ func main() {
 		if !settingsSvc.ResolveBool(ctx, relCanonFlag, "global") {
 			changed, err := migration.CanonicalizeRelations(ctx, db.WriteDB(), db.Backend())
 			if err != nil {
-				log.Printf("warning: relation canonicalization backfill failed (will retry next boot): %v", err)
+				slog.Warn("boot: relation canonicalization backfill failed (will retry next boot)", "err", err)
 			} else {
 				if changed > 0 {
-					log.Printf("relation canonicalization: normalized/merged %d relationship rows", changed)
+					slog.Info("boot: relation canonicalization normalized/merged relationship rows", "rows", changed)
 				}
 				if err := settingsSvc.Set(ctx, relCanonFlag, "true", "global", nil); err != nil {
-					log.Printf("warning: failed to record relation canonicalization marker: %v", err)
+					slog.Warn("boot: failed to record relation canonicalization marker", "err", err)
 				}
 			}
 		}
@@ -287,7 +335,7 @@ func main() {
 	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
 	registry, err := provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
 	if err != nil {
-		log.Printf("warning: provider registry init failed (providers disabled): %v", err)
+		slog.Warn("boot: provider registry init failed, providers disabled", "err", err)
 		registry = nil
 	}
 	if registry != nil {
@@ -330,7 +378,7 @@ func main() {
 		// picks up the freshly-installed embed wrapper and cache. On configs
 		// with no embedding slot this is a no-op.
 		if rerr := registry.Reload(regCfg); rerr != nil {
-			log.Printf("warning: registry reload to install metrics hooks failed: %v", rerr)
+			slog.Warn("boot: registry reload to install metrics hooks failed", "err", rerr)
 		}
 	}
 
@@ -382,7 +430,7 @@ func main() {
 		// fallback below.
 		qs, qerr := storage.NewQdrantStore(qdrantCfg)
 		if qerr != nil {
-			log.Printf("warning: qdrant connection failed (vector search disabled): %v", qerr)
+			slog.Warn("boot: qdrant connection failed, vector search disabled", "err", qerr)
 		} else {
 			vectorStore = qs
 			qdrantStore = qs
@@ -391,10 +439,10 @@ func main() {
 	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
 		pgvStore, pgvErr := storage.NewPgVectorStore(cfg.Database.URL)
 		if pgvErr != nil {
-			log.Printf("warning: pgvector connection failed (vector search disabled): %v", pgvErr)
+			slog.Warn("boot: pgvector connection failed, vector search disabled", "err", pgvErr)
 		} else {
 			vectorStore = pgvStore
-			log.Println("pgvector store initialized")
+			slog.Info("boot: pgvector store initialized")
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
@@ -402,8 +450,9 @@ func main() {
 		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
 		vectorStore = hnswStore
 		defer func() { _ = hnswStore.Close() }()
-		log.Printf("hnsw vector store initialized (SQLite backend; M=%d ef_construction=%d ef_search=%d max_loaded=%d)",
-			hnswCfg.M, hnswCfg.EfConstruction, hnswCfg.EfSearch, hnswCfg.MaxLoadedIndexes)
+		slog.Info("boot: hnsw vector store initialized (SQLite backend)",
+			"m", hnswCfg.M, "ef_construction", hnswCfg.EfConstruction,
+			"ef_search", hnswCfg.EfSearch, "max_loaded", hnswCfg.MaxLoadedIndexes)
 	}
 
 	// Activation guard: if Qdrant is the active store but holds no memory
@@ -416,7 +465,7 @@ func main() {
 		// deployment skips the per-dimension Qdrant round trips at startup.
 		if sqlCount := storage.MemoryVectorCount(bootCtx, db); sqlCount > 0 {
 			if qCount, err := qdrantStore.TotalMemoryVectors(bootCtx); err == nil && qCount == 0 {
-				log.Printf("warning: Qdrant is the active vector store but its memory collections are empty while the SQL store holds %d memory vectors; recall will be degraded until you migrate (Admin -> Settings -> Vector Database -> Migrate)", sqlCount)
+				slog.Warn("boot: Qdrant is the active vector store but its memory collections are empty while the SQL store holds vectors; recall will be degraded until you migrate (Admin -> Settings -> Vector Database -> Migrate)", "sql_memory_vectors", sqlCount)
 			}
 		}
 	}
@@ -451,7 +500,7 @@ func main() {
 	defer delivererCancel()
 	go func() {
 		if err := webhookDeliverer.Start(delivererCtx); err != nil {
-			log.Printf("webhook deliverer stopped: %v", err)
+			slog.Warn("boot: webhook deliverer stopped", "err", err)
 		}
 	}()
 
@@ -699,7 +748,7 @@ func main() {
 	).WithMetrics(promMetrics)
 	workerPool.Start()
 	defer workerPool.Stop()
-	log.Println("enrichment worker pool started")
+	slog.Info("boot: enrichment worker pool started")
 
 	// Warn (once) if any provider-load knob is raised above its safe default.
 	service.CheckProviderLoadDefaults(context.Background(), settingsSvc)
@@ -712,7 +761,7 @@ func main() {
 	)
 	enrichmentStuckSweeper.Start()
 	defer enrichmentStuckSweeper.Stop()
-	log.Println("enrichment stuck-job sweeper started")
+	slog.Info("boot: enrichment stuck-job sweeper started")
 
 	// Create dreaming system.
 	dreamCycleRepo := storage.NewDreamCycleRepo(db)
@@ -772,7 +821,7 @@ func main() {
 	trackerCtx, trackerCancel := context.WithCancel(context.Background())
 	defer trackerCancel()
 	if err := dirtyTracker.Start(trackerCtx); err != nil {
-		log.Printf("dream dirty tracker failed to start: %v", err)
+		slog.Warn("boot: dream dirty tracker failed to start", "err", err)
 	}
 	defer dirtyTracker.Stop()
 
@@ -787,7 +836,7 @@ func main() {
 	)
 	dreamScheduler.Start()
 	defer dreamScheduler.Stop()
-	log.Println("dream scheduler started")
+	slog.Info("boot: dream scheduler started")
 
 	// Start the stuck-cycle sweeper in its own goroutine. Lifecycle is
 	// independent of the scheduler so a long-running cycle on this instance
@@ -798,7 +847,7 @@ func main() {
 	)
 	dreamStuckSweeper.Start()
 	defer dreamStuckSweeper.Stop()
-	log.Println("dream stuck-cycle sweeper started")
+	slog.Info("boot: dream stuck-cycle sweeper started")
 
 	dreamAdminStore := adminstore.NewDreamAdminStore(
 		dreamCycleRepo, dreamLogRepo, dreamDirtyRepo, settingsRepo,
@@ -1120,6 +1169,7 @@ func main() {
 			Store:    dreamAdminStore,
 			Rollback: dreamRollback,
 		}),
+		AdminLogs: api.NewAdminLogsHandler(api.LogAdminConfig{Store: logEntryRepo}),
 
 		// Tier-B (org-aggregate) handlers: caller must be RoleOrgOwner+
 		// of the org passed in {org_id}. Aggregate counts + distributions
@@ -1197,14 +1247,14 @@ func main() {
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("server starting on %s (log_level=%s)", addr, cfg.LogLevel)
+		slog.Info("boot: server starting", "addr", addr, "log_level", cfg.LogLevel)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server failed to start: %v", err)
 		}
 	}()
 
 	<-done
-	log.Println("server shutting down")
+	slog.Info("boot: server shutting down")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1213,7 +1263,7 @@ func main() {
 		log.Fatalf("server forced to shutdown: %v", err)
 	}
 
-	log.Println("server stopped")
+	slog.Info("boot: server stopped")
 }
 
 // seedRegisteredSettings inserts one row per registered schema entry, using

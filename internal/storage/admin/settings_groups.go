@@ -192,6 +192,12 @@ var settingsGroups = []api.SettingGroup{
 		SubSections: []api.SettingSubSection{{Category: "events"}},
 	},
 	{
+		ID:          "logging",
+		Label:       "Logging",
+		Description: "The diagnostic log store behind the operator Logs page: whether logs are captured to the database, the minimum level captured, and the rolling-window retention limits. Visible to the system operator only.",
+		SubSections: []api.SettingSubSection{{Category: "logging"}},
+	},
+	{
 		ID:          "providers",
 		Label:       "Providers",
 		Description: "Runtime controls for how prompts are delivered to LLM providers. Provider endpoints and credentials are configured on the Providers page; these are global delivery toggles.",

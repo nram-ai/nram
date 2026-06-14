@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -58,35 +58,35 @@ func NewOrgAnalyticsHandler(cfg OrgAnalyticsConfig) http.HandlerFunc {
 
 		counts, err := cfg.Store.OrgMemoryCounts(ctx, *orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics OrgMemoryCounts: %v", err)
+			slog.Error("api: OrgAnalytics OrgMemoryCounts failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve memory counts"))
 			return
 		}
 
 		dist, err := cfg.Store.RecallDistribution(ctx, orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics RecallDistribution: %v", err)
+			slog.Error("api: OrgAnalytics RecallDistribution failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve recall distribution"))
 			return
 		}
 
 		users, err := cfg.Store.UserBreakdown(ctx, *orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics UserBreakdown: %v", err)
+			slog.Error("api: OrgAnalytics UserBreakdown failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve user breakdown"))
 			return
 		}
 
 		entityHist, err := cfg.Store.EntityTypeHistogram(ctx, orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics EntityTypeHistogram: %v", err)
+			slog.Error("api: OrgAnalytics EntityTypeHistogram failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve entity histogram"))
 			return
 		}
 
 		relHist, err := cfg.Store.RelationshipTypeHistogram(ctx, orgID)
 		if err != nil {
-			log.Printf("api: OrgAnalytics RelationshipTypeHistogram: %v", err)
+			slog.Error("api: OrgAnalytics RelationshipTypeHistogram failed", "err", err)
 			WriteError(w, ErrInternal("failed to retrieve relationship histogram"))
 			return
 		}
