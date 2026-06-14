@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 
@@ -10,6 +11,15 @@ import (
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
+)
+
+// Sentinel errors for the split embed/persist backfill path: an unavailable
+// embedder (no embed_errors penalty, the row is just cleared) versus a real
+// embed failure (counts toward embed_errors), mirroring the original
+// tryRepair accounting.
+var (
+	errBackfillNoEmbedder     = errors.New("dreaming: embedding backfill embedder unavailable")
+	errBackfillEmptyEmbedding = errors.New("dreaming: embedding backfill produced no vector")
 )
 
 // backfillDims returns the supported memory vector dimensions in
@@ -96,6 +106,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 	foundTotal := 0
 	visited := 0
 	progressStep := progressEmitStep(cap)
+	concurrency := max(p.settings.ResolveIntWithDefault(ctx, service.SettingDreamLLMConcurrency, "global"), 1)
 
 	// Iterate every supported memory dim in ascending order. The find
 	// query is per-dim because the LEFT JOIN targets a single
@@ -119,15 +130,26 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		if len(toProcess) > remaining {
 			toProcess = toProcess[:remaining]
 		}
-		for i := range toProcess {
+		// Re-embed all candidates in parallel (the embed call is the slow part;
+		// runBounded caps in-flight calls to concurrency), then persist each
+		// result serially in order so the vector writes and stats accounting
+		// stay deterministic. Backfill has no per-item budget gate, so unlike
+		// the LLM phases it needs no windowing.
+		vecs := make([][]float32, len(toProcess))
+		errs := make([]error, len(toProcess))
+		runBounded(concurrency, len(toProcess), func(k int) {
+			m := toProcess[k]
+			vecs[k], errs[k] = p.embedForBackfill(ctx, &m, dim, budget)
+		})
+		for k := range toProcess {
 			visited++
 			if shouldEmitProgress(visited-1, cap, progressStep) {
 				slog.Info("dreaming: embedding backfill progress",
 					"cycle", cycle.ID, "dim", dim,
 					"memory", visited, "of", cap)
 			}
-			mem := toProcess[i]
-			if p.tryRepair(ctx, &mem, dim, budget, stats) {
+			mem := toProcess[k]
+			if p.tryRepair(ctx, &mem, vecs[k], errs[k], stats) {
 				continue
 			}
 			p.clearDim(ctx, &mem, stats)
@@ -152,17 +174,18 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 	return PhaseResult{}, nil
 }
 
-// tryRepair re-embeds the memory and writes a fresh vector. Returns true
-// on success; false on embedder unavailability, embedder failure, or
-// persistent vector-store error. On false the caller falls back to
-// clearDim so the divergent row stops claiming a vector.
-func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, dim int, budget *TokenBudget, stats map[string]any) bool {
+// embedForBackfill runs only the embedding call for a divergent row. It does
+// no DB writes and no stats mutation, so it is safe to call concurrently (the
+// budget is mutex-safe). Returns errBackfillNoEmbedder when no embedder is
+// configured (the caller clears the dim without counting an error) or
+// errBackfillEmptyEmbedding when the provider returns no usable vector.
+func (p *EmbeddingBackfillPhase) embedForBackfill(ctx context.Context, mem *model.Memory, dim int, budget *TokenBudget) ([]float32, error) {
 	if p.embedder == nil {
-		return false
+		return nil, errBackfillNoEmbedder
 	}
 	ep := p.embedder()
 	if ep == nil {
-		return false
+		return nil, errBackfillNoEmbedder
 	}
 
 	inputs := []string{mem.Content}
@@ -181,15 +204,28 @@ func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memor
 	if err != nil {
 		slog.Warn("dreaming: embedding backfill re-embed failed",
 			"memory", mem.ID, "dim", dim, "err", err)
-		stats["embed_errors"] = stats["embed_errors"].(int) + 1
-		return false
+		return nil, err
 	}
 	if resp == nil || len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+		return nil, errBackfillEmptyEmbedding
+	}
+	return resp.Embeddings[0], nil
+}
+
+// tryRepair writes the vector produced by embedForBackfill. embedErr carries
+// the embed outcome: errBackfillNoEmbedder leaves the row for clearDim with no
+// error penalty (the original embedder-unavailable path), while any other
+// non-nil error or an empty vec counts toward embed_errors. Returns true on a
+// successful write; false on any failure so the caller falls back to clearDim.
+func (p *EmbeddingBackfillPhase) tryRepair(ctx context.Context, mem *model.Memory, vec []float32, embedErr error, stats map[string]any) bool {
+	if errors.Is(embedErr, errBackfillNoEmbedder) {
+		return false
+	}
+	if embedErr != nil || len(vec) == 0 {
 		stats["embed_errors"] = stats["embed_errors"].(int) + 1
 		return false
 	}
 
-	vec := resp.Embeddings[0]
 	actualDim := len(vec)
 
 	if err := p.vectorStore.Upsert(ctx, storage.VectorKindMemory, mem.ID, mem.NamespaceID, vec, actualDim); err != nil {

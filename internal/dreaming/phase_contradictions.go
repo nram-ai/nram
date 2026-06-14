@@ -205,43 +205,99 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 	contradictions := 0
 	paraphrasesSuperseded := 0
 	budgetStopped := false
-	for idx, pair := range pairs {
+	concurrency := max(p.settings.ResolveIntWithDefault(ctx, service.SettingDreamLLMConcurrency, "global"), 1)
+
+	// Judge each pair, fanning the LLM calls out up to `concurrency` at a time.
+	// Paraphrase short-circuits and the pre-flight budget check stay serial in
+	// pair order so the sequential early-stop semantics are preserved; only the
+	// checkContradiction LLM call runs in parallel. Confidence/lineage writes
+	// happen in the serial apply loop below, in pair order, so order-dependent
+	// logic (detection counting, cumulative haircuts on shared memories) matches
+	// the original sequential walk exactly.
+	type contradictionJudgment struct {
+		judged      bool
+		superseded  bool
+		found       bool
+		winner      string
+		explanation string
+		usage       *provider.TokenUsage
+		dur         time.Duration
+		err         error
+	}
+	results := make([]contradictionJudgment, len(pairs))
+	for windowStart := 0; windowStart < len(pairs); windowStart += concurrency {
 		if budget.Exhausted() {
 			budgetStopped = true
 			break
 		}
+		windowEnd := min(windowStart+concurrency, len(pairs))
 
-		// Skip the LLM judge for near-duplicate paraphrases; the strict
-		// contradiction prompt is intentionally blind to them.
-		if paraphraseEnabled && vectorsByID != nil {
-			va, okA := vectorsByID[pair[0].ID]
-			vb, okB := vectorsByID[pair[1].ID]
-			if okA && okB && len(va) == len(vb) && len(va) > 0 {
-				sim := hnsw.CosineSimilarity(va, vb)
-				if float64(sim) >= paraphraseThreshold {
-					p.paraphraseSupersede(ctx, cycle, logger, &pair[0], &pair[1], float64(sim), staleByID)
-					paraphrasesSuperseded++
-					continue
+		// Serial pre-pass over the window: paraphrase short-circuit (a write,
+		// kept in pair order) and the pre-flight affordability check. Collect
+		// the pairs that still need an LLM judgment.
+		var toJudge []int
+		var toJudgePrompts []string
+		affordStop := false
+		for idx := windowStart; idx < windowEnd; idx++ {
+			pair := pairs[idx]
+			if paraphraseEnabled && vectorsByID != nil {
+				va, okA := vectorsByID[pair[0].ID]
+				vb, okB := vectorsByID[pair[1].ID]
+				if okA && okB && len(va) == len(vb) && len(va) > 0 {
+					sim := hnsw.CosineSimilarity(va, vb)
+					if float64(sim) >= paraphraseThreshold {
+						p.paraphraseSupersede(ctx, cycle, logger, &pairs[idx][0], &pairs[idx][1], float64(sim), staleByID)
+						paraphrasesSuperseded++
+						results[idx].superseded = true
+						continue
+					}
 				}
 			}
+			userPrompt := service.RenderContradictionUser(pair[0].Content, pair[1].Content)
+			estCost := EstimateTokens(systemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			if !budget.CanAfford(estCost) {
+				slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
+					"estimate", estCost, "remaining", budget.Remaining())
+				affordStop = true
+				budgetStopped = true
+				break
+			}
+			toJudge = append(toJudge, idx)
+			toJudgePrompts = append(toJudgePrompts, userPrompt)
 		}
 
-		// Pre-flight budget check using the 4-bytes-per-token heuristic on
-		// the prompt plus the per-call output cap. Prevents starting calls
-		// we can't afford to record.
-		userPrompt := service.RenderContradictionUser(pair[0].Content, pair[1].Content)
-		estPrompt := systemPrompt + provider.PromptSplitSeparator + userPrompt
-		estCost := EstimateTokens(estPrompt) + budget.PerCallCap()
-		if !budget.CanAfford(estCost) {
-			slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
-				"estimate", estCost, "remaining", budget.Remaining())
-			budgetStopped = true
+		// Parallel pass: only the LLM judge call. Each goroutine touches a
+		// distinct pair and a distinct results slot; the budget is mutex-safe.
+		runBounded(concurrency, len(toJudge), func(k int) {
+			idx := toJudge[k]
+			userPrompt := toJudgePrompts[k]
+			start := time.Now()
+			found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pairs[idx][0], &pairs[idx][1], systemPrompt, userPrompt, budget, temperature)
+			results[idx] = contradictionJudgment{
+				judged: true, found: found, winner: winner,
+				explanation: explanation, usage: usage,
+				dur: time.Since(start), err: err,
+			}
+		})
+		if affordStop {
 			break
 		}
+	}
 
-		pairStart := time.Now()
-		found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pair[0], &pair[1], systemPrompt, userPrompt, budget, temperature)
-		pairDur := time.Since(pairStart)
+	// Serial apply: walk pairs in order, applying each judgment.
+	for idx := range pairs {
+		r := results[idx]
+		if r.superseded {
+			continue
+		}
+		if !r.judged {
+			// Budget exhaustion or an unaffordable estimate stopped dispatch
+			// before this pair; nothing past here was judged.
+			break
+		}
+		pair := pairs[idx]
+		found, winner, explanation, usage, err := r.found, r.winner, r.explanation, r.usage, r.err
+		pairDur := r.dur
 
 		callTokens := 0
 		if usage != nil {

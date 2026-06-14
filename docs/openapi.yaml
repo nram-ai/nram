@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.4.0
+  version: 0.5.0
   license:
     name: MIT
 
@@ -5723,6 +5723,7 @@ components:
         - "dreaming.heartbeat_stale_seconds"
         - "dreaming.heartbeat_tick_timeout_seconds"
         - "dreaming.initial_confidence"
+        - "dreaming.llm_concurrency"
         - "dreaming.log_retention_days"
         - "dreaming.max_tokens_per_call"
         - "dreaming.max_tokens_per_cycle"
@@ -5807,9 +5808,9 @@ components:
         - "enrichment.worker.embed_input_cap"
         - "enrichment.worker.embed_timeout_seconds"
         - "enrichment.worker.heartbeat_seconds"
+        - "enrichment.worker.llm_concurrency"
         - "enrichment.worker.max_backoff_seconds"
         - "enrichment.worker.poll_interval_seconds"
-        - "enrichment.worker.pre_embed_concurrency"
         - "events.replay_capacity"
         - "events.sse_keepalive_seconds"
         - "events.subscriber_buffer_size"

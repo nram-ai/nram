@@ -36,9 +36,9 @@ var providerLoadKnobs = []providerLoadKnob{
 		Why:         "more workers = more concurrent LLM/embed calls; raise only when your provider can sustain parallel calls",
 	},
 	{
-		Key:         SettingEnrichmentWorkerPreEmbedConcurrency,
+		Key:         SettingEnrichmentWorkerLLMConcurrency,
 		SafeDefault: 1,
-		Why:         "per-batch fan-out for fact + entity extraction; raise only with a multi-GPU or hosted provider",
+		Why:         "how many of a worker's claimed jobs run their LLM extraction calls in parallel within a batch; raise only with a multi-GPU or hosted provider",
 	},
 	{
 		Key:         SettingEnrichmentWorkerBatchClaimSize,
@@ -54,6 +54,11 @@ var providerLoadKnobs = []providerLoadKnob{
 		Key:         SettingDreamParaphraseTopK,
 		SafeDefault: 1,
 		Why:         "raises the per-anchor neighbor count in paraphrase dedup; check vector store + embed provider headroom",
+	},
+	{
+		Key:         SettingDreamLLMConcurrency,
+		SafeDefault: 1,
+		Why:         "fans out each dream phase's per-item LLM/embedding calls; a cycle runs alone, so this is its whole provider concurrency. Raise only with a multi-GPU or hosted provider",
 	},
 }
 

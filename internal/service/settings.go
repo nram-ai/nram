@@ -88,6 +88,12 @@ const (
 	SettingDreamInitialConfidence     = "dreaming.initial_confidence"
 	SettingDreamSupersessionThreshold = "dreaming.supersession_threshold"
 	SettingDreamLogRetention          = "dreaming.log_retention_days"
+	// SettingDreamLLMConcurrency bounds how many of a dream phase's per-item
+	// LLM/embedding calls run in parallel. 1 (default) keeps every phase
+	// sequential; raise only with a multi-GPU or hosted provider. A cycle runs
+	// alone (the scheduler gates on enrichment being idle), so this fan-out is
+	// the cycle's entire provider concurrency.
+	SettingDreamLLMConcurrency = "dreaming.llm_concurrency"
 
 	// Novelty audit. A dream synthesis must contain at least one fact not
 	// present in any of its source memories. Hybrid check: max-cosine
@@ -293,7 +299,7 @@ const (
 	// fans LLM calls out per-job before issuing one shared embed call;
 	// the knobs below cap each layer.
 	SettingEnrichmentWorkerBatchClaimSize         = "enrichment.worker.batch_claim_size"
-	SettingEnrichmentWorkerPreEmbedConcurrency    = "enrichment.worker.pre_embed_concurrency"
+	SettingEnrichmentWorkerLLMConcurrency         = "enrichment.worker.llm_concurrency"
 	SettingEnrichmentWorkerEmbedTimeoutSeconds    = "enrichment.worker.embed_timeout_seconds"
 	SettingEnrichmentWorkerEmbedInputCap          = "enrichment.worker.embed_input_cap"
 	SettingEnrichmentWorkerBreakerEscalateSeconds = "enrichment.worker.breaker_error_escalate_seconds"
@@ -788,6 +794,7 @@ var settingDefaults = map[string]string{
 	SettingDreamInitialConfidence:                 "0.3",
 	SettingDreamSupersessionThreshold:             "0.85",
 	SettingDreamLogRetention:                      "30",
+	SettingDreamLLMConcurrency:                    "1",
 	SettingDreamContradictionSystemPrompt:         contradictionSystemPromptText,
 	SettingDreamSynthesisSystemPrompt:             synthesisSystemPromptText,
 	SettingDreamAlignmentSystemPrompt:             alignmentSystemPromptText,
@@ -892,7 +899,7 @@ var settingDefaults = map[string]string{
 	// any of these knobs raised above 1 so an operator who is intentionally
 	// running a hosted/multi-GPU provider sees a reminder of the risk.
 	SettingEnrichmentWorkerBatchClaimSize:         "1",
-	SettingEnrichmentWorkerPreEmbedConcurrency:    "1",
+	SettingEnrichmentWorkerLLMConcurrency:         "1",
 	SettingEnrichmentWorkerEmbedTimeoutSeconds:    "30",
 	SettingEnrichmentWorkerEmbedInputCap:          "256",
 	SettingEnrichmentWorkerBreakerEscalateSeconds: "300",

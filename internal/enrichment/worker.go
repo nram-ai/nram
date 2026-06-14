@@ -862,7 +862,7 @@ func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
 }
 
 // processBatch runs pre-embed in parallel across claimed jobs (bounded by
-// SettingEnrichmentWorkerPreEmbedConcurrency), then makes one shared embed
+// SettingEnrichmentWorkerLLMConcurrency), then makes one shared embed
 // call, then finalizes each. Bounded concurrency keeps LLM provider rate
 // limits safe. Returns the soonest breaker RetryAt observed across the
 // batch's failures (zero if none) so the worker loop can pause until the
@@ -872,7 +872,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	slog.Info("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
 
 	preEmbedFanOut := max(wp.settings.ResolveIntWithDefault(ctx,
-		service.SettingEnrichmentWorkerPreEmbedConcurrency, "global"), 1)
+		service.SettingEnrichmentWorkerLLMConcurrency, "global"), 1)
 
 	results := make([]*pendingJob, len(jobs))
 	preEmbedErrs := make([]error, len(jobs))

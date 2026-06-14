@@ -340,37 +340,81 @@ func (p *ConsolidationPhase) reinforce(
 
 	alignmentSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamAlignmentSystemPrompt)
 
+	// Score each stale synthesis against a fresh evidence sample, fanning the
+	// LLM calls out up to `concurrency` at a time. Sample selection and the
+	// budget gate stay serial in synthesis order so the early-stop matches the
+	// sequential walk; only scoreAlignment runs in parallel. Confidence updates
+	// and supersessions happen in the serial apply loop below, in order, so they
+	// stay deterministic. scoreAlignment is compute-only (mutex-safe budget),
+	// so concurrent calls are safe.
+	concurrency := max(p.settings.ResolveIntWithDefault(ctx, service.SettingDreamLLMConcurrency, "global"), 1)
+	type alignResult struct {
+		dispatched  bool
+		emptySample bool
+		userPrompt  string
+		alignment   float64
+		usage       *provider.TokenUsage
+		err         error
+		dur         time.Duration
+	}
+	alignResults := make([]alignResult, len(stale))
+	for windowStart := 0; windowStart < len(stale); windowStart += concurrency {
+		if budget.Exhausted() {
+			break
+		}
+		windowEnd := min(windowStart+concurrency, len(stale))
+		var toScore []int
+		affordStop := false
+		for i := windowStart; i < windowEnd; i++ {
+			sample := sampleMemories(userMemories, alignmentSampleSize)
+			if len(sample) == 0 {
+				alignResults[i].dispatched = true
+				alignResults[i].emptySample = true
+				continue
+			}
+			userPrompt := renderAlignmentPrompt(&stale[i].mem, sample)
+			estCost := EstimateTokens(alignmentSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			if !budget.CanAfford(estCost) {
+				affordStop = true
+				break
+			}
+			alignResults[i].dispatched = true
+			alignResults[i].userPrompt = userPrompt
+			toScore = append(toScore, i)
+		}
+		runBounded(concurrency, len(toScore), func(k int) {
+			i := toScore[k]
+			synthesisID := stale[i].mem.ID
+			alignmentCtx := provider.WithMemoryID(ctx, synthesisID)
+			start := time.Now()
+			alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesisID, alignmentSystemPrompt, alignResults[i].userPrompt, budget, alignmentTemperature)
+			alignResults[i].alignment = alignment
+			alignResults[i].usage = usage
+			alignResults[i].err = err
+			alignResults[i].dur = time.Since(start)
+		})
+		if affordStop {
+			break
+		}
+	}
+
 	visited := 0
 	for i := range stale {
 		synthesis := stale[i].mem
 		meta := stale[i].meta
-		if budget.Exhausted() {
+		r := alignResults[i]
+		if !r.dispatched {
+			// Budget was exhausted or the next estimate was unaffordable when
+			// this synthesis came up during dispatch; nothing past here ran.
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
 		}
 		visited++
-
-		// Get a sample of user memories to evaluate against.
-		sample := sampleMemories(userMemories, alignmentSampleSize)
-		if len(sample) == 0 {
+		if r.emptySample {
 			continue
 		}
 
-		// Pre-flight budget check using the same prompt we'll send.
-		userPrompt := renderAlignmentPrompt(&synthesis, sample)
-		estCost := EstimateTokens(alignmentSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
-		if !budget.CanAfford(estCost) {
-			slog.Info("dreaming: alignment call skipped (estimated cost exceeds remaining budget)",
-				"cycle", cycle.ID, "synthesis", synthesis.ID,
-				"alignment", visited, "of", len(stale),
-				"estimate", estCost, "budget_remaining", budget.Remaining())
-			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
-			break
-		}
-
-		callStart := time.Now()
-		alignmentCtx := provider.WithMemoryID(ctx, synthesis.ID)
-		alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesis.ID, alignmentSystemPrompt, userPrompt, budget, alignmentTemperature)
+		alignment, usage, err := r.alignment, r.usage, r.err
 		callTokens := 0
 		if usage != nil {
 			callTokens = usage.TotalTokens
@@ -379,7 +423,7 @@ func (p *ConsolidationPhase) reinforce(
 		slog.Info("dreaming: alignment call",
 			"cycle", cycle.ID, "synthesis", synthesis.ID,
 			"alignment", visited, "of", len(stale),
-			"latency_ms", time.Since(callStart).Milliseconds(),
+			"latency_ms", r.dur.Milliseconds(),
 			"tokens", callTokens,
 			"budget_remaining", budget.Remaining())
 
@@ -1323,30 +1367,92 @@ func (p *ConsolidationPhase) consolidate(
 	synthesisSystemPrompt := resolvePromptOrDefault(ctx, p.settings, service.SettingDreamSynthesisSystemPrompt)
 	noveltyEnabled := p.settings.ResolveBool(ctx, service.SettingDreamNoveltyEnabled, "global")
 
+	// Compute synthesis (and, when enabled, the novelty audit) for each stale
+	// cluster, fanning the LLM/embedding calls out up to `concurrency` at a
+	// time. Dispatch gating stays serial in cluster order so the budget
+	// early-stop matches the sequential walk; only the synthesize+audit calls
+	// run in parallel. The memory-creation writes happen in the serial apply
+	// loop below, in cluster order, so they stay deterministic. Both synthesize
+	// and auditNovelty are compute-only (the only shared state they touch is the
+	// mutex-safe budget and settings cache), so concurrent calls are safe.
+	concurrency := max(p.settings.ResolveIntWithDefault(ctx, service.SettingDreamLLMConcurrency, "global"), 1)
+	type synthResult struct {
+		dispatched   bool
+		userPrompt   string
+		synthContent string
+		synthUsage   *provider.TokenUsage
+		synthErr     error
+		synthDur     time.Duration
+		passed       bool
+		reason       string
+		auditUsage   *provider.TokenUsage
+		embedTokens  int
+		auditErr     error
+		auditDur     time.Duration
+	}
+	synthResults := make([]synthResult, len(stale))
+	for windowStart := 0; windowStart < len(stale); windowStart += concurrency {
+		if budget.Exhausted() {
+			break
+		}
+		windowEnd := min(windowStart+concurrency, len(stale))
+		var toCompute []int
+		affordStop := false
+		for si := windowStart; si < windowEnd; si++ {
+			userPrompt := renderSynthesisPrompt(stale[si].members)
+			estCost := EstimateTokens(synthesisSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			if !budget.CanAfford(estCost) {
+				affordStop = true
+				break
+			}
+			synthResults[si].dispatched = true
+			synthResults[si].userPrompt = userPrompt
+			toCompute = append(toCompute, si)
+		}
+		runBounded(concurrency, len(toCompute), func(k int) {
+			si := toCompute[k]
+			cluster := stale[si].members
+			userPrompt := synthResults[si].userPrompt
+			synthStart := time.Now()
+			content, usage, err := p.synthesize(ctx, llm, synthesisSystemPrompt, userPrompt, budget, synthesisTemperature)
+			synthResults[si].synthContent = content
+			synthResults[si].synthUsage = usage
+			synthResults[si].synthErr = err
+			synthResults[si].synthDur = time.Since(synthStart)
+			if err != nil || content == "" {
+				return
+			}
+			if noveltyEnabled {
+				auditStart := time.Now()
+				passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, content, cluster, 0, provider.OperationDreamNoveltyAudit)
+				synthResults[si].passed = passed
+				synthResults[si].reason = reason
+				synthResults[si].auditUsage = auditUsage
+				synthResults[si].embedTokens = embedTokens
+				synthResults[si].auditErr = auditErr
+				synthResults[si].auditDur = time.Since(auditStart)
+			}
+		})
+		if affordStop {
+			break
+		}
+	}
+
 	clustersVisited := 0
 	for si := range stale {
 		cluster := stale[si].members
 		metas := stale[si].metas
 		fingerprint := stale[si].fingerprint
-		if budget.Exhausted() {
+		r := synthResults[si]
+		if !r.dispatched {
+			// Budget was exhausted or the next estimate was unaffordable when
+			// this cluster came up during dispatch; nothing past here ran.
 			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
 			break
 		}
 		clustersVisited++
 
-		userPrompt := renderSynthesisPrompt(cluster)
-		estCost := EstimateTokens(synthesisSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
-		if !budget.CanAfford(estCost) {
-			slog.Info("dreaming: synthesis call skipped (estimated cost exceeds remaining budget)",
-				"cycle", cycle.ID, "cluster_size", len(cluster),
-				"cluster", clustersVisited, "of", len(stale),
-				"estimate", estCost, "budget_remaining", budget.Remaining())
-			stats["skipped_budget"] = stats["skipped_budget"].(int) + 1
-			break
-		}
-
-		synthStart := time.Now()
-		synthesisContent, usage, err := p.synthesize(ctx, llm, synthesisSystemPrompt, userPrompt, budget, synthesisTemperature)
+		synthesisContent, usage, err := r.synthContent, r.synthUsage, r.synthErr
 		synthTokens := 0
 		if usage != nil {
 			synthTokens = usage.TotalTokens
@@ -1355,7 +1461,7 @@ func (p *ConsolidationPhase) consolidate(
 		slog.Info("dreaming: synthesis call",
 			"cycle", cycle.ID, "cluster_size", len(cluster),
 			"cluster", clustersVisited, "of", len(stale),
-			"latency_ms", time.Since(synthStart).Milliseconds(),
+			"latency_ms", r.synthDur.Milliseconds(),
 			"tokens", synthTokens,
 			"budget_remaining", budget.Remaining())
 
@@ -1382,8 +1488,7 @@ func (p *ConsolidationPhase) consolidate(
 		// one fact absent from the source cluster. The audit charges its own
 		// LLM usage against the dream budget when the borderline judge fires.
 		if noveltyEnabled {
-			auditStart := time.Now()
-			passed, reason, auditUsage, embedTokens, auditErr := p.auditNovelty(ctx, llm, budget, synthesisContent, cluster, 0, provider.OperationDreamNoveltyAudit)
+			passed, reason, auditUsage, embedTokens, auditErr := r.passed, r.reason, r.auditUsage, r.embedTokens, r.auditErr
 			llmTokens := 0
 			if auditUsage != nil {
 				llmTokens = auditUsage.TotalTokens
@@ -1397,7 +1502,7 @@ func (p *ConsolidationPhase) consolidate(
 				"cycle", cycle.ID,
 				"cluster", clustersVisited, "of", len(stale),
 				"reason", reason, "passed", passed,
-				"latency_ms", time.Since(auditStart).Milliseconds(),
+				"latency_ms", r.auditDur.Milliseconds(),
 				"embed_tokens", embedTokens, "llm_tokens", llmTokens,
 				"budget_remaining", budget.Remaining())
 

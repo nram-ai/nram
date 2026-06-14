@@ -95,7 +95,7 @@ func TestCheckProviderLoadDefaults_WarnsWhenRaised(t *testing.T) {
 		t.Fatalf("expected raised contradiction.neighbors knob in warning; got:\n%s", out)
 	}
 	// Knobs at default must not be listed.
-	if strings.Contains(out, SettingEnrichmentWorkerPreEmbedConcurrency) {
+	if strings.Contains(out, SettingEnrichmentWorkerLLMConcurrency) {
 		t.Fatalf("knob at default should not appear in warning; got:\n%s", out)
 	}
 }
