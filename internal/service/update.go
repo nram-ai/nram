@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +116,14 @@ func (s *UpdateService) Update(ctx context.Context, req *UpdateRequest) (*Update
 	}
 	if req.Content == nil && req.Tags == nil && req.Metadata == nil {
 		return nil, fmt.Errorf("at least one of content, tags, or metadata must be provided")
+	}
+	// Reject an explicit empty/blank content edit. The store path already
+	// guards this, but the update path did not, which let a memory's content
+	// be wiped to "" — leaving an unaugmentable row that the augmentation
+	// backfill re-selects every cycle. A nil Content (field omitted) is a
+	// legitimate tags/metadata-only update and is left untouched.
+	if req.Content != nil && strings.TrimSpace(*req.Content) == "" {
+		return nil, fmt.Errorf("content cannot be empty or whitespace-only")
 	}
 
 	if req.Tags != nil {

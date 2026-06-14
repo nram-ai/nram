@@ -58,6 +58,16 @@ func (p *AugmentationBackfillPhase) Execute(ctx context.Context, cycle *model.Dr
 	if p.settings != nil && !p.settings.ResolveBool(ctx, service.SettingDreamAugmentationBackfillEnabled, "global") {
 		return PhaseResult{}, nil
 	}
+	// Query augmentation is a global switch. While it is off, the enrichment
+	// worker skips every job with QueryAugmentSkipDisabled and never stamps
+	// augmented_embedding_at, so enqueuing backfill jobs would re-select the
+	// same rows every cycle without ever augmenting them. Skip the phase until
+	// augmentation is re-enabled, at which point these rows (augmented_embedding_at
+	// still NULL) are picked up again naturally — unlike empty content, a disabled
+	// switch is transient, so we gate enqueuing rather than marking rows terminal.
+	if p.settings != nil && !p.settings.ResolveBool(ctx, service.SettingQueryAugmentEnabled, "global") {
+		return PhaseResult{}, nil
+	}
 	if p.lister == nil || p.queue == nil {
 		return PhaseResult{}, nil
 	}

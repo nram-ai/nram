@@ -65,6 +65,33 @@ func TestTokenUsageRepo_Record(t *testing.T) {
 	})
 }
 
+func TestTokenUsageRepo_Record_DanglingMemoryIDNulled(t *testing.T) {
+	// A memory hard-deleted between an embed call and this best-effort
+	// accounting write would otherwise fail the memory_id FK (SQLSTATE 23503).
+	// Record must keep the row and null only the dangling link.
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewTokenUsageRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		usage := newTestTokenUsage(nsID)
+		usage.Operation = "embedding"
+		ghost := uuid.New() // never inserted into memories
+		usage.MemoryID = &ghost
+
+		if err := repo.Record(ctx, usage); err != nil {
+			t.Fatalf("record should tolerate a dangling memory_id, got %v", err)
+		}
+		if usage.MemoryID != nil {
+			t.Fatalf("expected memory_id nulled after FK violation, got %s", *usage.MemoryID)
+		}
+		if usage.TokensInput != 150 || usage.TokensOutput != 50 {
+			t.Fatalf("accounting fields must survive the retry: in=%d out=%d",
+				usage.TokensInput, usage.TokensOutput)
+		}
+	})
+}
+
 func TestTokenUsageRepo_Record_GeneratesID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

@@ -38,14 +38,18 @@ func (f *fakeAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ 
 }
 
 func augSettings(enabled bool, capPerCycle int) *staticDreamSettings {
-	values := map[string]string{}
+	flag := "false"
 	if enabled {
-		values[service.SettingDreamAugmentationBackfillEnabled] = "true"
-	} else {
-		values[service.SettingDreamAugmentationBackfillEnabled] = "false"
+		flag = "true"
 	}
 	return &staticDreamSettings{
-		values: values,
+		// The phase requires both the backfill switch and the global
+		// query-augment switch; tie them together for the shared cases and
+		// vary them independently in the dedicated gate tests.
+		values: map[string]string{
+			service.SettingDreamAugmentationBackfillEnabled: flag,
+			service.SettingQueryAugmentEnabled:              flag,
+		},
 		ints: map[string]int{
 			service.SettingDreamAugmentationBackfillCapPerCycle: capPerCycle,
 		},
@@ -118,6 +122,42 @@ func TestAugmentationBackfillPhase_DisabledNoop(t *testing.T) {
 	}
 	if len(queue.snapshot()) != 0 {
 		t.Errorf("disabled phase must not enqueue")
+	}
+}
+
+// Query augmentation globally disabled: even with backfill enabled the phase is
+// a no-op, since every enqueued job would skip with QueryAugmentSkipDisabled and
+// re-loop. Re-enabling augmentation lets the rows be picked up again.
+func TestAugmentationBackfillPhase_AugmentationDisabledNoop(t *testing.T) {
+	lister := &fakeAugLister{ids: []uuid.UUID{uuid.New()}}
+	queue := &enqueueRecorder{}
+
+	settings := &staticDreamSettings{
+		values: map[string]string{
+			service.SettingDreamAugmentationBackfillEnabled: "true",
+			service.SettingQueryAugmentEnabled:              "false",
+		},
+		ints: map[string]int{
+			service.SettingDreamAugmentationBackfillCapPerCycle: 200,
+		},
+	}
+
+	phase := NewAugmentationBackfillPhase(lister, queue, settings)
+	cycle := augTestCycle(uuid.New())
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	result, err := phase.Execute(context.Background(), cycle, NewTokenBudget(10000, 2048), logger)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.HasResidual {
+		t.Errorf("augmentation-disabled phase must not report residual")
+	}
+	if lister.calls != 0 {
+		t.Errorf("augmentation-disabled phase must not list candidates; got %d calls", lister.calls)
+	}
+	if len(queue.snapshot()) != 0 {
+		t.Errorf("augmentation-disabled phase must not enqueue")
 	}
 }
 

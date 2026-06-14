@@ -1143,6 +1143,14 @@ func scanBackfillCandidates(rows *sql.Rows) ([]BackfillCandidate, error) {
 // given namespace scope. namespaceIDs == nil scans the whole deployment.
 // Soft-deleted and superseded rows are excluded so the backfill never re-embeds
 // rows the runtime ignores anyway. limit == 0 returns all matches.
+//
+// Empty/whitespace-only-content rows are also excluded: the worker skips query
+// augmentation for them (query_augment_skip_reason=content_empty) and therefore
+// never stamps augmented_embedding_at, so without this guard they would be
+// re-selected every cycle in an unbreakable loop. They have nothing to augment,
+// and a later content edit re-enqueues enrichment via the write path. Transient
+// skip reasons (provider_unavailable, llm_error, parse_error) intentionally stay
+// eligible so a later cycle retries them.
 func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
 	pg := r.db.Backend() == BackendPostgres
 	args := []any{}
@@ -1150,6 +1158,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 		"augmented_embedding_at IS NULL",
 		"deleted_at IS NULL",
 		"superseded_by IS NULL",
+		"content IS NOT NULL AND trim(content) <> ''",
 	}
 	if len(namespaceIDs) > 0 {
 		placeholders := make([]string, len(namespaceIDs))

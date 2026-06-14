@@ -617,6 +617,55 @@ func TestUpdate_NothingToUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdate_RejectsEmptyContent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"empty", ""},
+		{"whitespace", "   "},
+		{"newline", "\n\t"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projectID, _, memID, projects, memories := setupUpdateFixtures()
+			svc, _, _, _ := newUpdateService(memories, projects, nil)
+
+			content := tc.content
+			_, err := svc.Update(context.Background(), &UpdateRequest{
+				ProjectID: projectID,
+				MemoryID:  memID,
+				Content:   &content,
+			})
+			if err == nil {
+				t.Fatalf("expected error for %q content, got nil", tc.content)
+			}
+			if !strings.Contains(err.Error(), "empty") {
+				t.Fatalf("expected empty-content error, got %v", err)
+			}
+			// The original content must be untouched.
+			if got := memories.memories[memID].Content; got != "original content" {
+				t.Fatalf("content was modified to %q", got)
+			}
+		})
+	}
+}
+
+func TestUpdate_TagsOnlyAllowedWhenContentOmitted(t *testing.T) {
+	// A nil Content (field omitted) is a legitimate tags-only update and must
+	// not trip the empty-content guard.
+	projectID, _, memID, projects, memories := setupUpdateFixtures()
+	svc, _, _, _ := newUpdateService(memories, projects, nil)
+
+	newTags := []string{"fresh-tag"}
+	if _, err := svc.Update(context.Background(), &UpdateRequest{
+		ProjectID: projectID,
+		MemoryID:  memID,
+		Tags:      &newTags,
+	}); err != nil {
+		t.Fatalf("tags-only update should succeed, got %v", err)
+	}
+}
+
 func TestUpdate_MemoryWrongNamespace(t *testing.T) {
 	projectID, _, _, projects, _ := setupUpdateFixtures()
 

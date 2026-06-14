@@ -38,25 +38,41 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
 	}
 
-	_, err := r.db.Exec(ctx, query,
-		usage.ID.String(),
-		nullableUUIDStr(usage.OrgID),
-		nullableUUIDStr(usage.UserID),
-		nullableUUIDStr(usage.ProjectID),
-		usage.NamespaceID.String(),
-		usage.Operation,
-		usage.Provider,
-		usage.Model,
-		usage.TokensInput,
-		usage.TokensOutput,
-		nullableUUIDStr(usage.MemoryID),
-		nullableUUIDStr(usage.APIKeyID),
-		usage.LatencyMs,
-		EncodeBool(r.db.Backend(), usage.Success),
-		usage.ErrorCode,
-		usage.RequestID,
-		nullableUUIDStr(usage.CycleID),
-	)
+	// memoryID is the only argument that varies across the FK-tolerant retry
+	// below, so it is the single parameter to buildArgs; every other column is
+	// fixed for this row.
+	buildArgs := func(memoryID *string) []any {
+		return []any{
+			usage.ID.String(),
+			nullableUUIDStr(usage.OrgID),
+			nullableUUIDStr(usage.UserID),
+			nullableUUIDStr(usage.ProjectID),
+			usage.NamespaceID.String(),
+			usage.Operation,
+			usage.Provider,
+			usage.Model,
+			usage.TokensInput,
+			usage.TokensOutput,
+			memoryID,
+			nullableUUIDStr(usage.APIKeyID),
+			usage.LatencyMs,
+			EncodeBool(r.db.Backend(), usage.Success),
+			usage.ErrorCode,
+			usage.RequestID,
+			nullableUUIDStr(usage.CycleID),
+		}
+	}
+
+	_, err := r.db.Exec(ctx, query, buildArgs(nullableUUIDStr(usage.MemoryID))...)
+	if err != nil && usage.MemoryID != nil && isForeignKeyViolation(err) {
+		// The memory was hard-deleted between the upstream provider call and
+		// this best-effort accounting write (e.g. a forget landing mid-embed).
+		// Keep the row for billing/analytics; drop only the now-dangling memory
+		// link, which the schema would itself null on delete (ON DELETE SET
+		// NULL). Retry exactly once with the link cleared.
+		usage.MemoryID = nil
+		_, err = r.db.Exec(ctx, query, buildArgs(nil)...)
+	}
 	if err != nil {
 		return fmt.Errorf("token usage record: %w", err)
 	}

@@ -32,6 +32,51 @@ func newTestMemory(namespaceID uuid.UUID) *model.Memory {
 	}
 }
 
+func TestMemoryRepo_ListAugmentationBackfillCandidates_ExcludesEmptyContent(t *testing.T) {
+	// Empty/whitespace-only memories can never be augmented (the worker skips
+	// them with content_empty and never stamps augmented_embedding_at), so they
+	// must not be returned as candidates — otherwise the backfill re-selects
+	// them every cycle forever.
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		normal := newTestMemory(nsID)
+		if err := repo.Create(ctx, normal); err != nil {
+			t.Fatalf("create normal: %v", err)
+		}
+		empty := newTestMemory(nsID)
+		empty.Content = ""
+		if err := repo.Create(ctx, empty); err != nil {
+			t.Fatalf("create empty: %v", err)
+		}
+		ws := newTestMemory(nsID)
+		ws.Content = "   "
+		if err := repo.Create(ctx, ws); err != nil {
+			t.Fatalf("create whitespace: %v", err)
+		}
+
+		cands, err := repo.ListAugmentationBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
+		if err != nil {
+			t.Fatalf("list candidates: %v", err)
+		}
+		got := map[uuid.UUID]bool{}
+		for _, c := range cands {
+			got[c.ID] = true
+		}
+		if !got[normal.ID] {
+			t.Errorf("normal-content memory should be a candidate")
+		}
+		if got[empty.ID] {
+			t.Errorf("empty-content memory must be excluded")
+		}
+		if got[ws.ID] {
+			t.Errorf("whitespace-only memory must be excluded")
+		}
+	})
+}
+
 func TestMemoryRepo_Create(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
