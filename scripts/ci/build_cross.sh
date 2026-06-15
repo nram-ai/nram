@@ -79,9 +79,6 @@ PKGVER="${VERSION#v}"
 case "$PKGVER" in [0-9]*) ;; *) PKGVER="0.0.0+${PKGVER}" ;; esac
 PKGVER="$(printf '%s' "$PKGVER" | tr '-' '~' | tr -c 'A-Za-z0-9.+~' '_')"
 
-# Numeric x.y.z for macOS CFBundleShortVersionString.
-SHORTVERSION="$(parse_version_numeric "$VERSION" | tr ' ' '.')"
-
 # Single EXIT trap cleans up the build-time artifacts/tools the steps below set.
 TOOLBIN=""
 cleanup() {
@@ -129,15 +126,10 @@ for t in "${TARGETS[@]}"; do
         (cd "$stage" && zip -q "$OUTPUT_DIR/${name}.zip" "nram${binext}")
         ;;
       darwin)
-        # A bare Mach-O shows no icon; wrap it in a Neural Ram.app bundle so
-        # Finder/Dock render icon.icns.
-        app="$stage/Neural Ram.app"
-        mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-        cp "$binpath" "$app/Contents/MacOS/nram"
-        cp "$REPO_ROOT/packaging/appicon/icon.icns" "$app/Contents/Resources/icon.icns"
-        sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHORTVERSION__/${SHORTVERSION}/g" \
-          "$REPO_ROOT/packaging/appicon/Info.plist.template" > "$app/Contents/Info.plist"
-        tar -czf "$OUTPUT_DIR/${name}.tar.gz" -C "$stage" "Neural Ram.app"
+        # nram is a terminal server on macOS; ship the raw binary in a tarball.
+        # No .app bundle: an unsigned, un-notarized bundle is blocked by Gatekeeper
+        # on download, and the binary is run from a terminal regardless.
+        tar -czf "$OUTPUT_DIR/${name}.tar.gz" -C "$stage" "nram${binext}"
         ;;
       linux)
         # Raw-binary tarball (unchanged), plus native packages that install a

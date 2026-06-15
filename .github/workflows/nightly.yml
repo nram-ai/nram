@@ -4,8 +4,7 @@ name: Nightly
 # them to a single rolling "nightly" GitHub pre-release. The tag is re-pointed at
 # the latest master commit each run and its assets are clobbered, so the public
 # download URLs (releases/download/nightly/...) stay constant. This reuses the same
-# scripts/ci/build_cross.sh as release.yml (PACKAGE=1), then runs a second pass with
-# PACKAGE=0 to also publish the raw, unwrapped macOS and Linux binaries.
+# scripts/ci/build_cross.sh as release.yml (PACKAGE=1).
 on:
   schedule:
     - cron: "0 7 * * *" # 07:00 UTC daily (~03:00 America/New_York)
@@ -56,8 +55,8 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      # Pass 1: packaged artifacts (.tar.gz/.deb/.rpm/.zip/.app) + SHA256SUMS into
-      # dist/. build_cross.sh runs `make build-ui` first, so the embedded UI is built
+      # Packaged archives (.tar.gz/.deb/.rpm/.zip) + SHA256SUMS into dist/.
+      # build_cross.sh runs `make build-ui` first, so the embedded UI is built
       # before any binary that embeds it.
       - name: Build packaged artifacts
         if: steps.changed.outputs.build == 'true'
@@ -65,27 +64,6 @@ jobs:
           VERSION: nightly
           PACKAGE: "1"
         run: scripts/ci/build_cross.sh
-
-      # Pass 2: raw, unwrapped binaries into dist-raw/. SKIP_UI=1 reuses the UI built
-      # in pass 1 (no second npm build).
-      - name: Build raw binaries
-        if: steps.changed.outputs.build == 'true'
-        env:
-          VERSION: nightly
-          PACKAGE: "0"
-          SKIP_UI: "1"
-          OUTPUT_DIR: dist-raw
-        run: scripts/ci/build_cross.sh
-
-      # Publish the raw macOS and Linux binaries alongside the packaged set, then
-      # regenerate SHA256SUMS so it covers the final published file set exactly. The
-      # extensionless raw names never collide with the packaged ones.
-      - name: Stage raw macOS/Linux binaries and refresh checksums
-        if: steps.changed.outputs.build == 'true'
-        run: |
-          cp dist-raw/nram_nightly_linux_* dist-raw/nram_nightly_darwin_* dist/
-          (cd dist && sha256sum nram_* > SHA256SUMS)
-          ls -l dist
 
       - name: Publish rolling nightly pre-release
         if: steps.changed.outputs.build == 'true'
