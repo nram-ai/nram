@@ -1,0 +1,108 @@
+name: Nightly
+
+# Build the full set of packaged, checksummed binaries every night and publish
+# them to a single rolling "nightly" GitHub pre-release. The tag is re-pointed at
+# the latest master commit each run and its assets are clobbered, so the public
+# download URLs (releases/download/nightly/...) stay constant. This reuses the same
+# scripts/ci/build_cross.sh as release.yml (PACKAGE=1), then runs a second pass with
+# PACKAGE=0 to also publish the raw, unwrapped macOS and Linux binaries.
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily (~03:00 America/New_York)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # required to create/replace the rolling nightly release + tag
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    name: Build and publish nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history so the new-commits guard can see commit dates
+
+      # Skip scheduled runs when master had no new commits in the last 24h, so we do
+      # not republish byte-identical nightlies. Manual (workflow_dispatch) runs always
+      # build.
+      - name: Determine whether to build
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual run: building."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git log --since='24 hours ago' --oneline)" ]; then
+            echo "New commits in the last 24h: building."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No commits in the last 24h: skipping nightly."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v6
+        if: steps.changed.outputs.build == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v6
+        if: steps.changed.outputs.build == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # Pass 1: packaged artifacts (.tar.gz/.deb/.rpm/.zip/.app) + SHA256SUMS into
+      # dist/. build_cross.sh runs `make build-ui` first, so the embedded UI is built
+      # before any binary that embeds it.
+      - name: Build packaged artifacts
+        if: steps.changed.outputs.build == 'true'
+        env:
+          VERSION: nightly
+          PACKAGE: "1"
+        run: scripts/ci/build_cross.sh
+
+      # Pass 2: raw, unwrapped binaries into dist-raw/. SKIP_UI=1 reuses the UI built
+      # in pass 1 (no second npm build).
+      - name: Build raw binaries
+        if: steps.changed.outputs.build == 'true'
+        env:
+          VERSION: nightly
+          PACKAGE: "0"
+          SKIP_UI: "1"
+          OUTPUT_DIR: dist-raw
+        run: scripts/ci/build_cross.sh
+
+      # Publish the raw macOS and Linux binaries alongside the packaged set, then
+      # regenerate SHA256SUMS so it covers the final published file set exactly. The
+      # extensionless raw names never collide with the packaged ones.
+      - name: Stage raw macOS/Linux binaries and refresh checksums
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          cp dist-raw/nram_nightly_linux_* dist-raw/nram_nightly_darwin_* dist/
+          (cd dist && sha256sum nram_* > SHA256SUMS)
+          ls -l dist
+
+      - name: Publish rolling nightly pre-release
+        if: steps.changed.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="$(git rev-parse --short HEAD)"
+          date_utc="$(date -u +%Y-%m-%d)"
+          built_at="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          # Remove the previous rolling release and its tag so the recreate below can
+          # re-point the nightly tag at the current commit. Tolerate the first-ever run
+          # where neither exists yet.
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Nightly ($date_utc $short_sha)" \
+            --notes "Automated nightly build of \`master\` at commit ${GITHUB_SHA}, built ${built_at}.
+
+          This is a pre-release for testing, not a stable version. Verify downloads against \`SHA256SUMS\`."
