@@ -168,6 +168,8 @@ Navigate to `http://localhost:8674`, create the initial admin account, and **sav
 
 Open **Settings → Providers** and configure three slots: **Embedding** (semantic search), **Fact Extraction**, and **Entity Extraction** (the knowledge graph and dreaming). Any of OpenAI, Anthropic (chat slots only; it has no embeddings API), Google Gemini, Ollama, OpenRouter, or an OpenAI-compatible endpoint works. Changes hot-reload; no restart needed.
 
+Each slot also accepts **Custom Headers**: arbitrary key/value HTTP headers sent on every request to that provider, for proxies or gateways between nram and the endpoint (auth tokens, routing, tenant ids). They are available for all provider types. `Content-Type` (and, for Anthropic, `anthropic-version`) are reserved; everything else, including auth headers, can be set or overridden. Because a header can carry auth, the API key is optional: a slot may authenticate through a header alone. Header names are shown in the console; their values are write-only and never returned.
+
 See [docs/models.md](docs/models.md) for which model to put in each slot and how to size local models.
 
 ### 6. Verify

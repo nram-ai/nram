@@ -51,6 +51,12 @@ type SlotConfig struct {
 	// tool_use call. Sourced from the global
 	// provider.anthropic.json_tool_use.enabled setting; off by default.
 	JSONModeToolUse bool `json:"json_tool_use,omitempty"`
+	// CustomHeaders are arbitrary HTTP headers attached to every outbound
+	// request to this slot's provider host. Intended for proxies/gateways
+	// between nram and the provider. Content-Type (and, for Anthropic,
+	// anthropic-version) are reserved and cannot be overridden; all other
+	// headers, including auth, may be set or overridden here.
+	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
 }
 
 // RegistryConfig holds the configuration for all provider slots and the shared
@@ -577,19 +583,21 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 	switch config.Type {
 	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter, ProviderTypeCustom:
 		return NewOpenAIProvider(OpenAIConfig{
-			BaseURL:      config.BaseURL,
-			APIKey:       config.APIKey,
-			DefaultModel: config.Model,
-			Timeout:      slotTimeout(config.Timeout),
-			ProviderType: config.Type,
+			BaseURL:       config.BaseURL,
+			APIKey:        config.APIKey,
+			DefaultModel:  config.Model,
+			Timeout:       slotTimeout(config.Timeout),
+			ProviderType:  config.Type,
+			CustomHeaders: config.CustomHeaders,
 		}), nil
 
 	case ProviderTypeGemini:
 		return NewGeminiProvider(GeminiConfig{
-			APIKey:       config.APIKey,
-			DefaultModel: config.Model,
-			BaseURL:      config.BaseURL,
-			Timeout:      slotTimeout(config.Timeout),
+			APIKey:        config.APIKey,
+			DefaultModel:  config.Model,
+			BaseURL:       config.BaseURL,
+			Timeout:       slotTimeout(config.Timeout),
+			CustomHeaders: config.CustomHeaders,
 		}), nil
 
 	case ProviderTypeAnthropic:
@@ -600,6 +608,7 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 			Timeout:            slotTimeout(config.Timeout),
 			PromptCacheEnabled: config.PromptCacheEnabled,
 			JSONModeToolUse:    config.JSONModeToolUse,
+			CustomHeaders:      config.CustomHeaders,
 		}), nil
 
 	default:
@@ -619,6 +628,7 @@ func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 			DefaultEmbeddingModel: config.Model,
 			Timeout:               slotTimeout(config.Timeout),
 			ProviderType:          config.Type,
+			CustomHeaders:         config.CustomHeaders,
 		}), nil
 
 	case ProviderTypeGemini:
@@ -627,6 +637,7 @@ func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 			DefaultEmbeddingModel: config.Model,
 			BaseURL:               config.BaseURL,
 			Timeout:               slotTimeout(config.Timeout),
+			CustomHeaders:         config.CustomHeaders,
 		}), nil
 
 	case ProviderTypeAnthropic:

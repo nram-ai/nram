@@ -56,6 +56,26 @@ function getAuthHeaders(): Record<string, string> {
   return {};
 }
 
+/**
+ * Prefix used to forward in-progress custom provider headers on GET endpoints
+ * (where there is no request body). Must match forwardedHeaderPrefix on the
+ * server, which strips it and forwards the remainder as the target header.
+ */
+const FORWARDED_PROVIDER_HEADER_PREFIX = "X-Nram-Provider-Header-";
+
+/** Wraps a custom-header map into prefixed request headers, or undefined when empty. */
+function forwardedProviderHeaders(
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!name || !value) continue;
+    out[`${FORWARDED_PROVIDER_HEADER_PREFIX}${name}`] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export async function request<T>(
   method: string,
   path: string,
@@ -822,6 +842,17 @@ export interface ProviderSlot {
   timeout?: number | null;
   status?: string;
   latency_ms?: number | null;
+  /**
+   * Whether a non-empty api_key is stored for this slot. The key value is
+   * never returned; this drives the "key configured" indicator and the honest
+   * "leave blank to keep" affordance.
+   */
+  api_key_set?: boolean;
+  /**
+   * Names (sorted) of the custom HTTP headers configured for this slot. Values
+   * are never returned because they may carry secrets (e.g. a proxy token).
+   */
+  custom_header_keys?: string[];
 }
 
 export interface UpdateProviderSlotRequest {
@@ -830,6 +861,18 @@ export interface UpdateProviderSlotRequest {
   model?: string;
   api_key?: string;
   timeout?: number;
+  /**
+   * Arbitrary HTTP headers attached to every outbound request to this slot's
+   * provider host (for proxies/gateways). The map is the new full set (omitted
+   * names are removed); a header sent with a blank value keeps its previously
+   * stored value, so masked headers survive a re-save.
+   */
+  custom_headers?: Record<string, string>;
+  /**
+   * Request-only flag: when true, the stored api_key is cleared instead of
+   * preserved-on-blank (e.g. switching a slot to header-only auth).
+   */
+  clear_api_key?: boolean;
   /**
    * Set to true to authorize the destructive embedding-model switch
    * cascade (truncate every vector table, NULL embedding_dim columns,
@@ -1794,16 +1837,26 @@ export const adminAPI = {
     request<UpdateProviderSlotResult | { status: string }>("PUT", `/admin/providers/${slot}`, data),
   testProviderSlot: (slot: string, config: UpdateProviderSlotRequest) =>
     request<TestProviderResult>("POST", "/admin/providers/test", { slot, config }),
-  getOllamaModels: async (ollamaUrl?: string) => {
+  getOllamaModels: async (ollamaUrl?: string, customHeaders?: Record<string, string>) => {
     const params = ollamaUrl ? `?url=${encodeURIComponent(ollamaUrl)}` : "";
+    // In-progress custom headers (for a proxied Ollama not yet saved) are
+    // forwarded as request headers, not query params, so secret values never
+    // land in the URL or access logs. See forwardedHeaderPrefix on the server.
     const models = await request<OllamaModel[]>(
       "GET",
       `/admin/providers/ollama/models${params}`,
+      undefined,
+      forwardedProviderHeaders(customHeaders),
     );
     return { models };
   },
-  pullOllamaModel: (model: string, ollamaUrl?: string) =>
-    request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", { model, url: ollamaUrl || undefined }),
+  pullOllamaModel: (model: string, ollamaUrl?: string, customHeaders?: Record<string, string>) =>
+    request<{ status: string; model: string }>("POST", "/admin/providers/ollama/pull", {
+      model,
+      url: ollamaUrl || undefined,
+      custom_headers:
+        customHeaders && Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
+    }),
 
   // Settings
   getSettings: () => {

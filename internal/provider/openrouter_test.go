@@ -30,7 +30,7 @@ func TestOpenRouterContextLength_FindsConfiguredModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "test-key", "openai/gpt-4o")
+	got, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "test-key", "openai/gpt-4o", nil)
 	if err != nil {
 		t.Fatalf("OpenRouterContextLength: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestOpenRouterContextLength_UnknownModelReturnsZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "", "missing/model")
+	got, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "", "missing/model", nil)
 	if err != nil {
 		t.Fatalf("OpenRouterContextLength: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestOpenRouterContextLength_UnknownModelReturnsZero(t *testing.T) {
 }
 
 func TestOpenRouterContextLength_EmptyModelReturnsZero(t *testing.T) {
-	got, err := OpenRouterContextLength(context.Background(), "https://openrouter.ai/api/v1", "", "")
+	got, err := OpenRouterContextLength(context.Background(), "https://openrouter.ai/api/v1", "", "", nil)
 	if err != nil {
 		t.Fatalf("OpenRouterContextLength: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestOpenRouterContextLength_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "", "any/model")
+	_, err := OpenRouterContextLength(context.Background(), srv.URL+"/api/v1", "", "any/model", nil)
 	if err == nil {
 		t.Fatal("expected error on 429, got nil")
 	}

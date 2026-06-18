@@ -153,7 +153,7 @@ All under `/v1/admin`, gated by the `administrator` role.
 |---|---|---|
 | `*` | `/orgs/...` | Organization CRUD |
 | `*` | `/users/...` | Global user CRUD |
-| `*` | `/providers/...` | LLM / embedding provider configuration |
+| `*` | `/providers/...` | LLM / embedding provider configuration. Each slot config accepts `custom_headers` (arbitrary headers sent on every request to the provider host, for proxies/gateways; `Content-Type` and Anthropic's `anthropic-version` are reserved). `api_key` is optional (a slot may authenticate via a header) and is preserved on blank; pass `clear_api_key: true` to drop it. Reads return `api_key_set` and `custom_header_keys` (names only; values are never returned). |
 | `*` | `/settings` | Global settings (ranking, recall fusion, ingestion decision, novelty audit, reconsolidation, dreaming budgets, retention, prompts) |
 | `*` | `/settings/reset` | Reset settings to defaults |
 | `*` | `/oauth/...` | OAuth client and IdP-config administration |

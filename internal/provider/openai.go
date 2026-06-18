@@ -36,6 +36,10 @@ type OpenAIConfig struct {
 	// do not leak to strict OpenAI endpoints that reject unknown fields. Empty =
 	// treat as standard OpenAI-compatible (extensions omitted).
 	ProviderType string
+
+	// CustomHeaders are user-configured headers applied to every outbound
+	// request (overriding built-ins except Content-Type). Intended for proxies.
+	CustomHeaders map[string]string
 }
 
 // OpenAIProvider implements both LLMProvider and EmbeddingProvider using any
@@ -342,6 +346,7 @@ func (p *OpenAIProvider) setHeaders(req *http.Request) {
 	if p.config.Organization != "" {
 		req.Header.Set("OpenAI-Organization", p.config.Organization)
 	}
+	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type")
 }
 
 // doRequest marshals the request body, sends it to the given path, and

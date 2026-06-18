@@ -15,8 +15,8 @@ type ProviderAdminStore interface {
 	GetProviderConfig(ctx context.Context) (ProviderConfigResponse, error)
 	TestProvider(ctx context.Context, req ProviderTestRequest) (*ProviderTestResult, error)
 	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig, opts UpdateProviderSlotOpts) (*UpdateProviderSlotResult, error)
-	ListOllamaModels(ctx context.Context, ollamaURL string) ([]OllamaModel, error)
-	PullOllamaModel(ctx context.Context, model string, ollamaURL string) error
+	ListOllamaModels(ctx context.Context, ollamaURL string, headers map[string]string) ([]OllamaModel, error)
+	PullOllamaModel(ctx context.Context, model string, ollamaURL string, headers map[string]string) error
 }
 
 // UpdateProviderSlotOpts carries request-only options for an update that
@@ -25,6 +25,11 @@ type ProviderAdminStore interface {
 // returns a "needs confirmation" response and persists nothing.
 type UpdateProviderSlotOpts struct {
 	ConfirmInvalidate bool
+	// ClearAPIKey forces the stored api_key to empty. Without it, a blank
+	// incoming api_key preserves the previously stored key (the "leave blank
+	// to keep" behavior); this flag is the explicit way to drop a key, e.g.
+	// when switching a slot to header-only auth.
+	ClearAPIKey bool
 }
 
 // UpdateProviderSlotResult describes the outcome of an update that may
@@ -87,6 +92,16 @@ type ProviderSlotStatus struct {
 	Timeout          *int   `json:"timeout,omitempty"`
 	Status           string `json:"status"`
 	LatencyMs        *int64 `json:"latency_ms,omitempty"`
+
+	// APIKeySet reports whether a non-empty api_key is stored for this slot.
+	// The key value itself is never returned; this lets the UI show a "key
+	// configured" state and an honest "leave blank to keep" affordance.
+	APIKeySet bool `json:"api_key_set"`
+	// CustomHeaderKeys lists the names (sorted) of custom headers configured
+	// for this slot. Values are never returned because they may carry secrets
+	// (e.g. a fronting proxy's auth token); the UI shows the names so the user
+	// can see which headers exist and re-edit them.
+	CustomHeaderKeys []string `json:"custom_header_keys,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.
@@ -105,6 +120,13 @@ type ProviderSlotConfig struct {
 	APIKey  string `json:"api_key,omitempty"`
 	Model   string `json:"model"`
 	Timeout *int   `json:"timeout,omitempty"` // seconds, 0 = default (300s)
+	// CustomHeaders are arbitrary HTTP headers attached to every outbound
+	// request to this slot's provider host (inference, embeddings, health
+	// pings, and the Ollama/OpenRouter auxiliary calls). Intended for proxies
+	// or gateways between nram and the provider. On update, the map is the new
+	// full set (omitted names are removed); a header whose value is blank keeps
+	// its previously stored value (so masked headers survive a re-save).
+	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
 }
 
 // ProviderTestResult is the response body for POST /providers/test.
@@ -161,6 +183,35 @@ func extractProviderSubPath(path string) string {
 	return rest
 }
 
+// forwardedHeaderPrefix is the request-header prefix the UI uses to forward
+// in-progress custom provider headers on GET endpoints (where a JSON body is not
+// available). Carrying them as request headers, rather than query parameters,
+// keeps secret values out of URLs and access logs. The prefix is stripped and
+// the remainder is the target header name.
+const forwardedHeaderPrefix = "X-Nram-Provider-Header-"
+
+// extractForwardedHeaders pulls the X-Nram-Provider-Header-* headers off the
+// request and returns them as a target-header map (prefix stripped). Returns nil
+// when none are present.
+func extractForwardedHeaders(r *http.Request) map[string]string {
+	var out map[string]string
+	for name, values := range r.Header {
+		canonical := http.CanonicalHeaderKey(name)
+		if !strings.HasPrefix(canonical, forwardedHeaderPrefix) || len(values) == 0 {
+			continue
+		}
+		target := strings.TrimPrefix(canonical, forwardedHeaderPrefix)
+		if target == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[target] = values[0]
+	}
+	return out
+}
+
 // handleProviderConfig handles GET /providers: returns current provider config.
 func handleProviderConfig(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
 	if r.Method != http.MethodGet {
@@ -213,11 +264,12 @@ func handleProviderSlotUpdate(w http.ResponseWriter, r *http.Request, cfg Provid
 		return
 	}
 
-	// Decode into a wrapper so confirm_invalidate is captured but does not
-	// pollute the persisted ProviderSlotConfig JSON.
+	// Decode into a wrapper so confirm_invalidate / clear_api_key are captured
+	// but do not pollute the persisted ProviderSlotConfig JSON.
 	var body struct {
 		ProviderSlotConfig
 		ConfirmInvalidate bool `json:"confirm_invalidate,omitempty"`
+		ClearAPIKey       bool `json:"clear_api_key,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid JSON body"))
@@ -231,6 +283,7 @@ func handleProviderSlotUpdate(w http.ResponseWriter, r *http.Request, cfg Provid
 
 	result, err := cfg.Store.UpdateProviderSlot(r.Context(), slot, body.ProviderSlotConfig, UpdateProviderSlotOpts{
 		ConfirmInvalidate: body.ConfirmInvalidate,
+		ClearAPIKey:       body.ClearAPIKey,
 	})
 	if err != nil {
 		WriteError(w, ErrInternal("failed to update provider slot: "+err.Error()))
@@ -260,7 +313,7 @@ func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 
 	ollamaURL := r.URL.Query().Get("url")
 
-	models, err := cfg.Store.ListOllamaModels(r.Context(), ollamaURL)
+	models, err := cfg.Store.ListOllamaModels(r.Context(), ollamaURL, extractForwardedHeaders(r))
 	if err != nil {
 		WriteError(w, ErrInternal("failed to list ollama models: "+err.Error()))
 		return
@@ -282,8 +335,9 @@ func handleOllamaPull(w http.ResponseWriter, r *http.Request, cfg ProviderAdminC
 	}
 
 	var body struct {
-		Model string `json:"model"`
-		URL   string `json:"url"`
+		Model         string            `json:"model"`
+		URL           string            `json:"url"`
+		CustomHeaders map[string]string `json:"custom_headers,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid JSON body"))
@@ -295,7 +349,7 @@ func handleOllamaPull(w http.ResponseWriter, r *http.Request, cfg ProviderAdminC
 		return
 	}
 
-	if err := cfg.Store.PullOllamaModel(r.Context(), body.Model, body.URL); err != nil {
+	if err := cfg.Store.PullOllamaModel(r.Context(), body.Model, body.URL, body.CustomHeaders); err != nil {
 		WriteError(w, ErrInternal("failed to pull ollama model: "+err.Error()))
 		return
 	}

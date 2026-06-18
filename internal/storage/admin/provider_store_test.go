@@ -75,7 +75,7 @@ func TestListOllamaModels(t *testing.T) {
 	defer srv.Close()
 
 	store := NewProviderAdminStore(ProviderAdminDeps{})
-	models, err := store.ListOllamaModels(context.Background(), srv.URL)
+	models, err := store.ListOllamaModels(context.Background(), srv.URL, nil)
 	if err != nil {
 		t.Fatalf("ListOllamaModels: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestListOllamaModelsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	store := NewProviderAdminStore(ProviderAdminDeps{})
-	models, err := store.ListOllamaModels(context.Background(), srv.URL)
+	models, err := store.ListOllamaModels(context.Background(), srv.URL, nil)
 	if err != nil {
 		t.Fatalf("ListOllamaModels: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestPullOllamaModel(t *testing.T) {
 	defer srv.Close()
 
 	store := NewProviderAdminStore(ProviderAdminDeps{})
-	err := store.PullOllamaModel(context.Background(), "llama3:latest", srv.URL)
+	err := store.PullOllamaModel(context.Background(), "llama3:latest", srv.URL, nil)
 	if err != nil {
 		t.Fatalf("PullOllamaModel: %v", err)
 	}
@@ -223,6 +223,140 @@ func TestUpdateProviderSlotNilRegistryNoError(t *testing.T) {
 	}, api.UpdateProviderSlotOpts{})
 	if err != nil {
 		t.Fatalf("UpdateProviderSlot with nil registry: %v", err)
+	}
+}
+
+// readStoredSlot decodes the persisted provider config for a slot.
+func readStoredSlot(t *testing.T, repo *storage.SettingsRepo, slot string) api.ProviderSlotConfig {
+	t.Helper()
+	setting, err := repo.Get(context.Background(), "provider."+slot, "global")
+	if err != nil {
+		t.Fatalf("get setting provider.%s: %v", slot, err)
+	}
+	var cfg api.ProviderSlotConfig
+	if err := json.Unmarshal(setting.Value, &cfg); err != nil {
+		t.Fatalf("unmarshal provider.%s: %v", slot, err)
+	}
+	return cfg
+}
+
+func TestUpdateProviderSlotPreservesAPIKeyOnBlank(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	// Seed with a key.
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "sk-secret", Model: "gpt-4",
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	// Edit another field, leaving the key blank: it must be preserved.
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://proxy.example.com", APIKey: "", Model: "gpt-4",
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("edit update: %v", err)
+	}
+
+	got := readStoredSlot(t, settingsRepo, "fact")
+	if got.APIKey != "sk-secret" {
+		t.Errorf("api_key = %q, want sk-secret (preserved on blank)", got.APIKey)
+	}
+	if got.URL != "https://proxy.example.com" {
+		t.Errorf("url = %q, want updated", got.URL)
+	}
+}
+
+func TestUpdateProviderSlotClearAPIKey(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "sk-secret", Model: "gpt-4",
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "", Model: "gpt-4",
+	}, api.UpdateProviderSlotOpts{ClearAPIKey: true}); err != nil {
+		t.Fatalf("clear update: %v", err)
+	}
+
+	if got := readStoredSlot(t, settingsRepo, "fact"); got.APIKey != "" {
+		t.Errorf("api_key = %q, want empty after ClearAPIKey", got.APIKey)
+	}
+}
+
+func TestUpdateProviderSlotCustomHeadersMergeAndRemove(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "sk", Model: "gpt-4",
+		CustomHeaders: map[string]string{"X-A": "1", "X-B": "2"},
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	// New full set: keep X-A (blank => preserve), drop X-B (absent), add X-C.
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "sk", Model: "gpt-4",
+		CustomHeaders: map[string]string{"X-A": "", "X-C": "3"},
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("edit update: %v", err)
+	}
+
+	got := readStoredSlot(t, settingsRepo, "fact").CustomHeaders
+	if got["X-A"] != "1" {
+		t.Errorf("X-A = %q, want 1 (preserved on blank)", got["X-A"])
+	}
+	if _, ok := got["X-B"]; ok {
+		t.Errorf("X-B should be removed (absent from new set), got %q", got["X-B"])
+	}
+	if got["X-C"] != "3" {
+		t.Errorf("X-C = %q, want 3 (added)", got["X-C"])
+	}
+}
+
+func TestGetProviderConfigExposesHeaderKeysAndAPIKeySet(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "openai", URL: "https://api.openai.com", APIKey: "sk-secret", Model: "gpt-4",
+		CustomHeaders: map[string]string{"X-Beta": "b", "X-Alpha": "a"},
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	resp, err := store.GetProviderConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetProviderConfig: %v", err)
+	}
+	var fact *api.ProviderSlotStatus
+	for i := range resp {
+		if resp[i].Slot == "fact" {
+			fact = &resp[i]
+		}
+	}
+	if fact == nil {
+		t.Fatal("fact slot not in response")
+	}
+	if !fact.APIKeySet {
+		t.Error("APIKeySet = false, want true")
+	}
+	want := []string{"X-Alpha", "X-Beta"} // sorted
+	if len(fact.CustomHeaderKeys) != 2 || fact.CustomHeaderKeys[0] != want[0] || fact.CustomHeaderKeys[1] != want[1] {
+		t.Errorf("CustomHeaderKeys = %v, want %v (sorted, names only)", fact.CustomHeaderKeys, want)
 	}
 }
 

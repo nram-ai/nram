@@ -36,7 +36,7 @@ type openRouterModel struct {
 // baseURL is the slot's configured URL; it is normalized to strip the
 // trailing /chat/completions or similar so the /models endpoint is reachable
 // even when the slot points at a sub-path.
-func OpenRouterContextLength(ctx context.Context, baseURL, apiKey, modelID string) (int, error) {
+func OpenRouterContextLength(ctx context.Context, baseURL, apiKey, modelID string, headers map[string]string) (int, error) {
 	if modelID == "" {
 		return 0, nil
 	}
@@ -53,6 +53,7 @@ func OpenRouterContextLength(ctx context.Context, baseURL, apiKey, modelID strin
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	applyCustomHeaders(req, headers)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)

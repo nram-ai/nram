@@ -718,6 +718,52 @@ describe("API Client E2E", () => {
         expect(e).toBeInstanceOf(APIError);
       }
     });
+
+    it("round-trips custom_headers and masks values on read", async () => {
+      // Use the optional ingestion_decision slot so required-slot setup is untouched.
+      await adminAPI.updateProviderSlot("ingestion_decision", {
+        type: "openai",
+        url: "https://api.openai.com",
+        api_key: "sk-roundtrip",
+        model: "gpt-4o-mini",
+        custom_headers: { "X-Proxy-Auth": "tok", "X-Tenant": "acme" },
+      });
+
+      const slots = await adminAPI.getProviderSlots();
+      const slot = slots.find((s) => s.slot === "ingestion_decision");
+      expect(slot).toBeDefined();
+      expect(slot!.api_key_set).toBe(true);
+      expect((slot!.custom_header_keys ?? []).sort()).toEqual([
+        "X-Proxy-Auth",
+        "X-Tenant",
+      ]);
+      // Values must never be returned on the read path.
+      expect(JSON.stringify(slot)).not.toContain("tok");
+      expect(JSON.stringify(slot)).not.toContain("acme");
+    });
+
+    it("preserves a blank header value and the api_key on re-save", async () => {
+      await adminAPI.updateProviderSlot("ingestion_decision", {
+        type: "openai",
+        url: "https://api.openai.com",
+        api_key: "sk-keepme",
+        model: "gpt-4o-mini",
+        custom_headers: { "X-Keep": "originalvalue" },
+      });
+
+      // Re-save with the header value blank and no api_key: both must be kept.
+      await adminAPI.updateProviderSlot("ingestion_decision", {
+        type: "openai",
+        url: "https://api.openai.com",
+        model: "gpt-4o-mini",
+        custom_headers: { "X-Keep": "" },
+      });
+
+      const slots = await adminAPI.getProviderSlots();
+      const slot = slots.find((s) => s.slot === "ingestion_decision");
+      expect(slot!.api_key_set).toBe(true);
+      expect(slot!.custom_header_keys ?? []).toContain("X-Keep");
+    });
   });
 
   // -----------------------------------------------------------------------

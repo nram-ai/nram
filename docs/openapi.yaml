@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.5.1
+  version: 0.5.2
   license:
     name: MIT
 
@@ -2049,6 +2049,19 @@ paths:
       operationId: adminListOllamaModels
       tags: [Admin - Providers]
       summary: List available Ollama models
+      description: >-
+        Lists models on the Ollama server. In-progress custom provider headers
+        (for a proxied Ollama server not yet saved) may be forwarded as request
+        headers prefixed `X-Nram-Provider-Header-<Name>`; this keeps secret
+        values out of the URL query string. When none are supplied, the headers
+        persisted on the matching Ollama slot are used.
+      parameters:
+        - name: url
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Override Ollama base URL; defaults to the configured/known Ollama slot.
       responses:
         "200":
           description: Model list
@@ -2074,6 +2087,17 @@ paths:
               properties:
                 model:
                   type: string
+                url:
+                  type: string
+                  description: Override Ollama base URL.
+                custom_headers:
+                  type: object
+                  description: >-
+                    In-progress custom headers to attach to the pull request
+                    (e.g. proxy auth). Falls back to the matching Ollama slot's
+                    persisted headers when omitted.
+                  additionalProperties:
+                    type: string
       responses:
         "202":
           description: Pull accepted
@@ -5624,6 +5648,18 @@ components:
         latency_ms:
           type: [integer, "null"]
           format: int64
+        api_key_set:
+          type: boolean
+          description: >-
+            Whether a non-empty api_key is stored for this slot. The key value is
+            never returned.
+        custom_header_keys:
+          type: array
+          description: >-
+            Names of the custom HTTP headers configured for this slot, sorted.
+            Values are never returned because they may carry secrets.
+          items:
+            type: string
 
     ProviderTestRequest:
       type: object
@@ -5645,10 +5681,34 @@ components:
           type: string
         api_key:
           type: string
+          description: >-
+            API key for the provider. Optional: a slot may authenticate purely
+            via a custom header (e.g. a fronting proxy). On update, a blank value
+            preserves the stored key; use clear_api_key to drop it.
         model:
           type: string
         dimensions:
           type: integer
+        timeout:
+          type: integer
+          description: Request timeout in seconds (0 = default 300s).
+        custom_headers:
+          type: object
+          description: >-
+            Arbitrary HTTP headers attached to every outbound request to this
+            slot's provider host (inference, embeddings, health pings, and the
+            Ollama/OpenRouter auxiliary calls). Intended for proxies/gateways.
+            On update the map is the new full set (omitted names are removed); a
+            header sent with a blank value keeps its previously stored value.
+            Content-Type (and, for Anthropic, anthropic-version) are reserved and
+            cannot be overridden.
+          additionalProperties:
+            type: string
+        clear_api_key:
+          type: boolean
+          description: >-
+            Request-only flag (update endpoint). When true, the stored api_key is
+            cleared instead of preserved-on-blank.
 
     ProviderTestResult:
       type: object

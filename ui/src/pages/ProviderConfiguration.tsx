@@ -169,14 +169,16 @@ function OllamaModelPicker({
   selectedModel,
   onSelectModel,
   slotName,
+  customHeaders,
 }: {
   ollamaUrl: string;
   selectedModel: string;
   onSelectModel: (model: string) => void;
   slotName: string;
+  customHeaders?: Record<string, string>;
 }) {
   const isEmbeddingSlot = slotName === "embedding";
-  const ollamaModelsQuery = useOllamaModels(ollamaUrl);
+  const ollamaModelsQuery = useOllamaModels(ollamaUrl, customHeaders);
   const pullMutation = usePullOllamaModel();
   const [pullModelName, setPullModelName] = useState("");
 
@@ -186,13 +188,13 @@ function OllamaModelPicker({
 
   const handlePull = useCallback(() => {
     if (!pullModelName.trim()) return;
-    pullMutation.mutate({ model: pullModelName.trim(), ollamaUrl }, {
+    pullMutation.mutate({ model: pullModelName.trim(), ollamaUrl, customHeaders }, {
       onSuccess: () => {
         setPullModelName("");
         ollamaModelsQuery.refetch();
       },
     });
-  }, [pullModelName, pullMutation, ollamaModelsQuery, ollamaUrl]);
+  }, [pullModelName, pullMutation, ollamaModelsQuery, ollamaUrl, customHeaders]);
 
   return (
     <div className="space-y-3">
@@ -313,8 +315,88 @@ function OllamaModelPicker({
 }
 
 // ---------------------------------------------------------------------------
+// Custom Headers Editor
+// ---------------------------------------------------------------------------
+
+function CustomHeadersEditor({
+  rows,
+  existingKeys,
+  reservedNote,
+  onChange,
+}: {
+  rows: HeaderRow[];
+  existingKeys: Set<string>;
+  reservedNote: string;
+  onChange: (rows: HeaderRow[]) => void;
+}) {
+  const update = (i: number, field: keyof HeaderRow, value: string) => {
+    const next = rows.map((r, j) => (j === i ? { ...r, [field]: value } : r));
+    onChange(next);
+  };
+  const addRow = () => onChange([...rows, { key: "", value: "" }]);
+  const removeRow = (i: number) => onChange(rows.filter((_, j) => j !== i));
+
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium text-foreground">
+        Custom Headers
+      </label>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Sent on every request to this provider (e.g. for an authenticating proxy
+        or gateway between nram and the endpoint). {reservedNote}
+      </p>
+      {rows.length > 0 && (
+        <div className="space-y-2">
+          {rows.map((row, i) => {
+            const isExisting = existingKeys.has(row.key.trim());
+            return (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={row.key}
+                  onChange={(e) => update(i, "key", e.target.value)}
+                  placeholder="Header-Name"
+                  className="w-2/5 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <input
+                  type="text"
+                  value={row.value}
+                  onChange={(e) => update(i, "value", e.target.value)}
+                  placeholder={isExisting ? "leave blank to keep" : "value"}
+                  className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeRow(i)}
+                  aria-label="Remove header"
+                  className="rounded-md border border-input px-2.5 py-2 text-sm text-muted-foreground hover:bg-muted"
+                >
+                  <FontAwesomeIcon icon={faXmark} className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={addRow}
+        className="mt-2 rounded-md border border-input px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted"
+      >
+        + Add header
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Provider Slot Edit Form
 // ---------------------------------------------------------------------------
+
+interface HeaderRow {
+  key: string;
+  value: string;
+}
 
 interface EditFormState {
   type: string;
@@ -322,12 +404,30 @@ interface EditFormState {
   model: string;
   api_key: string;
   timeout: string;
+  // Custom HTTP headers as an ordered, editable list. Pre-existing headers are
+  // seeded with a blank value (their stored value is masked); a blank value on
+  // save tells the backend to keep the stored one.
+  custom_headers: HeaderRow[];
+}
+
+// headerRowsToRecord drops rows with a blank name and collapses the rest into a
+// map. Blank values are preserved (sent as "") so the backend keeps the stored
+// value for pre-existing headers.
+function headerRowsToRecord(rows: HeaderRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.key.trim();
+    if (name) {
+      out[name] = row.value;
+    }
+  }
+  return out;
 }
 
 function ProviderSlotEditForm({
   slotName,
   initial,
-  wasConfigured,
+  apiKeySet,
   onSave,
   onCancel,
   saving,
@@ -339,7 +439,7 @@ function ProviderSlotEditForm({
   slotName: string;
   initial: EditFormState;
   isEmbedding: boolean;
-  wasConfigured: boolean;
+  apiKeySet: boolean;
   onSave: (data: UpdateProviderSlotRequest) => void;
   onCancel: (() => void) | null;
   saving: boolean;
@@ -349,12 +449,27 @@ function ProviderSlotEditForm({
   confirmPending: boolean;
 }) {
   const [form, setForm] = useState<EditFormState>(initial);
+  // Tracks an explicit "clear saved key" action. Distinct from a blank field,
+  // which means "keep the stored key" (preserve-on-blank).
+  const [clearApiKey, setClearApiKey] = useState(false);
   const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
+
+  // Header names that already existed when editing began; used to render the
+  // "leave blank to keep" placeholder on their (masked) value inputs. Reuses
+  // the same name-normalization as the save path.
+  const existingHeaderKeys = new Set(Object.keys(headerRowsToRecord(initial.custom_headers)));
 
   const isCloud = CLOUD_PROVIDERS.has(form.type);
   const isOllama = form.type === "ollama";
 
+  const reservedNote =
+    form.type === "anthropic"
+      ? "Content-Type and anthropic-version are reserved; all other headers (including x-api-key) can be set or overridden."
+      : "Content-Type is reserved; all other headers (including auth) can be set or overridden.";
+
   const handleTypeChange = (newType: string) => {
+    // Custom headers are proxy-oriented and not provider-type-specific, so they
+    // survive a type switch (unlike url/model/key, which are reset).
     setForm((prev) => ({
       ...prev,
       type: newType,
@@ -378,9 +493,14 @@ function ProviderSlotEditForm({
     if (form.api_key) {
       req.api_key = form.api_key;
     }
+    if (clearApiKey) {
+      req.clear_api_key = true;
+    }
     if (form.timeout) {
       req.timeout = parseInt(form.timeout, 10);
     }
+    // Always send the header set so removals take effect. Empty map clears all.
+    req.custom_headers = headerRowsToRecord(form.custom_headers);
     onSave(req);
   };
 
@@ -443,6 +563,7 @@ function ProviderSlotEditForm({
               selectedModel={form.model}
               onSelectModel={(m) => setForm((p) => ({ ...p, model: m }))}
               slotName={slotName}
+              customHeaders={headerRowsToRecord(form.custom_headers)}
             />
           </div>
         ) : (
@@ -470,9 +591,43 @@ function ProviderSlotEditForm({
             onChange={(e) =>
               setForm((p) => ({ ...p, api_key: e.target.value }))
             }
-            placeholder={wasConfigured ? "Leave blank to keep current key" : "sk-..."}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            disabled={clearApiKey}
+            placeholder={
+              clearApiKey
+                ? "Key will be removed on save"
+                : apiKeySet
+                  ? "Leave blank to keep current key"
+                  : "sk-..."
+            }
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
           />
+          <div className="mt-1 flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">
+              Optional: leave empty to authenticate via a custom header instead
+              (e.g. a proxy).
+            </p>
+            {apiKeySet &&
+              (clearApiKey ? (
+                <button
+                  type="button"
+                  onClick={() => setClearApiKey(false)}
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Undo clear
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClearApiKey(true);
+                    setForm((p) => ({ ...p, api_key: "" }));
+                  }}
+                  className="text-xs font-medium text-destructive hover:underline"
+                >
+                  Clear saved key
+                </button>
+              ))}
+          </div>
         </div>
       )}
 
@@ -500,6 +655,14 @@ function ProviderSlotEditForm({
           </p>
         )}
       </div>
+
+      {/* Custom Headers */}
+      <CustomHeadersEditor
+        rows={form.custom_headers}
+        existingKeys={existingHeaderKeys}
+        reservedNote={reservedNote}
+        onChange={(rows) => setForm((p) => ({ ...p, custom_headers: rows }))}
+      />
 
       {/* Actions: replaced in-place by the destructive-action confirmation
           when the server gates an embedding-model swap on confirm_invalidate.
@@ -645,20 +808,24 @@ function ProviderSlotCard({
   } | null>(null);
   const [cascadeResult, setCascadeResult] = useState<UpdateProviderSlotResult | null>(null);
 
+  // Shared success path for both the initial save and the confirmed swap: a
+  // cascade response carries entity_reembed_queued + row counts; either way the
+  // editor closes.
+  const onUpdateSuccess = useCallback((resp: unknown) => {
+    const r = resp as UpdateProviderSlotResult;
+    if (r.entity_reembed_queued) {
+      setCascadeResult(r);
+    }
+    setEditing(false);
+  }, []);
+
   const handleSave = useCallback(
     (data: UpdateProviderSlotRequest) => {
       setCascadeResult(null);
       updateMutation.mutate(
         { slot: slot.slot, data },
         {
-          onSuccess: (resp) => {
-            // Cascade success carries entity_reembed_queued=true and row counts.
-            const r = resp as UpdateProviderSlotResult;
-            if (r.entity_reembed_queued) {
-              setCascadeResult(r);
-            }
-            setEditing(false);
-          },
+          onSuccess: onUpdateSuccess,
           onError: (err) => {
             // 409: server is asking for confirmation of a destructive swap.
             // Capture the row counts so the modal can show them, then wait
@@ -675,7 +842,7 @@ function ProviderSlotCard({
         },
       );
     },
-    [slot.slot, updateMutation],
+    [slot.slot, updateMutation, onUpdateSuccess],
   );
 
   const confirmSwitch = useCallback(() => {
@@ -685,19 +852,8 @@ function ProviderSlotCard({
       confirm_invalidate: true,
     };
     setPendingConfirm(null);
-    updateMutation.mutate(
-      { slot: slot.slot, data },
-      {
-        onSuccess: (resp) => {
-          const r = resp as UpdateProviderSlotResult;
-          if (r.entity_reembed_queued) {
-            setCascadeResult(r);
-          }
-          setEditing(false);
-        },
-      },
-    );
-  }, [pendingConfirm, slot.slot, updateMutation]);
+    updateMutation.mutate({ slot: slot.slot, data }, { onSuccess: onUpdateSuccess });
+  }, [pendingConfirm, slot.slot, updateMutation, onUpdateSuccess]);
 
   const initialFormState: EditFormState = {
     type: slot.configured ? slot.type : "",
@@ -705,6 +861,9 @@ function ProviderSlotCard({
     model: slot.configured ? slot.model : "",
     api_key: "",
     timeout: slot.timeout != null ? String(slot.timeout) : "",
+    // Seed pre-existing headers with blank values (their stored values are
+    // masked); a blank value on save preserves the stored one.
+    custom_headers: (slot.custom_header_keys ?? []).map((key) => ({ key, value: "" })),
   };
 
   return (
@@ -764,7 +923,7 @@ function ProviderSlotCard({
             slotName={slot.slot}
             initial={initialFormState}
             isEmbedding={isEmbedding}
-            wasConfigured={slot.configured}
+            apiKeySet={slot.api_key_set ?? false}
             onSave={handleSave}
             onCancel={slot.configured ? () => setEditing(false) : null}
             saving={updateMutation.isPending}
@@ -833,6 +992,14 @@ function ProviderSlotCard({
                   {slot.status ?? "unknown"}
                 </p>
               </div>
+              {(slot.custom_header_keys?.length ?? 0) > 0 && (
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">Custom headers</span>
+                  <p className="font-mono text-xs text-foreground">
+                    {slot.custom_header_keys!.join(", ")}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Health info */}

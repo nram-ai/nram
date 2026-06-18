@@ -27,6 +27,19 @@ type GeminiConfig struct {
 
 	// Timeout is the HTTP client timeout. Defaults to 300s if zero.
 	Timeout time.Duration
+
+	// CustomHeaders are user-configured headers applied to every outbound
+	// request (overriding built-ins except Content-Type). Gemini carries auth
+	// in a query parameter, so these are typically proxy headers. Intended for
+	// proxies/gateways between nram and the provider.
+	CustomHeaders map[string]string
+}
+
+// setHeaders sets the standard headers on an outbound request, then applies any
+// user-configured custom headers (Content-Type is reserved).
+func (p *GeminiProvider) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type")
 }
 
 // GeminiProvider implements both LLMProvider and EmbeddingProvider using the
@@ -390,6 +403,7 @@ func (p *GeminiProvider) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("gemini: failed to create ping request: %w", err)
 	}
+	p.setHeaders(req)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -424,7 +438,7 @@ func (p *GeminiProvider) doRequest(ctx context.Context, method, path string, bod
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	p.setHeaders(req)
 
 	resp, err := p.client.Do(req)
 	if err != nil {

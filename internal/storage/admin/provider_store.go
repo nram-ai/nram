@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -95,16 +97,11 @@ func (s *ProviderAdminStore) GetProviderConfig(ctx context.Context) (api.Provide
 }
 
 func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.ProviderSlotStatus {
-	// Read persisted config from the settings table.
-	var persisted *api.ProviderSlotConfig
-	if s.deps.SettingsRepo != nil {
-		setting, err := s.deps.SettingsRepo.Get(ctx, "provider."+slot, "global")
-		if err == nil {
-			var cfg api.ProviderSlotConfig
-			if json.Unmarshal(setting.Value, &cfg) == nil && cfg.Type != "" {
-				persisted = &cfg
-			}
-		}
+	// Read persisted config from the settings table. An empty Type means the
+	// slot is not really configured.
+	persisted := s.loadPersistedSlot(ctx, slot)
+	if persisted != nil && persisted.Type == "" {
+		persisted = nil
 	}
 
 	// Check whether a DEDICATED provider for this slot is loaded in the
@@ -165,7 +162,18 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		ContextWindowMax: contextWindowMax,
 		Timeout:          persisted.Timeout,
 		Status:           status,
+		APIKeySet:        persisted.APIKey != "",
+		CustomHeaderKeys: sortedHeaderKeys(persisted.CustomHeaders),
 	}
+}
+
+// sortedHeaderKeys returns the header names of m in sorted order, or nil when
+// empty. Only names are exposed on the read path; values may be secrets.
+func sortedHeaderKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(m))
 }
 
 // detectContextWindow returns the effective and maximum context window
@@ -213,12 +221,15 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 
 	switch slot.Type {
 	case provider.ProviderTypeOllama:
-		client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: s.resolveOllamaURL(slot.URL)})
+		client := provider.NewOllamaClient(provider.OllamaConfig{
+			BaseURL:       s.resolveOllamaURL(slot.URL),
+			CustomHeaders: slot.CustomHeaders,
+		})
 		if eff, max, err := client.ContextLength(probeCtx, slot.Model); err == nil {
 			effective, modelMax = eff, max
 		}
 	case provider.ProviderTypeOpenRouter:
-		if cw, err := provider.OpenRouterContextLength(probeCtx, slot.URL, slot.APIKey, slot.Model); err == nil {
+		if cw, err := provider.OpenRouterContextLength(probeCtx, slot.URL, slot.APIKey, slot.Model, slot.CustomHeaders); err == nil {
 			effective, modelMax = cw, cw
 		}
 	}
@@ -246,10 +257,11 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 	}
 
 	slotCfg := provider.SlotConfig{
-		Type:    req.Config.Type,
-		BaseURL: req.Config.URL,
-		APIKey:  req.Config.APIKey,
-		Model:   req.Config.Model,
+		Type:          req.Config.Type,
+		BaseURL:       req.Config.URL,
+		APIKey:        req.Config.APIKey,
+		Model:         req.Config.Model,
+		CustomHeaders: req.Config.CustomHeaders,
 	}
 	if req.Config.Timeout != nil {
 		slotCfg.Timeout = *req.Config.Timeout
@@ -311,10 +323,19 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	// self-heals configs saved before the base-URL-only convention.
 	cfg.URL = provider.NormalizeBaseURL(cfg.URL)
 
+	// Load the currently-stored config once: it feeds both the blank-secret
+	// merge and the embedding-model-change comparison below.
+	existing := s.loadPersistedSlot(ctx, slot)
+
+	// Merge secrets that the client may have intentionally left blank against
+	// the stored config. Runs before the embedding-cascade branch so both
+	// persistence paths see the merged values.
+	cfg = mergeProviderSecrets(cfg, existing, opts)
+
 	// An embedding-model change routes through the destructive cascade.
 	// Same-model edits (URL, key, timeout) bypass it.
-	if slot == provider.SlotEmbedding {
-		oldModel := s.currentEmbeddingModel(ctx)
+	if slot == provider.SlotEmbedding && existing != nil {
+		oldModel := existing.Model
 		if oldModel != "" && cfg.Model != "" && cfg.Model != oldModel {
 			return s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
 		}
@@ -326,21 +347,64 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	return nil, nil
 }
 
-// currentEmbeddingModel returns "" when no embedding slot is persisted;
-// callers treat that as a fresh setup, not a model swap.
-func (s *ProviderAdminStore) currentEmbeddingModel(ctx context.Context) string {
+// mergeProviderSecrets reconciles client-supplied secrets with the currently
+// stored config so blank values mean "keep" rather than "erase":
+//   - api_key: ClearAPIKey forces it empty; otherwise a blank incoming key
+//     preserves the stored key (fixes the historical wipe where editing any
+//     field without re-typing the key dropped it).
+//   - custom_headers: the incoming map is the new full set (names absent from it
+//     are removed), but a header sent with a blank value keeps its stored value
+//     so the UI can render existing (masked) headers and re-save without leaking
+//     or losing them.
+func mergeProviderSecrets(cfg api.ProviderSlotConfig, existing *api.ProviderSlotConfig, opts api.UpdateProviderSlotOpts) api.ProviderSlotConfig {
+	switch {
+	case opts.ClearAPIKey:
+		cfg.APIKey = ""
+	case cfg.APIKey == "" && existing != nil:
+		cfg.APIKey = existing.APIKey
+	}
+
+	if len(cfg.CustomHeaders) > 0 {
+		merged := make(map[string]string, len(cfg.CustomHeaders))
+		for name, value := range cfg.CustomHeaders {
+			if name == "" {
+				continue
+			}
+			if value == "" {
+				if existing != nil {
+					if prev, ok := existing.CustomHeaders[name]; ok {
+						merged[name] = prev
+					}
+				}
+				continue
+			}
+			merged[name] = value
+		}
+		if len(merged) == 0 {
+			cfg.CustomHeaders = nil
+		} else {
+			cfg.CustomHeaders = merged
+		}
+	}
+
+	return cfg
+}
+
+// loadPersistedSlot returns the currently-stored config for a slot, or nil when
+// none is stored or it cannot be decoded.
+func (s *ProviderAdminStore) loadPersistedSlot(ctx context.Context, slot string) *api.ProviderSlotConfig {
 	if s.deps.SettingsRepo == nil {
-		return ""
+		return nil
 	}
-	setting, err := s.deps.SettingsRepo.Get(ctx, "provider.embedding", "global")
+	setting, err := s.deps.SettingsRepo.Get(ctx, "provider."+slot, "global")
 	if err != nil || setting == nil {
-		return ""
+		return nil
 	}
-	var current api.ProviderSlotConfig
-	if err := json.Unmarshal(setting.Value, &current); err != nil {
-		return ""
+	var cfg api.ProviderSlotConfig
+	if err := json.Unmarshal(setting.Value, &cfg); err != nil {
+		return nil
 	}
-	return current.Model
+	return &cfg
 }
 
 func (s *ProviderAdminStore) persistAndReload(ctx context.Context, slot string, cfg api.ProviderSlotConfig) error {
@@ -484,6 +548,7 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			Model:              apiCfg.Model,
 			PromptCacheEnabled: promptCache,
 			JSONModeToolUse:    anthropicJSONToolUse,
+			CustomHeaders:      apiCfg.CustomHeaders,
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout
@@ -510,9 +575,12 @@ func (s *ProviderAdminStore) buildRegistryConfigFromDB(ctx context.Context) prov
 	return LoadProviderRegistryConfig(ctx, s.deps.SettingsRepo)
 }
 
-func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL string) ([]api.OllamaModel, error) {
+func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL string, headers map[string]string) ([]api.OllamaModel, error) {
 	url := s.resolveOllamaURL(ollamaURL)
-	client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: url})
+	client := provider.NewOllamaClient(provider.OllamaConfig{
+		BaseURL:       url,
+		CustomHeaders: s.resolveOllamaHeaders(ollamaURL, headers),
+	})
 
 	models, err := client.ListModels(ctx)
 	if err != nil {
@@ -530,12 +598,48 @@ func (s *ProviderAdminStore) ListOllamaModels(ctx context.Context, ollamaURL str
 	return result, nil
 }
 
-func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string, ollamaURL string) error {
+func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string, ollamaURL string, headers map[string]string) error {
 	url := s.resolveOllamaURL(ollamaURL)
-	client := provider.NewOllamaClient(provider.OllamaConfig{BaseURL: url})
+	client := provider.NewOllamaClient(provider.OllamaConfig{
+		BaseURL:       url,
+		CustomHeaders: s.resolveOllamaHeaders(ollamaURL, headers),
+	})
 	// Use a detached context; model pulls can take minutes and must not be
 	// cancelled when the HTTP request completes.
 	return client.PullModel(context.Background(), modelName, nil)
+}
+
+// resolveOllamaHeaders returns the custom headers to attach to an ad-hoc Ollama
+// management call. Headers supplied by the in-progress edit form take
+// precedence; otherwise it falls back to the headers persisted on the matching
+// Ollama slot so a saved proxy config keeps working without re-entry.
+func (s *ProviderAdminStore) resolveOllamaHeaders(override string, formHeaders map[string]string) map[string]string {
+	if len(formHeaders) > 0 {
+		return formHeaders
+	}
+	if s.deps.Registry == nil {
+		return nil
+	}
+	cfg := s.deps.Registry.GetConfig()
+	for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
+		if !isOllamaSlot(slot) || len(slot.CustomHeaders) == 0 {
+			continue
+		}
+		// When an explicit URL override is given, only borrow headers from a
+		// slot that targets the same host.
+		if override != "" && provider.NormalizeBaseURL(slot.BaseURL) != provider.NormalizeBaseURL(override) {
+			continue
+		}
+		return slot.CustomHeaders
+	}
+	return nil
+}
+
+// isOllamaSlot reports whether a slot config targets an Ollama server, by type
+// or by the default Ollama port. Single source of truth for the heuristic that
+// both resolveOllamaURL and resolveOllamaHeaders depend on.
+func isOllamaSlot(slot provider.SlotConfig) bool {
+	return strings.Contains(slot.Type, "ollama") || strings.Contains(slot.BaseURL, ":11434")
 }
 
 // resolveOllamaURL returns the Ollama server URL to use. If override is
@@ -550,10 +654,8 @@ func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
 	if s.deps.Registry != nil {
 		cfg := s.deps.Registry.GetConfig()
 		for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
-			if strings.Contains(slot.Type, "ollama") || strings.Contains(slot.BaseURL, ":11434") {
-				if slot.BaseURL != "" {
-					return provider.NormalizeBaseURL(slot.BaseURL)
-				}
+			if isOllamaSlot(slot) && slot.BaseURL != "" {
+				return provider.NormalizeBaseURL(slot.BaseURL)
 			}
 		}
 	}

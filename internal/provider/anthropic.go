@@ -38,6 +38,11 @@ type AnthropicConfig struct {
 	// Anthropic-compatible proxies (e.g. OAuth/Claude-Code passthroughs) that
 	// drop response formatting and need the JSON pinned to a tool call.
 	JSONModeToolUse bool
+
+	// CustomHeaders are user-configured headers applied to every outbound
+	// request. They override built-ins (including x-api-key) except the
+	// reserved Content-Type and anthropic-version. Intended for proxies.
+	CustomHeaders map[string]string
 }
 
 // AnthropicProvider implements LLMProvider and ProviderHealth using the native
@@ -369,6 +374,7 @@ func (p *AnthropicProvider) setHeaders(req *http.Request) {
 	if p.config.APIKey != "" {
 		req.Header.Set("x-api-key", p.config.APIKey)
 	}
+	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type", "anthropic-version")
 }
 
 // doRequest marshals the request body, sends it to the given path with

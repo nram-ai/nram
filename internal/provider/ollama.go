@@ -23,6 +23,11 @@ type OllamaConfig struct {
 
 	// PullTimeout is the HTTP client timeout for model pull operations. Defaults to 10 minutes if zero.
 	PullTimeout time.Duration
+
+	// CustomHeaders are user-configured headers applied to every outbound
+	// request to the Ollama host (listing, pull, show, ps, probe). Intended for
+	// proxies/gateways between nram and the Ollama server (Content-Type reserved).
+	CustomHeaders map[string]string
 }
 
 // OllamaClient is a discovery and management client for Ollama. It is not a
@@ -120,6 +125,12 @@ func NewOllamaClient(config OllamaConfig) *OllamaClient {
 	}
 }
 
+// setHeaders applies user-configured custom headers to an outbound request.
+// Content-Type, when present, is set by the caller and reserved here.
+func (c *OllamaClient) setHeaders(req *http.Request) {
+	applyCustomHeaders(req, c.config.CustomHeaders, "Content-Type")
+}
+
 // ListModels retrieves the list of models available on the Ollama server.
 func (c *OllamaClient) ListModels(ctx context.Context) ([]OllamaModel, error) {
 	url := c.config.BaseURL + "/api/tags"
@@ -128,6 +139,7 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]OllamaModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ollama: failed to create list request: %w", err)
 	}
+	c.setHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -176,6 +188,7 @@ func (c *OllamaClient) PullModel(ctx context.Context, name string, progress func
 		return fmt.Errorf("ollama: failed to create pull request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setHeaders(req)
 
 	// Use a separate client with PullTimeout for long-running pull operations.
 	pullClient := &http.Client{
@@ -286,6 +299,7 @@ func (c *OllamaClient) fetchShow(ctx context.Context, modelName string) (ollamaS
 		return ollamaShowResponse{}, fmt.Errorf("ollama: create show request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -318,6 +332,7 @@ func (c *OllamaClient) runningModels(ctx context.Context) ([]ollamaPSModel, erro
 	if err != nil {
 		return nil, fmt.Errorf("ollama: create ps request: %w", err)
 	}
+	c.setHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -407,6 +422,7 @@ func (c *OllamaClient) ProbeURL(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ollama: failed to create probe request: %w", err)
 	}
+	c.setHeaders(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

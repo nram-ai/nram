@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -24,10 +25,12 @@ type mockProviderAdminStore struct {
 	pullErr      error
 
 	// capture args
-	updatedSlot string
-	updatedCfg  ProviderSlotConfig
-	updatedOpts UpdateProviderSlotOpts
-	pulledModel string
+	updatedSlot   string
+	updatedCfg    ProviderSlotConfig
+	updatedOpts   UpdateProviderSlotOpts
+	pulledModel   string
+	listHeaders   map[string]string
+	pulledHeaders map[string]string
 }
 
 func (m *mockProviderAdminStore) GetProviderConfig(_ context.Context) (ProviderConfigResponse, error) {
@@ -55,12 +58,14 @@ func (m *mockProviderAdminStore) UpdateProviderSlot(_ context.Context, slot stri
 	return m.updateResult, m.updateErr
 }
 
-func (m *mockProviderAdminStore) ListOllamaModels(_ context.Context, _ string) ([]OllamaModel, error) {
+func (m *mockProviderAdminStore) ListOllamaModels(_ context.Context, _ string, headers map[string]string) ([]OllamaModel, error) {
+	m.listHeaders = headers
 	return m.models, m.modelsErr
 }
 
-func (m *mockProviderAdminStore) PullOllamaModel(_ context.Context, model string, _ string) error {
+func (m *mockProviderAdminStore) PullOllamaModel(_ context.Context, model string, _ string, headers map[string]string) error {
 	m.pulledModel = model
+	m.pulledHeaders = headers
 	return m.pullErr
 }
 
@@ -249,6 +254,78 @@ func TestAdminProvidersUpdateEntity(t *testing.T) {
 
 	if store.updatedSlot != "entity" {
 		t.Errorf("expected slot entity, got %q", store.updatedSlot)
+	}
+}
+
+func TestAdminProvidersUpdateCustomHeadersAndClearKey(t *testing.T) {
+	store := &mockProviderAdminStore{}
+
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	body := `{"type":"openai","url":"https://proxy.example.com","model":"gpt-4","custom_headers":{"X-Proxy-Auth":"tok"},"clear_api_key":true}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/providers/fact", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := store.updatedCfg.CustomHeaders["X-Proxy-Auth"]; got != "tok" {
+		t.Errorf("custom header not captured: %q", got)
+	}
+	if !store.updatedOpts.ClearAPIKey {
+		t.Error("clear_api_key not threaded into UpdateProviderSlotOpts")
+	}
+}
+
+func TestAdminProvidersGetMasksHeaderValues(t *testing.T) {
+	store := &mockProviderAdminStore{
+		config: ProviderConfigResponse{
+			{
+				Slot:             "fact",
+				Configured:       true,
+				Type:             "openai",
+				Status:           "ok",
+				APIKeySet:        true,
+				CustomHeaderKeys: []string{"X-Proxy-Auth"},
+			},
+		},
+	}
+
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/providers", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	raw := w.Body.String()
+	if !strings.Contains(raw, `"api_key_set":true`) {
+		t.Errorf("api_key_set not surfaced: %s", raw)
+	}
+	if !strings.Contains(raw, `"custom_header_keys":["X-Proxy-Auth"]`) {
+		t.Errorf("custom_header_keys not surfaced: %s", raw)
+	}
+	// A header value must never appear in the response.
+	if strings.Contains(raw, "custom_headers") {
+		t.Errorf("GET response must not include custom_headers values: %s", raw)
+	}
+}
+
+func TestAdminProvidersOllamaModelsForwardsHeaders(t *testing.T) {
+	store := &mockProviderAdminStore{}
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/providers/ollama/models?url=http://proxy", nil)
+	req.Header.Set("X-Nram-Provider-Header-X-Proxy-Auth", "tok")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := store.listHeaders["X-Proxy-Auth"]; got != "tok" {
+		t.Errorf("forwarded header not extracted: %v", store.listHeaders)
 	}
 }
 
