@@ -95,8 +95,16 @@ type anthropicMessage struct {
 // is `any` because the Anthropic API accepts either a plain string or an array
 // of content blocks (used to attach cache_control to the system prefix).
 type anthropicMessagesRequest struct {
-	Model         string               `json:"model"`
-	MaxTokens     int                  `json:"max_tokens"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
+	// Stream is always sent as false. The Messages API does not stream unless
+	// asked (stream is an opt-in boolean), but every inference call here is
+	// single-shot and parsed as one JSON body, so we state the intent explicitly
+	// on the wire. This is the deciding signal for Anthropic-compatible relays,
+	// gateways, and proxies that default to or force server-sent events: without
+	// it they may return text/event-stream, which fails JSON parsing. No
+	// omitempty, so the field is always present.
+	Stream        bool                 `json:"stream"`
 	System        any                  `json:"system,omitempty"`
 	Messages      []anthropicMessage   `json:"messages"`
 	Temperature   *float64             `json:"temperature,omitempty"`
@@ -410,6 +418,10 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, method, path string, 
 				resp.StatusCode, apiErr.Error.Message, apiErr.Error.Type)
 		}
 		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	if err := errIfStreamedResponse("anthropic", resp.Header.Get("Content-Type"), respBody); err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal(respBody, dest); err != nil {

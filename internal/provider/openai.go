@@ -94,8 +94,16 @@ var ollamaReasoningEffortOff = "none"
 
 // openaiChatRequest is the request body for POST /v1/chat/completions.
 type openaiChatRequest struct {
-	Model          string                `json:"model"`
-	Messages       []openaiChatMessage   `json:"messages"`
+	Model    string              `json:"model"`
+	Messages []openaiChatMessage `json:"messages"`
+	// Stream is always sent as false. The OpenAI Chat Completions contract is
+	// opt-in (stream defaults to false), but every call here is single-shot and
+	// parsed as one JSON body. Sending false explicitly is the deciding signal
+	// for OpenAI-compatible backends that default to streaming: most notably
+	// Ollama's native API streams unless told otherwise, and gateways/relays may
+	// too. Without it they return text/event-stream, which fails JSON parsing.
+	// No omitempty, so the field is always present.
+	Stream         bool                  `json:"stream"`
 	MaxTokens      int                   `json:"max_tokens,omitempty"`
 	Temperature    *float64              `json:"temperature,omitempty"`
 	Stop           []string              `json:"stop,omitempty"`
@@ -382,6 +390,10 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, method, path string, bod
 				resp.StatusCode, apiErr.Error.Message, apiErr.Error.Type, apiErr.Error.Code)
 		}
 		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	if err := errIfStreamedResponse("openai", resp.Header.Get("Content-Type"), respBody); err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal(respBody, dest); err != nil {

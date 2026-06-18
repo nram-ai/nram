@@ -122,7 +122,10 @@ func geminiThinkingOffSupported(model string) bool {
 	return strings.Contains(strings.ToLower(model), "2.5-flash")
 }
 
-// geminiGenerateRequest is the request body for generateContent.
+// geminiGenerateRequest is the request body for generateContent. There is
+// deliberately no stream field (unlike the Anthropic and OpenAI request types):
+// Gemini is non-streaming by endpoint, since streaming is the separate
+// :streamGenerateContent method, so there is nothing to opt out of here.
 type geminiGenerateRequest struct {
 	Contents          []geminiContent         `json:"contents"`
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
@@ -259,6 +262,9 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		body.GenerationConfig = gc
 	}
 
+	// The :generateContent endpoint returns a single JSON response. Gemini's
+	// streaming variant is a separate method (:streamGenerateContent), so this
+	// call is non-streaming by construction; there is no stream flag to set.
 	path := fmt.Sprintf("/v1beta/models/%s:generateContent", model)
 
 	var genResp geminiGenerateResponse
@@ -458,6 +464,10 @@ func (p *GeminiProvider) doRequest(ctx context.Context, method, path string, bod
 				resp.StatusCode, apiErr.Error.Message, apiErr.Error.Status)
 		}
 		return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	if err := errIfStreamedResponse("gemini", resp.Header.Get("Content-Type"), respBody); err != nil {
+		return err
 	}
 
 	if err := json.Unmarshal(respBody, dest); err != nil {
