@@ -629,7 +629,7 @@ func parseTestFactResponse(raw string) (any, error) {
 		return normalise(facts), nil
 	}
 
-	stripped := stripTestMarkdownFences(raw)
+	stripped := service.StripCodeFence(raw)
 	if err := json.Unmarshal([]byte(stripped), &facts); err == nil {
 		return normalise(facts), nil
 	}
@@ -657,7 +657,7 @@ func parseTestJSONObject(raw string) (map[string]any, bool) {
 		return result, true
 	}
 
-	stripped := stripTestMarkdownFences(raw)
+	stripped := service.StripCodeFence(raw)
 	if err := json.Unmarshal([]byte(stripped), &result); err == nil {
 		return result, true
 	}
@@ -770,21 +770,4 @@ func handleEnrichmentBackfillExtractedFactParaphrase(w http.ResponseWriter, r *h
 		Enqueued:       enq,
 		DryRun:         body.DryRun,
 	})
-}
-
-// stripTestMarkdownFences removes markdown code fence wrappers.
-func stripTestMarkdownFences(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		idx := strings.Index(s, "\n")
-		if idx < 0 {
-			return s
-		}
-		s = s[idx+1:]
-		if lastIdx := strings.LastIndex(s, "```"); lastIdx >= 0 {
-			s = s[:lastIdx]
-		}
-		s = strings.TrimSpace(s)
-	}
-	return s
 }

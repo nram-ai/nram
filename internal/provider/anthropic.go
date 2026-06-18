@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -29,6 +30,14 @@ type AnthropicConfig struct {
 	// cache_control: {type: "ephemeral"}. Below a model's minimum cacheable
 	// prefix the hint is a no-op; above it, the prefix is cached.
 	PromptCacheEnabled bool
+
+	// JSONModeToolUse coerces JSONMode requests into a forced `emit_json`
+	// tool_use call (Anthropic has no response_format flag). Off by default:
+	// the native api.anthropic.com path returns extraction JSON fine without
+	// it, so the request shape stays unchanged there. Enable it only for
+	// Anthropic-compatible proxies (e.g. OAuth/Claude-Code passthroughs) that
+	// drop response formatting and need the JSON pinned to a tool call.
+	JSONModeToolUse bool
 }
 
 // AnthropicProvider implements LLMProvider and ProviderHealth using the native
@@ -81,13 +90,56 @@ type anthropicMessage struct {
 // is `any` because the Anthropic API accepts either a plain string or an array
 // of content blocks (used to attach cache_control to the system prefix).
 type anthropicMessagesRequest struct {
-	Model         string             `json:"model"`
-	MaxTokens     int                `json:"max_tokens"`
-	System        any                `json:"system,omitempty"`
-	Messages      []anthropicMessage `json:"messages"`
-	Temperature   *float64           `json:"temperature,omitempty"`
-	StopSequences []string           `json:"stop_sequences,omitempty"`
+	Model         string               `json:"model"`
+	MaxTokens     int                  `json:"max_tokens"`
+	System        any                  `json:"system,omitempty"`
+	Messages      []anthropicMessage   `json:"messages"`
+	Temperature   *float64             `json:"temperature,omitempty"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
+	Tools         []anthropicTool      `json:"tools,omitempty"`
+	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
 }
+
+// anthropicTool describes a tool the model may call. nram uses this only to
+// coerce structured JSON output via a forced tool_choice when JSONMode is
+// requested and JSONModeToolUse is enabled; it does not expose general
+// tool-use to callers.
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+// anthropicToolChoice forces the model toward a specific tool. With Type="tool"
+// and a Name, the model MUST emit a tool_use block for that tool — Anthropic's
+// nearest equivalent of OpenAI's response_format:json_object.
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+// jsonEmitToolName is the synthetic tool used to coerce a JSON response. It is
+// never executed; the tool_use input is read as the response body.
+const jsonEmitToolName = "emit_json"
+
+// Synthetic tool used to coerce a forced JSON response. Captured at package
+// scope so each JSONMode call reuses one slice/map allocation; never mutated.
+var (
+	anthropicJSONEmitInputSchema = map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": true,
+	}
+	anthropicJSONEmitTools = []anthropicTool{{
+		Name:        jsonEmitToolName,
+		Description: "Emit the structured response as a JSON object. The arguments to this tool ARE the response.",
+		InputSchema: anthropicJSONEmitInputSchema,
+	}}
+	anthropicJSONEmitToolChoice = &anthropicToolChoice{
+		Type: "tool",
+		Name: jsonEmitToolName,
+	}
+)
 
 // anthropicCacheControl marks a content block as cacheable.
 type anthropicCacheControl struct {
@@ -103,9 +155,14 @@ type anthropicSystemBlock struct {
 }
 
 // anthropicContentBlock is a single block in the response content array.
+// `tool_use` blocks carry the structured-output payload when JSONMode coercion
+// is on; Name/ID are ignored for any tool other than jsonEmitToolName.
 type anthropicContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 // anthropicUsage is the token usage block returned by the Anthropic API.
@@ -198,17 +255,57 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	if len(req.Stop) > 0 {
 		body.StopSequences = req.Stop
 	}
+	coerceJSON := req.JSONMode && p.config.JSONModeToolUse
+	if coerceJSON {
+		// Anthropic's Messages API has no response_format flag. Forcing a
+		// single tool_use call is the documented way to coerce structured JSON:
+		// the model MUST emit a tool_use block matching the schema, and we read
+		// its `input` as the body. The schema is intentionally generic so the
+		// extraction prompts decide the shape; the empty `properties: {}` map is
+		// harmless on the canonical API and avoids a 400 on stricter
+		// Anthropic-compatible relays that require the key to be present.
+		body.Tools = anthropicJSONEmitTools
+		body.ToolChoice = anthropicJSONEmitToolChoice
+	}
 
 	var msgResp anthropicMessagesResponse
 	if err := p.doRequest(ctx, http.MethodPost, "/v1/messages", body, &msgResp); err != nil {
 		return nil, fmt.Errorf("anthropic: completion request failed: %w", err)
 	}
 
-	// Extract text from content blocks.
+	// Extract content from response blocks. When JSON coercion is on the model
+	// returns a tool_use block whose `input` is the JSON payload; we surface
+	// that as the body (dropping any leading preamble text block — concatenating
+	// it would defeat the point). If the forced tool_use is missing (a proxy
+	// that ignores tool_choice, or a refusal that arrives as text) we fall back
+	// to the text blocks so the JSON-as-text case still parses and a refusal's
+	// text reaches the caller's parser; the shared extraction layer fails loudly
+	// on a truly empty body. Plain text blocks are concatenated as before.
 	var content strings.Builder
-	for _, block := range msgResp.Content {
-		if block.Type == "text" {
-			content.WriteString(block.Text)
+	usedToolUse := false
+	if coerceJSON {
+		for _, block := range msgResp.Content {
+			if block.Type != "tool_use" || block.Name != jsonEmitToolName {
+				continue
+			}
+			trimmed := bytes.TrimSpace(block.Input)
+			if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+				continue
+			}
+			content.Write(trimmed)
+			usedToolUse = true
+			break
+		}
+	}
+	if !usedToolUse {
+		if coerceJSON {
+			slog.Warn("anthropic: JSONMode response had no emit_json tool_use block; falling back to text",
+				"model", msgResp.Model, "stop_reason", msgResp.StopReason, "blocks", len(msgResp.Content))
+		}
+		for _, block := range msgResp.Content {
+			if block.Type == "text" {
+				content.WriteString(block.Text)
+			}
 		}
 	}
 

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/nram-ai/nram/internal/provider"
 )
 
 // Truncated payloads sourced from the production failure modes the unified
@@ -179,4 +182,78 @@ func TestExtractionFailure_ErrorAndAs(t *testing.T) {
 		t.Errorf("AsExtractionFailure should return the *ExtractionFailure verbatim")
 	}
 	_ = dst
+}
+
+// --- StripCodeFence ---
+
+func TestStripCodeFence(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no fence trimmed", "  {\"x\":1}  ", `{"x":1}`},
+		{"backtick json", "```json\n{\"x\":1}\n```", `{"x":1}`},
+		{"backtick no lang", "```\n{\"x\":1}\n```", `{"x":1}`},
+		{"tilde json", "~~~json\n{\"x\":1}\n~~~", `{"x":1}`},
+		{"single-line with language tag", "```json{\"x\":1}```", `{"x":1}`},
+		{"single-line no tag", "```{\"x\":1}```", `{"x":1}`},
+		{"single-line all-alnum kept", "```123```", `123`},
+		{"preamble before fence", "Here you go:\n```json\n{\"x\":1}\n```", `{"x":1}`},
+		{"trailing prose with second fence", "```json\n{\"x\":1}\n```\nFYI: ```py\nprint(1)\n```", `{"x":1}`},
+		{"bom prefix", "\ufeff```json\n{\"x\":1}\n```", `{"x":1}`},
+		{"plain json untouched", `{"a":"b"}`, `{"a":"b"}`},
+		{"json with embedded backticks in value", "{\"note\":\"use ```code``` here\"}", "{\"note\":\"use ```code``` here\"}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := StripCodeFence(tc.in); got != tc.want {
+				t.Errorf("StripCodeFence(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- empty-response guard (covers every provider via the shared layer) ---
+
+func TestExtractFactsLLM_EmptyResponseFails(t *testing.T) {
+	for _, content := range []string{"", "   \n\t "} {
+		llm := &mockLLMProvider{name: "test", resp: &provider.CompletionResponse{Content: content, FinishReason: "end_turn"}}
+		_, err := ExtractFactsLLM(context.Background(), llm, nil, "some content", CallOptions{})
+		if err == nil {
+			t.Fatalf("expected failure on empty content %q", content)
+		}
+		fail, ok := AsExtractionFailure(err)
+		if !ok {
+			t.Fatalf("expected *ExtractionFailure, got %T", err)
+		}
+		if fail.Reason != ExtractionReasonEmptyResponse {
+			t.Errorf("reason = %q, want %q", fail.Reason, ExtractionReasonEmptyResponse)
+		}
+	}
+}
+
+func TestExtractEntitiesLLM_EmptyResponseFails(t *testing.T) {
+	llm := &mockLLMProvider{name: "test", resp: &provider.CompletionResponse{Content: "", FinishReason: "end_turn"}}
+	_, err := ExtractEntitiesLLM(context.Background(), llm, nil, "some content", CallOptions{})
+	fail, ok := AsExtractionFailure(err)
+	if !ok {
+		t.Fatalf("expected *ExtractionFailure, got %v", err)
+	}
+	if fail.Reason != ExtractionReasonEmptyResponse {
+		t.Errorf("reason = %q, want %q", fail.Reason, ExtractionReasonEmptyResponse)
+	}
+}
+
+// A valid-but-empty result (a JSON empty array) is NOT a failure — only a truly
+// empty body is.
+func TestExtractFactsLLM_EmptyArrayIsCleanZeroResult(t *testing.T) {
+	llm := &mockLLMProvider{name: "test", resp: &provider.CompletionResponse{Content: "[]", FinishReason: "end_turn"}}
+	env, err := ExtractFactsLLM(context.Background(), llm, nil, "some content", CallOptions{})
+	if err != nil {
+		t.Fatalf("empty array should be a clean zero-fact result, got %v", err)
+	}
+	if len(env.Facts) != 0 {
+		t.Errorf("expected 0 facts, got %d", len(env.Facts))
+	}
 }

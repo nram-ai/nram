@@ -47,6 +47,10 @@ type SlotConfig struct {
 	// accept an explicit hint (Anthropic). Sourced from the global
 	// provider.prompt_cache.enabled setting.
 	PromptCacheEnabled bool `json:"prompt_cache_enabled,omitempty"`
+	// JSONModeToolUse coerces Anthropic JSONMode requests into a forced
+	// tool_use call. Sourced from the global
+	// provider.anthropic.json_tool_use.enabled setting; off by default.
+	JSONModeToolUse bool `json:"json_tool_use,omitempty"`
 }
 
 // RegistryConfig holds the configuration for all provider slots and the shared
@@ -595,6 +599,7 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 			BaseURL:            config.BaseURL,
 			Timeout:            slotTimeout(config.Timeout),
 			PromptCacheEnabled: config.PromptCacheEnabled,
+			JSONModeToolUse:    config.JSONModeToolUse,
 		}), nil
 
 	default:

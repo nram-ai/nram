@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -985,8 +984,7 @@ func (p *ContradictionPhase) checkContradiction(
 		Explanation string `json:"explanation"`
 	}
 
-	content := strings.TrimSpace(resp.Content)
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
+	if err := service.UnmarshalJSONLenient(resp.Content, &result); err != nil {
 		return false, "", "", usage, fmt.Errorf("parse contradiction response: %w", err)
 	}
 

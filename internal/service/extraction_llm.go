@@ -112,6 +112,7 @@ const (
 	ExtractionReasonParseFailed     = "parse_failed"
 	ExtractionReasonLengthNoRecover = "length_no_recovery"
 	ExtractionReasonPartialRecovery = "partial_recovery"
+	ExtractionReasonEmptyResponse   = "empty_response"
 )
 
 // Error implements the error interface.
@@ -205,12 +206,20 @@ func ExtractFactsLLM(
 		return nil, buildExtractionFailure(ExtractionPhaseFact, ExtractionReasonLLMCallFailed, err.Error(), nil, llm.Name())
 	}
 
+	// An empty completion is never a valid extraction (parseFacts would
+	// otherwise return zero facts with no error, silently recording success).
+	// Surface it as a failure for every provider, not just Anthropic.
+	if strings.TrimSpace(resp.Content) == "" {
+		return nil, buildExtractionFailure(ExtractionPhaseFact, ExtractionReasonEmptyResponse,
+			"fact extraction returned an empty response body", resp, llm.Name())
+	}
+
 	facts, partial, parseErr := parseFacts(resp.Content)
 	if parseErr != nil {
 		return nil, buildExtractionFailure(ExtractionPhaseFact, ExtractionReasonParseFailed, parseErr.Error(), resp, llm.Name())
 	}
 
-	if partial && len(facts) == 0 && resp.FinishReason == "length" {
+	if partial && len(facts) == 0 && provider.IsTruncated(resp.FinishReason) {
 		return nil, buildExtractionFailure(ExtractionPhaseFact, ExtractionReasonLengthNoRecover,
 			"fact extraction hit max_tokens and longest-valid-prefix recovery yielded zero facts",
 			resp, llm.Name())
@@ -246,6 +255,14 @@ func ExtractEntitiesLLM(
 		return nil, buildExtractionFailure(ExtractionPhaseEntity, ExtractionReasonLLMCallFailed, err.Error(), nil, llm.Name())
 	}
 
+	// An empty completion is never a valid extraction (parseEntities would
+	// otherwise return an empty result with no error, silently recording
+	// success). Surface it as a failure for every provider, not just Anthropic.
+	if strings.TrimSpace(resp.Content) == "" {
+		return nil, buildExtractionFailure(ExtractionPhaseEntity, ExtractionReasonEmptyResponse,
+			"entity extraction returned an empty response body", resp, llm.Name())
+	}
+
 	result, partial, parseErr := parseEntities(resp.Content)
 	if parseErr != nil {
 		return nil, buildExtractionFailure(ExtractionPhaseEntity, ExtractionReasonParseFailed, parseErr.Error(), resp, llm.Name())
@@ -253,7 +270,7 @@ func ExtractEntitiesLLM(
 
 	emptyResult := result == nil ||
 		(len(result.Entities) == 0 && len(result.Relationships) == 0)
-	if partial && emptyResult && resp.FinishReason == "length" {
+	if partial && emptyResult && provider.IsTruncated(resp.FinishReason) {
 		return nil, buildExtractionFailure(ExtractionPhaseEntity, ExtractionReasonLengthNoRecover,
 			"entity extraction hit max_tokens and longest-valid-prefix recovery yielded zero entities",
 			resp, llm.Name())
@@ -274,10 +291,18 @@ func ExtractEntitiesLLM(
 // Parsers (clean parse + longest-valid-prefix recovery)
 // ---------------------------------------------------------------------------
 
-// parseFacts handles array, single-object, and wrapper shapes; falls
+// parseFacts parses the raw response, retrying on a de-fenced copy if the raw
+// parse fails (see deFenceRetry). An empty body is treated as a clean
+// zero-fact result here; the ExtractFactsLLM envelope is the layer that
+// distinguishes an empty completion (a failure) from a valid empty result.
+func parseFacts(raw string) ([]ExtractedFact, bool, error) {
+	return deFenceRetry(raw, parseFactsRaw)
+}
+
+// parseFactsRaw handles array, single-object, and wrapper shapes; falls
 // through to longest-valid-prefix recovery on truncation. Recovered facts
 // are deduped case-insensitively to defeat degenerate-loop output.
-func parseFacts(raw string) (facts []ExtractedFact, partialRecovery bool, err error) {
+func parseFactsRaw(raw string) (facts []ExtractedFact, partialRecovery bool, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, false, nil
@@ -334,7 +359,14 @@ func parseFacts(raw string) (facts []ExtractedFact, partialRecovery bool, err er
 // per-array longest-valid-prefix recovery on the "entities" and
 // "relationships" keys independently: a truncation that severs the
 // "relationships" array still recovers all complete "entities" entries.
-func parseEntities(raw string) (result *EntityExtractionResult, partialRecovery bool, err error) {
+// parseEntities parses the raw response, retrying on a de-fenced copy if the
+// raw parse fails (see deFenceRetry). As with parseFacts, the empty-completion
+// failure distinction lives in the ExtractEntitiesLLM envelope, not here.
+func parseEntities(raw string) (*EntityExtractionResult, bool, error) {
+	return deFenceRetry(raw, parseEntitiesRaw)
+}
+
+func parseEntitiesRaw(raw string) (result *EntityExtractionResult, partialRecovery bool, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return &EntityExtractionResult{}, false, nil
@@ -557,4 +589,122 @@ func streamRelationArray(dec *json.Decoder) []ExtractedRelation {
 		out = append(out, r)
 	}
 	return out
+}
+
+// StripCodeFence trims a UTF-8 BOM and surrounding whitespace, then removes a
+// leading triple-backtick or triple-tilde fence (with an optional language tag
+// like ```json) and a matching trailing fence. Trailing prose after the closing
+// fence is discarded — the closing fence is located by the FIRST line-anchored
+// "\n```" (or "\n~~~") so a second fenced block in the trailing prose
+// ("FYI: ```py\nprint(1)\n```") does not leak into the body.
+//
+// It also recovers from a preamble before the fence: if the input does not
+// start with a fence but contains one at a line start ("Here you go:\n```json\n…"),
+// the function re-anchors at that line. Single-line payloads carry the language
+// tag inline (```json{"x":1}```); the tag is stripped, unless doing so would
+// consume the entire body (e.g. a bare ```123```), in which case the untrimmed
+// body is kept.
+//
+// Inputs without a fence are returned trimmed unchanged, so callers can run it
+// as a fallback after a raw parse without risking corruption of valid JSON.
+func StripCodeFence(s string) string {
+	// Strip a UTF-8 BOM if present, before any whitespace trimming.
+	s = strings.TrimPrefix(s, "\ufeff")
+	s = strings.TrimSpace(s)
+
+	fence, ok := detectLeadingFence(s)
+	if !ok {
+		// Re-anchor on a preamble: the first line-anchored fence after a prose
+		// lead-in. Backtick fences take precedence over tilde.
+		if i := strings.Index(s, "\n```"); i >= 0 {
+			s = s[i+1:]
+			fence = "```"
+		} else if i := strings.Index(s, "\n~~~"); i >= 0 {
+			s = s[i+1:]
+			fence = "~~~"
+		} else {
+			return s
+		}
+	}
+
+	// Split off the opener line; everything after the first newline is the body.
+	_, body, multiline := strings.Cut(s, "\n")
+	if !multiline {
+		// Single-line fenced payload like ```{"x":1}``` or ```json{"x":1}```.
+		// Strip both fences first, then the language tag — but only if doing so
+		// leaves a non-empty body (so a bare ```123``` keeps "123").
+		single := strings.TrimPrefix(s, fence)
+		single = strings.TrimSuffix(single, fence)
+		if trimmed := trimLanguageTag(single); trimmed != "" {
+			single = trimmed
+		}
+		return strings.TrimSpace(single)
+	}
+
+	// Multi-line: the opener line (carrying any language hint) is already
+	// dropped; search for the FIRST line-anchored closing fence so trailing
+	// prose containing another fenced block does not bleed into the body.
+	if idx := strings.Index(body, "\n"+fence); idx >= 0 {
+		body = body[:idx]
+	} else {
+		// No line-anchored close; tolerate a bare trailing fence and otherwise
+		// treat the rest as the body (a truncated stream).
+		body = strings.TrimSuffix(body, fence)
+	}
+	return strings.TrimSpace(body)
+}
+
+// detectLeadingFence reports the fence marker that opens s (``` or ~~~), or
+// false when s has no leading fence.
+func detectLeadingFence(s string) (string, bool) {
+	switch {
+	case strings.HasPrefix(s, "```"):
+		return "```", true
+	case strings.HasPrefix(s, "~~~"):
+		return "~~~", true
+	default:
+		return "", false
+	}
+}
+
+// trimLanguageTag drops a leading alphanumeric language hint like "json" or
+// "json5" that appears immediately after the opening fence on a single-line
+// payload, e.g. ```json{"x":1}``` → {"x":1}```.
+func trimLanguageTag(s string) string {
+	return strings.TrimLeftFunc(s, func(r rune) bool {
+		return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+	})
+}
+
+// UnmarshalJSONLenient unmarshals raw into dst, retrying on the de-fenced body
+// if the raw parse fails and raw carries a markdown code fence. Raw-first means
+// valid JSON never passes through StripCodeFence, while a provider or relay that
+// wraps the JSON in a fence still parses. Use it wherever an LLM JSON response
+// is decoded into a single value; the fact/entity parsers use deFenceRetry
+// instead because they also return a partial-recovery flag.
+func UnmarshalJSONLenient(raw string, dst any) error {
+	err := json.Unmarshal([]byte(raw), dst)
+	if err == nil {
+		return nil
+	}
+	if stripped := StripCodeFence(raw); stripped != strings.TrimSpace(raw) {
+		return json.Unmarshal([]byte(stripped), dst)
+	}
+	return err
+}
+
+// deFenceRetry runs parse on raw, retrying on the de-fenced body if the raw
+// parse fails and raw carries a fence. It is the (T, bool, error) sibling of
+// UnmarshalJSONLenient, shared by parseFacts/parseEntities whose parsers carry
+// a partial-recovery flag and so don't fit a plain json.Unmarshal signature.
+func deFenceRetry[T any](raw string, parse func(string) (T, bool, error)) (T, bool, error) {
+	v, partial, err := parse(raw)
+	if err != nil {
+		if stripped := StripCodeFence(raw); stripped != strings.TrimSpace(raw) {
+			if v2, p2, e2 := parse(stripped); e2 == nil {
+				return v2, p2, nil
+			}
+		}
+	}
+	return v, partial, err
 }

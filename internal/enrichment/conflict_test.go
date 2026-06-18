@@ -492,12 +492,19 @@ func TestParseConflictResponse_CleanJSON(t *testing.T) {
 }
 
 func TestParseConflictResponse_FencedJSON(t *testing.T) {
-	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences, so fenced input is treated as invalid.
+	// Fence-tolerant: a provider or relay that ignores JSON mode may wrap the
+	// JSON in a markdown fence; parseConflictResponse de-fences on a raw-parse
+	// failure (raw-first, so valid JSON is never run through StripCodeFence).
 	raw := "```json\n{\"contradicts\": false, \"explanation\": \"No conflict\"}\n```"
-	_, _, err := parseConflictResponse(raw)
-	if err == nil {
-		t.Error("expected error for markdown-fenced input (JSON mode makes fence stripping unnecessary)")
+	contradicts, explanation, err := parseConflictResponse(raw)
+	if err != nil {
+		t.Fatalf("unexpected error for markdown-fenced input: %v", err)
+	}
+	if contradicts {
+		t.Error("expected contradicts=false")
+	}
+	if explanation != "No conflict" {
+		t.Errorf("explanation = %q, want %q", explanation, "No conflict")
 	}
 }
 

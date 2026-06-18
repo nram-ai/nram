@@ -5838,6 +5838,7 @@ components:
         - "memory.default_confidence"
         - "memory.default_importance"
         - "memory.soft_delete_retention_days"
+        - "provider.anthropic.json_tool_use.enabled"
         - "provider.embedding_cache.enabled"
         - "provider.embedding_cache.max_entries"
         - "provider.embedding_cache.ttl_seconds"

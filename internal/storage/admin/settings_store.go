@@ -348,6 +348,7 @@ var settingsSchemas = []api.SettingSchema{
 
 	// Provider prompt delivery.
 	{Key: service.SettingProviderPromptCacheEnabled, Type: "boolean", DefaultValue: json.RawMessage(`true`), Description: "Mark the system instruction prefix as cacheable on providers that accept an explicit hint (Anthropic cache_control). Below a model's minimum cacheable prefix size the hint is a no-op, so this is safe to leave on; it only pays off on large custom prompts.", Category: "provider_prompt_delivery"},
+	{Key: service.SettingProviderAnthropicJSONToolUse, Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Coerce Anthropic JSON output via a forced tool_use call. Off by default; enable only for Anthropic-compatible proxies (e.g. OAuth/Claude-Code passthroughs) that drop response formatting. The native api.anthropic.com path does not need it.", Category: "provider_prompt_delivery"},
 
 	// API rate-limit per-user-bucket cleanup.
 	{Key: service.SettingAPIRateLimitCleanupSeconds, Type: "number", DefaultValue: json.RawMessage(`60`), Description: "How often the rate limiter clears out tracking for inactive users, in seconds.", Category: "api_performance", RequiresRestart: true, Min: ptrF(1), Max: ptrF(3600), Step: ptrF(1)},

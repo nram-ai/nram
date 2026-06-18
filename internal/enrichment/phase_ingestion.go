@@ -304,19 +304,16 @@ type rawDecision struct {
 // parseIngestionDecision extracts the decision JSON from an LLM response.
 // JSONMode is requested on the call so the body is generally valid JSON, but
 // some providers wrap output in markdown fences when JSON mode is unsupported;
-// strip a leading fence defensively.
+// strip a leading fence defensively via the shared helper, raw-first so valid
+// JSON never passes through StripCodeFence.
 func parseIngestionDecision(raw string) (*rawDecision, error) {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return nil, fmt.Errorf("empty decision response")
 	}
 	var d rawDecision
-	if err := json.Unmarshal([]byte(raw), &d); err != nil {
-		preview := raw
+	if err := service.UnmarshalJSONLenient(raw, &d); err != nil {
+		preview := trimmed
 		if len(preview) > 200 {
 			preview = preview[:200] + "..."
 		}

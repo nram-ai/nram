@@ -730,12 +730,19 @@ func TestParseFacts_CleanJSON(t *testing.T) {
 }
 
 func TestParseFacts_MarkdownFenced(t *testing.T) {
-	// With JSON mode enabled, LLM output should never contain markdown fences.
-	// The parser no longer strips fences; recovery rejects non-JSON prefixes.
+	// Fence-tolerant: a provider or relay that ignores JSON mode may wrap output
+	// in a markdown fence; parseFacts de-fences on a raw-parse failure (raw-first,
+	// so valid JSON is never run through StripCodeFence).
 	input := "```json\n[{\"fact\":\"Fenced fact\",\"confidence\":0.85}]\n```"
-	_, _, err := parseFacts(input)
-	if err == nil {
-		t.Error("expected error for markdown-fenced input")
+	facts, _, err := parseFacts(input)
+	if err != nil {
+		t.Fatalf("unexpected error for markdown-fenced input: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact from fenced input, got %d", len(facts))
+	}
+	if facts[0].text() != "Fenced fact" {
+		t.Errorf("expected fact 'Fenced fact', got %q", facts[0].text())
 	}
 }
 
@@ -779,10 +786,18 @@ func TestParseEntities_CleanJSON(t *testing.T) {
 }
 
 func TestParseEntities_MarkdownFenced(t *testing.T) {
+	// Fence-tolerant: a provider or relay that ignores JSON mode may wrap output
+	// in a markdown fence; parseEntities de-fences on a raw-parse failure.
 	input := "```json\n{\"entities\":[{\"name\":\"Python\",\"type\":\"tech\",\"properties\":{}}],\"relationships\":[]}\n```"
-	_, _, err := parseEntities(input)
-	if err == nil {
-		t.Error("expected error for markdown-fenced input")
+	result, _, err := parseEntities(input)
+	if err != nil {
+		t.Fatalf("unexpected error for markdown-fenced input: %v", err)
+	}
+	if result == nil || len(result.Entities) != 1 {
+		t.Fatalf("expected 1 entity from fenced input, got %+v", result)
+	}
+	if result.Entities[0].Name != "Python" {
+		t.Errorf("expected entity name 'Python', got %q", result.Entities[0].Name)
 	}
 }
 

@@ -618,6 +618,12 @@ const (
 	// explicit cache hints (Anthropic cache_control) mark the system prefix as
 	// cacheable. Below a model's minimum cacheable prefix the hint is a no-op.
 	SettingProviderPromptCacheEnabled = "provider.prompt_cache.enabled"
+
+	// SettingProviderAnthropicJSONToolUse controls whether JSONMode requests to
+	// the Anthropic provider are coerced into a forced `emit_json` tool_use call.
+	// Off by default — the native api.anthropic.com path does not need it; enable
+	// only for Anthropic-compatible proxies that drop response formatting.
+	SettingProviderAnthropicJSONToolUse = "provider.anthropic.json_tool_use.enabled"
 )
 
 // Default system-prompt text for each phase: the full static instruction (role,
@@ -890,6 +896,8 @@ var settingDefaults = map[string]string{
 	SettingEmbeddingCacheTTLSeconds: "900",
 
 	SettingProviderPromptCacheEnabled: "true",
+
+	SettingProviderAnthropicJSONToolUse: "false",
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the

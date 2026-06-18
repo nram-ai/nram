@@ -603,3 +603,203 @@ func TestAnthropicDefaultModel(t *testing.T) {
 		t.Errorf("DefaultModel = %q, want %q", p.config.DefaultModel, "claude-sonnet-4-20250514")
 	}
 }
+
+// --- JSONMode tool_use coercion (config-gated via JSONModeToolUse) ---
+
+// TestAnthropicJSONModeToolUseForcesTool verifies that with JSONModeToolUse on,
+// a JSONMode request injects a forced emit_json tool_choice and the adapter
+// reads the tool_use block's input as the completion body.
+func TestAnthropicJSONModeToolUseForcesTool(t *testing.T) {
+	var receivedReq anthropicMessagesRequest
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&receivedReq); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			resp := anthropicMessagesResponse{
+				ID: "msg_tool", Type: "message", Role: "assistant", Model: receivedReq.Model,
+				StopReason: "tool_use",
+				Content: []anthropicContentBlock{{
+					Type: "tool_use", ID: "toolu_abc", Name: jsonEmitToolName,
+					Input: json.RawMessage(`{"facts":[{"subject":"Eiffel Tower","object":"Paris"}]}`),
+				}},
+				Usage: anthropicUsage{InputTokens: 12, OutputTokens: 34},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+
+	p := NewAnthropicProvider(AnthropicConfig{
+		APIKey: "test-key", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL,
+		JSONModeToolUse: true,
+	})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{
+		Messages: []Message{{Role: "user", Content: "extract facts"}}, JSONMode: true,
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if len(receivedReq.Tools) != 1 || receivedReq.Tools[0].Name != jsonEmitToolName {
+		t.Fatalf("expected one emit_json tool; got %+v", receivedReq.Tools)
+	}
+	schema := receivedReq.Tools[0].InputSchema
+	if schema["type"] != "object" {
+		t.Errorf("input_schema.type = %v, want object", schema["type"])
+	}
+	if schema["additionalProperties"] != true {
+		t.Errorf("input_schema.additionalProperties = %v, want true", schema["additionalProperties"])
+	}
+	if _, ok := schema["properties"]; !ok {
+		t.Errorf("input_schema.properties must be present (some relays require it)")
+	}
+	if receivedReq.ToolChoice == nil || receivedReq.ToolChoice.Type != "tool" || receivedReq.ToolChoice.Name != jsonEmitToolName {
+		t.Fatalf("tool_choice not forced to emit_json: %+v", receivedReq.ToolChoice)
+	}
+	want := `{"facts":[{"subject":"Eiffel Tower","object":"Paris"}]}`
+	if resp.Content != want {
+		t.Errorf("Content = %q, want %q", resp.Content, want)
+	}
+	if resp.FinishReason != "tool_use" {
+		t.Errorf("FinishReason = %q, want tool_use", resp.FinishReason)
+	}
+}
+
+// TestAnthropicJSONModeToolUsePreambleDropped verifies a leading text preamble
+// before the forced tool_use is dropped in favor of the tool_use input.
+func TestAnthropicJSONModeToolUsePreambleDropped(t *testing.T) {
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			resp := anthropicMessagesResponse{
+				ID: "msg_pre", Type: "message", Role: "assistant", Model: "claude-haiku-4-5",
+				StopReason: "tool_use",
+				Content: []anthropicContentBlock{
+					{Type: "text", Text: "Sure, here you go:"},
+					{Type: "tool_use", ID: "toolu_p", Name: jsonEmitToolName, Input: json.RawMessage(`{"facts":[]}`)},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+	p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL, JSONModeToolUse: true})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{Messages: []Message{{Role: "user", Content: "x"}}, JSONMode: true})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp.Content != `{"facts":[]}` {
+		t.Errorf("Content = %q, want %q", resp.Content, `{"facts":[]}`)
+	}
+}
+
+// TestAnthropicJSONModeToolUseFallsBackToText covers a proxy that ignores
+// tool_choice and returns the JSON as a plain text block: the adapter falls
+// back to the text so the JSON-as-text case still reaches the caller.
+func TestAnthropicJSONModeToolUseFallsBackToText(t *testing.T) {
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			resp := anthropicMessagesResponse{
+				ID: "msg_txt", Type: "message", Role: "assistant", Model: "claude-haiku-4-5",
+				StopReason: "end_turn",
+				Content:    []anthropicContentBlock{{Type: "text", Text: `{"facts":[{"subject":"x"}]}`}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+	p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL, JSONModeToolUse: true})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{Messages: []Message{{Role: "user", Content: "x"}}, JSONMode: true})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp.Content != `{"facts":[{"subject":"x"}]}` {
+		t.Errorf("Content = %q, want fallback text JSON", resp.Content)
+	}
+}
+
+// TestAnthropicJSONModeToolUseRefusalTextReturned verifies a text-only refusal
+// is surfaced as content (the shared extraction layer fails on it), not turned
+// into a provider-level error.
+func TestAnthropicJSONModeToolUseRefusalTextReturned(t *testing.T) {
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			resp := anthropicMessagesResponse{
+				ID: "msg_ref", Type: "message", Role: "assistant", Model: "claude-haiku-4-5",
+				StopReason: "end_turn",
+				Content:    []anthropicContentBlock{{Type: "text", Text: "I cannot help with that."}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+	p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL, JSONModeToolUse: true})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{Messages: []Message{{Role: "user", Content: "x"}}, JSONMode: true})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp.Content != "I cannot help with that." {
+		t.Errorf("Content = %q, want the refusal text", resp.Content)
+	}
+}
+
+// TestAnthropicJSONModeToolUseEmptyInputNoText verifies an emit_json block with
+// null input and no text yields empty content (handled by the shared layer),
+// not a provider-level error.
+func TestAnthropicJSONModeToolUseEmptyInputNoText(t *testing.T) {
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			resp := anthropicMessagesResponse{
+				ID: "msg_null", Type: "message", Role: "assistant", Model: "claude-haiku-4-5",
+				StopReason: "tool_use",
+				Content:    []anthropicContentBlock{{Type: "tool_use", ID: "toolu_n", Name: jsonEmitToolName, Input: json.RawMessage(`null`)}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+	p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL, JSONModeToolUse: true})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{Messages: []Message{{Role: "user", Content: "x"}}, JSONMode: true})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp.Content != "" {
+		t.Errorf("Content = %q, want empty", resp.Content)
+	}
+}
+
+// TestAnthropicJSONModeFlagOffSendsNoTools is the straight-x-api-key guard: with
+// JSONModeToolUse off (default), a JSONMode request must not change the request
+// shape and must return text content as before.
+func TestAnthropicJSONModeFlagOffSendsNoTools(t *testing.T) {
+	var receivedReq anthropicMessagesRequest
+	srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+		"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&receivedReq)
+			resp := anthropicMessagesResponse{
+				ID: "msg_off", Type: "message", Role: "assistant", Model: receivedReq.Model,
+				StopReason: "end_turn",
+				Content:    []anthropicContentBlock{{Type: "text", Text: `{"facts":[]}`}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+	p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", DefaultModel: "claude-haiku-4-5", BaseURL: srv.URL})
+	resp, err := p.Complete(context.Background(), &CompletionRequest{Messages: []Message{{Role: "user", Content: "x"}}, JSONMode: true})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if len(receivedReq.Tools) != 0 || receivedReq.ToolChoice != nil {
+		t.Fatalf("flag off must send no tools; got tools=%v tool_choice=%+v", receivedReq.Tools, receivedReq.ToolChoice)
+	}
+	if resp.Content != `{"facts":[]}` {
+		t.Errorf("Content = %q, want text passthrough", resp.Content)
+	}
+}

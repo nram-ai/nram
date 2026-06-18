@@ -527,7 +527,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 		Alignment float64 `json:"alignment"`
 		Reasoning string  `json:"reasoning"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &result); err != nil {
+	if err := service.UnmarshalJSONLenient(resp.Content, &result); err != nil {
 		return 0, usage, fmt.Errorf("parse alignment response: %w", err)
 	}
 
@@ -1876,7 +1876,7 @@ func (p *ConsolidationPhase) auditNovelty(
 	var parsed struct {
 		NovelFacts []string `json:"novel_facts"`
 	}
-	if jerr := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &parsed); jerr != nil {
+	if jerr := service.UnmarshalJSONLenient(resp.Content, &parsed); jerr != nil {
 		return false, "judge_parse_error", judgeUsage, embedTokens, nil
 	}
 	return len(parsed.NovelFacts) > 0, "llm_judge", judgeUsage, embedTokens, nil

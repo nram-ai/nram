@@ -462,6 +462,7 @@ func (s *ProviderAdminStore) switchEmbeddingModel(
 func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.SettingsRepo) provider.RegistryConfig {
 	var cfg provider.RegistryConfig
 	promptCache := providerSettingBool(ctx, settingsRepo, service.SettingProviderPromptCacheEnabled)
+	anthropicJSONToolUse := providerSettingBool(ctx, settingsRepo, service.SettingProviderAnthropicJSONToolUse)
 	for _, def := range provider.Slots {
 		setting, err := settingsRepo.Get(ctx, def.SettingKey(), "global")
 		if err != nil {
@@ -477,6 +478,7 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			APIKey:             apiCfg.APIKey,
 			Model:              apiCfg.Model,
 			PromptCacheEnabled: promptCache,
+			JSONModeToolUse:    anthropicJSONToolUse,
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout

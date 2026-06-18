@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -220,10 +219,8 @@ type conflictJSON struct {
 // statements contradict. It applies the same three-tier recovery strategy used
 // elsewhere in the enrichment package.
 func parseConflictResponse(raw string) (bool, string, error) {
-	raw = strings.TrimSpace(raw)
-
 	var result conflictJSON
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+	if err := service.UnmarshalJSONLenient(raw, &result); err != nil {
 		return false, "", fmt.Errorf("unable to parse conflict JSON: %w", err)
 	}
 	return result.Contradicts, result.Explanation, nil
