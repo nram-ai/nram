@@ -554,6 +554,11 @@ const (
 	SettingDreamContradictionTemperature          = "dreaming.contradiction.temperature"
 	SettingEnrichmentConflictTemperature          = "enrichment.conflict.temperature"
 	SettingEnrichmentIngestionDecisionTemperature = "enrichment.ingestion_decision.temperature"
+	SettingEnrichmentConflictMaxTokens            = "enrichment.conflict.max_tokens"
+	SettingEnrichmentIngestionDecisionMaxTokens   = "enrichment.ingestion_decision.max_tokens"
+	// SettingEnrichmentTestPromptMaxTokens caps the admin "Test prompt" call.
+	// It is a tuning affordance for the admin test surface, not a runtime phase.
+	SettingEnrichmentTestPromptMaxTokens = "enrichment.test_prompt.max_tokens"
 
 	// Heartbeat tick timeout for the dream runner. Caps how long a single
 	// TickHeartbeat write may block before being skipped. Larger values risk
@@ -1015,6 +1020,9 @@ var settingDefaults = map[string]string{
 	SettingDreamContradictionTemperature:          "0.1",
 	SettingEnrichmentConflictTemperature:          "0.1",
 	SettingEnrichmentIngestionDecisionTemperature: "0",
+	SettingEnrichmentConflictMaxTokens:            "256",
+	SettingEnrichmentIngestionDecisionMaxTokens:   "512",
+	SettingEnrichmentTestPromptMaxTokens:          "8192",
 
 	SettingDreamHeartbeatTickTimeoutSeconds: "10",
 

@@ -46,6 +46,12 @@ type EnrichmentAdminConfig struct {
 	QueryAugmentSystemPromptDef  func(ctx context.Context) string
 	IngestionSystemPromptDefault func(ctx context.Context) string
 
+	// TestPromptMaxTokens returns the operator-tunable token cap for the Test
+	// surface's model call (SettingEnrichmentTestPromptMaxTokens). Resolved as a
+	// closure to keep this config decoupled from the settings service, matching
+	// the *SystemPromptDefault resolvers. Nil falls back to the 8192 default.
+	TestPromptMaxTokens func(ctx context.Context) int
+
 	// QueryAugmentProvider and IngestionProvider resolve the providers for the
 	// query-augmentation and ingestion-decision phases. Each returns the
 	// dedicated slot's provider, falling back to the fact provider when the
@@ -517,13 +523,19 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		user = service.RenderExtractionUser(body.SampleInput)
 	}
 
+	// Operator-tunable via SettingEnrichmentTestPromptMaxTokens (the default,
+	// 8192, leaves headroom for reasoning models that spend output budget on a
+	// thinking pass before the answer; a tighter cap truncates them to empty).
+	// When the closure is nil (e.g. in tests) fall back to the registered
+	// default rather than a second literal, so 8192 lives in exactly one place.
+	maxTokens := service.GetDefaultInt(service.SettingEnrichmentTestPromptMaxTokens)
+	if cfg.TestPromptMaxTokens != nil {
+		maxTokens = cfg.TestPromptMaxTokens(r.Context())
+	}
 	completionReq := &provider.CompletionRequest{
 		Messages: provider.BuildMessages(systemTemplate, user),
 		// Model left empty: the resolved provider slot supplies its own model.
-		// 8192 leaves headroom for reasoning models (e.g. qwen3:8b) that spend
-		// output budget on a thinking pass before emitting the JSON/text answer;
-		// a tighter cap truncates them to an empty response.
-		MaxTokens:   8192,
+		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 		// Augmentation and ingestion both expect a JSON response. The runtime
 		// ingestion phase and the per-memory augment preview set JSONMode;

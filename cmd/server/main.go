@@ -1116,6 +1116,9 @@ func main() {
 			IngestionSystemPromptDefault: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingIngestionDecisionSystemPrompt, "global")
 			},
+			TestPromptMaxTokens: func(ctx context.Context) int {
+				return settingsSvc.ResolveIntWithDefault(ctx, service.SettingEnrichmentTestPromptMaxTokens, "global")
+			},
 			// The augment/ingestion test surface runs against the dedicated
 			// provider slots (falling back to fact when unconfigured), matching
 			// the runtime phases.

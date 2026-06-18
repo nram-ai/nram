@@ -484,12 +484,14 @@ func TestEnrichmentBackfillExtractedFactParaphrase_ServiceError_500(t *testing.T
 type capturingLLMProvider struct {
 	gotModel     string
 	gotOperation provider.Operation
+	gotMaxTokens int
 	content      string
 }
 
 func (c *capturingLLMProvider) Complete(ctx context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	c.gotModel = req.Model
 	c.gotOperation, _ = provider.OperationFromContext(ctx)
+	c.gotMaxTokens = req.MaxTokens
 	respModel := req.Model
 	if respModel == "" {
 		respModel = "default-fact-model"
@@ -573,6 +575,46 @@ func TestEnrichmentTestPrompt_IngestionUsesDedicatedProvider(t *testing.T) {
 	if !ok || parsed["operation"] != "ADD" {
 		t.Errorf("expected parsed ingestion decision with operation ADD, got %#v", resp.Parsed)
 	}
+}
+
+// TestEnrichmentTestPrompt_MaxTokens verifies the Test surface uses the
+// operator-tunable SettingEnrichmentTestPromptMaxTokens (via the
+// TestPromptMaxTokens closure) and falls back to 8192 when the closure is nil.
+func TestEnrichmentTestPrompt_MaxTokens(t *testing.T) {
+	post := func(h http.Handler) {
+		body := `{"type":"fact","sample_input":"some memory content"}`
+		req := enrichmentAdminRequest(http.MethodPost, "/v1/admin/enrichment/test-prompt", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+		}
+	}
+
+	t.Run("uses configured value", func(t *testing.T) {
+		capLLM := &capturingLLMProvider{content: `[{"content":"a fact","confidence":0.9,"tags":[]}]`}
+		post(NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+			Store:                   &mockEnrichmentAdminStore{},
+			FactProvider:            func() provider.LLMProvider { return capLLM },
+			FactSystemPromptDefault: func(_ context.Context) string { return "Extract facts as JSON." },
+			TestPromptMaxTokens:     func(_ context.Context) int { return 1234 },
+		}))
+		if capLLM.gotMaxTokens != 1234 {
+			t.Errorf("MaxTokens = %d, want 1234 (closure value)", capLLM.gotMaxTokens)
+		}
+	})
+
+	t.Run("falls back to 8192 when closure nil", func(t *testing.T) {
+		capLLM := &capturingLLMProvider{content: `[{"content":"a fact","confidence":0.9,"tags":[]}]`}
+		post(NewAdminEnrichmentHandler(EnrichmentAdminConfig{
+			Store:                   &mockEnrichmentAdminStore{},
+			FactProvider:            func() provider.LLMProvider { return capLLM },
+			FactSystemPromptDefault: func(_ context.Context) string { return "Extract facts as JSON." },
+		}))
+		if capLLM.gotMaxTokens != 8192 {
+			t.Errorf("MaxTokens = %d, want 8192 (default)", capLLM.gotMaxTokens)
+		}
+	})
 }
 
 func TestEnrichmentRootReturnsQueueStatus(t *testing.T) {

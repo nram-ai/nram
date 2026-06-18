@@ -131,10 +131,10 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 	}
 
 	systemPrompt := service.ResolveOrDefault(ctx, cd.settings, service.SettingDreamContradictionSystemPrompt, "global")
-	temperature := service.GetDefaultFloat(service.SettingEnrichmentConflictTemperature)
-	if cd.settings != nil {
-		temperature = cd.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentConflictTemperature, "global")
-	}
+	// Both resolvers are nil-safe and fall back to the registered default, so
+	// these are correct even when cd.settings is unset (as in some tests).
+	temperature := cd.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentConflictTemperature, "global")
+	maxTokens := cd.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentConflictMaxTokens, "global")
 	var conflicts []ConflictResult
 
 	for _, result := range results {
@@ -159,7 +159,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		user := service.RenderContradictionUser(memory.Content, candidate.Content)
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 			Messages:    provider.BuildMessages(systemPrompt, user),
-			MaxTokens:   256,
+			MaxTokens:   maxTokens,
 			Temperature: temperature,
 			JSONMode:    true,
 		})

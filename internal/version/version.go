@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the semantic version of nram. Bump it by hand on release.
-const Version = "0.5.2"
+const Version = "0.5.3"
 
 // BuildInfo describes the identity of a running binary.
 type BuildInfo struct {
