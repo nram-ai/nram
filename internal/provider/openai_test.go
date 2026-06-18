@@ -185,6 +185,47 @@ func TestOpenAIEmbed(t *testing.T) {
 	}
 }
 
+// TestOpenAIEmbedBaseURLWithVersionSuffix is a regression test for base-URL
+// double-stacking: a BaseURL that already ends in "/v1" must not produce a
+// "/v1/v1/embeddings" request. The constructor normalizes the version segment
+// away, so the outbound path is exactly "/v1/embeddings".
+func TestOpenAIEmbedBaseURLWithVersionSuffix(t *testing.T) {
+	var gotPath string
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"POST /v1/embeddings": func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			resp := openaiEmbeddingResponse{
+				Object: "list",
+				Data:   []openaiEmbeddingData{{Object: "embedding", Embedding: []float32{0.1, 0.2, 0.3}, Index: 0}},
+				Model:  "text-embedding-3-small",
+				Usage:  openaiUsage{PromptTokens: 5, TotalTokens: 5},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+
+	// Caller supplies a version-suffixed base URL (as a UI default or a pasted
+	// vendor URL once did).
+	p := NewOpenAIProvider(OpenAIConfig{
+		BaseURL:               srv.URL + "/v1",
+		APIKey:                "test-key",
+		DefaultEmbeddingModel: "text-embedding-3-small",
+	})
+
+	resp, err := p.Embed(context.Background(), &EmbeddingRequest{Input: []string{"Hello world"}})
+	if err != nil {
+		t.Fatalf("Embed() error: %v", err)
+	}
+	if len(resp.Embeddings) != 1 {
+		t.Fatalf("Embeddings length = %d, want 1", len(resp.Embeddings))
+	}
+	if gotPath != "/v1/embeddings" {
+		t.Errorf("request path = %q, want %q (double-stacking regression)", gotPath, "/v1/embeddings")
+	}
+}
+
 func TestOpenAIEmbedMultipleInputs(t *testing.T) {
 	srv := newTestServer(t, map[string]http.HandlerFunc{
 		"POST /v1/embeddings": func(w http.ResponseWriter, r *http.Request) {

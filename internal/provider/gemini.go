@@ -54,7 +54,7 @@ func NewGeminiProvider(config GeminiConfig) *GeminiProvider {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://generativelanguage.googleapis.com"
 	}
-	config.BaseURL = strings.TrimRight(config.BaseURL, "/")
+	config.BaseURL = NormalizeBaseURL(config.BaseURL)
 
 	if config.DefaultModel == "" {
 		config.DefaultModel = "gemini-2.0-flash"

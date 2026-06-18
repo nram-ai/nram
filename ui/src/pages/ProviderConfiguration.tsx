@@ -43,12 +43,13 @@ const PROVIDER_BADGE_COLORS: Record<string, string> = {
   custom: "bg-muted text-muted-foreground",
 };
 
+// Base URLs only; the backend appends each provider's versioned route path (e.g. /v1/...).
 const DEFAULT_URLS: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
+  openai: "https://api.openai.com",
   ollama: "http://localhost:11434",
-  gemini: "https://generativelanguage.googleapis.com/v1beta",
-  anthropic: "https://api.anthropic.com/v1",
-  openrouter: "https://openrouter.ai/api/v1",
+  gemini: "https://generativelanguage.googleapis.com",
+  anthropic: "https://api.anthropic.com",
+  openrouter: "https://openrouter.ai/api",
   custom: "",
 };
 
@@ -413,9 +414,12 @@ function ProviderSlotEditForm({
           type="text"
           value={form.url}
           onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
-          placeholder="https://..."
+          placeholder="https://api.example.com"
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Base URL only; the version path (e.g. /v1) is appended automatically.
+        </p>
       </div>
 
       {/* Model */}

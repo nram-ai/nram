@@ -306,6 +306,11 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 }
 
 func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string, cfg api.ProviderSlotConfig, opts api.UpdateProviderSlotOpts) (*api.UpdateProviderSlotResult, error) {
+	// Persist the base URL only; the provider appends its own versioned route
+	// path, so a version segment in the stored value would double-stack. This
+	// self-heals configs saved before the base-URL-only convention.
+	cfg.URL = provider.NormalizeBaseURL(cfg.URL)
+
 	// An embedding-model change routes through the destructive cascade.
 	// Same-model edits (URL, key, timeout) bypass it.
 	if slot == provider.SlotEmbedding {
@@ -539,7 +544,7 @@ func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string
 // Falls back to http://localhost:11434.
 func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
 	if override != "" {
-		return strings.TrimSuffix(strings.TrimSuffix(override, "/"), "/v1")
+		return provider.NormalizeBaseURL(override)
 	}
 
 	if s.deps.Registry != nil {
@@ -547,7 +552,7 @@ func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
 		for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
 			if strings.Contains(slot.Type, "ollama") || strings.Contains(slot.BaseURL, ":11434") {
 				if slot.BaseURL != "" {
-					return strings.TrimSuffix(strings.TrimSuffix(slot.BaseURL, "/"), "/v1")
+					return provider.NormalizeBaseURL(slot.BaseURL)
 				}
 			}
 		}

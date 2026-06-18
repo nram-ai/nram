@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -61,8 +60,7 @@ func NewOpenAIProvider(config OpenAIConfig) *OpenAIProvider {
 		timeout = 300 * time.Second
 	}
 
-	// Normalize BaseURL: strip trailing slash.
-	config.BaseURL = strings.TrimRight(config.BaseURL, "/")
+	config.BaseURL = NormalizeBaseURL(config.BaseURL)
 
 	return &OpenAIProvider{
 		config: config,

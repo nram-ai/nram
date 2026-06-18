@@ -4,8 +4,36 @@ package provider
 
 import (
 	"context"
+	"net/url"
+	"regexp"
 	"strings"
 )
+
+// versionSegment matches a single trailing API version path segment such as
+// "/v1", "/v1beta", "/v2", or "/v1alpha2". It is anchored to the end of the
+// path so only the last segment is considered.
+var versionSegment = regexp.MustCompile(`(?i)/v[0-9]+(?:alpha|beta)?[0-9]*$`)
+
+// NormalizeBaseURL canonicalizes a provider base URL so callers may supply
+// either a bare host (e.g. https://api.openai.com) or a vendor-documented URL
+// that already includes a version segment (e.g. https://api.openai.com/v1).
+// Each provider appends its own full versioned route path, so a version
+// segment carried in the base URL would double-stack (.../v1/v1/embeddings).
+//
+// It trims a trailing slash, then strips one trailing version segment from the
+// URL path. The host is never touched (a URL with no path is returned
+// unchanged) and a real non-version prefix is preserved
+// (https://openrouter.ai/api/v1 -> https://openrouter.ai/api). The function is
+// idempotent.
+func NormalizeBaseURL(raw string) string {
+	trimmed := strings.TrimRight(raw, "/")
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Path == "" {
+		return trimmed
+	}
+	u.Path = versionSegment.ReplaceAllString(u.Path, "")
+	return strings.TrimRight(u.String(), "/")
+}
 
 // Message represents a single message in a conversation with an LLM.
 type Message struct {

@@ -64,7 +64,7 @@ func NewAnthropicProvider(config AnthropicConfig) *AnthropicProvider {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.anthropic.com"
 	}
-	config.BaseURL = strings.TrimRight(config.BaseURL, "/")
+	config.BaseURL = NormalizeBaseURL(config.BaseURL)
 
 	if config.DefaultModel == "" {
 		config.DefaultModel = "claude-sonnet-4-20250514"
