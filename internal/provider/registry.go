@@ -27,13 +27,49 @@ const (
 
 // Provider type constants identify the backend provider implementation.
 const (
-	ProviderTypeOpenAI     = "openai"
-	ProviderTypeGemini     = "gemini"
-	ProviderTypeAnthropic  = "anthropic"
-	ProviderTypeOllama     = "ollama"
-	ProviderTypeOpenRouter = "openrouter"
-	ProviderTypeCustom     = "custom"
+	ProviderTypeOpenAI           = "openai"
+	ProviderTypeGemini           = "gemini"
+	ProviderTypeAnthropic        = "anthropic"
+	ProviderTypeOllama           = "ollama"
+	ProviderTypeOpenRouter       = "openrouter"
+	ProviderTypeOpenAICompatible = "openai-compatible"
+	ProviderTypeVLLM             = "vllm"
+	ProviderTypeSGLang           = "sglang"
+
+	// ProviderTypeCustomLegacy is the pre-0.5.4 name for the generic
+	// OpenAI-compatible passthrough. It is accepted on read and normalized to
+	// ProviderTypeOpenAICompatible (see NormalizeProviderType); current code
+	// never writes it. The name was renamed because "custom" read like an
+	// open-ended inference plugin rather than the plain OpenAI-compatible
+	// endpoint it always was.
+	ProviderTypeCustomLegacy = "custom"
 )
+
+// NormalizeProviderType maps deprecated type aliases to their canonical form.
+// "custom" (pre-0.5.4) becomes "openai-compatible"; every other value passes
+// through unchanged. Applied wherever a stored type is read so legacy configs
+// keep working without a destructive rewrite, while the boot-time migration
+// (see adminstore.MigrateProviderTypes) persists the rename.
+func NormalizeProviderType(t string) string {
+	if t == ProviderTypeCustomLegacy {
+		return ProviderTypeOpenAICompatible
+	}
+	return t
+}
+
+// isOpenAICompatibleType reports whether a (normalized) provider type is served
+// by the shared OpenAI-compatible adapter (NewOpenAIProvider). vLLM and SGLang
+// speak the same /v1 wire format as OpenAI/Ollama/OpenRouter and differ only in
+// the per-type request extensions applied in openai.go.
+func isOpenAICompatibleType(t string) bool {
+	switch t {
+	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter,
+		ProviderTypeOpenAICompatible, ProviderTypeVLLM, ProviderTypeSGLang:
+		return true
+	default:
+		return false
+	}
+}
 
 // SlotConfig represents the configuration for a single provider slot as stored
 // in settings.
@@ -57,6 +93,12 @@ type SlotConfig struct {
 	// anthropic-version) are reserved and cannot be overridden; all other
 	// headers, including auth, may be set or overridden here.
 	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+	// ExtraBody is merged verbatim onto the top level of every OpenAI-compatible
+	// request body (chat completions and embeddings), mirroring the OpenAI SDK's
+	// extra_body. User keys win, so a configured chat_template_kwargs overrides
+	// the enable_thinking=false default the vllm/sglang types set. Ignored by the
+	// Gemini and Anthropic adapters, whose bodies are not OpenAI-shaped.
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // RegistryConfig holds the configuration for all provider slots and the shared
@@ -580,18 +622,20 @@ func slotTimeout(seconds int) time.Duration {
 // createLLMProvider is a factory that creates the right LLMProvider based on
 // the slot configuration's Type field.
 func createLLMProvider(config SlotConfig) (LLMProvider, error) {
-	switch config.Type {
-	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter, ProviderTypeCustom:
+	ptype := NormalizeProviderType(config.Type)
+	switch {
+	case isOpenAICompatibleType(ptype):
 		return NewOpenAIProvider(OpenAIConfig{
 			BaseURL:       config.BaseURL,
 			APIKey:        config.APIKey,
 			DefaultModel:  config.Model,
 			Timeout:       slotTimeout(config.Timeout),
-			ProviderType:  config.Type,
+			ProviderType:  ptype,
 			CustomHeaders: config.CustomHeaders,
+			ExtraBody:     config.ExtraBody,
 		}), nil
 
-	case ProviderTypeGemini:
+	case ptype == ProviderTypeGemini:
 		return NewGeminiProvider(GeminiConfig{
 			APIKey:        config.APIKey,
 			DefaultModel:  config.Model,
@@ -600,7 +644,7 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 			CustomHeaders: config.CustomHeaders,
 		}), nil
 
-	case ProviderTypeAnthropic:
+	case ptype == ProviderTypeAnthropic:
 		return NewAnthropicProvider(AnthropicConfig{
 			APIKey:             config.APIKey,
 			DefaultModel:       config.Model,
@@ -620,18 +664,20 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 // based on the slot configuration's Type field. Anthropic does not support
 // embeddings, so requesting it returns an error.
 func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
-	switch config.Type {
-	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter, ProviderTypeCustom:
+	ptype := NormalizeProviderType(config.Type)
+	switch {
+	case isOpenAICompatibleType(ptype):
 		return NewOpenAIProvider(OpenAIConfig{
 			BaseURL:               config.BaseURL,
 			APIKey:                config.APIKey,
 			DefaultEmbeddingModel: config.Model,
 			Timeout:               slotTimeout(config.Timeout),
-			ProviderType:          config.Type,
+			ProviderType:          ptype,
 			CustomHeaders:         config.CustomHeaders,
+			ExtraBody:             config.ExtraBody,
 		}), nil
 
-	case ProviderTypeGemini:
+	case ptype == ProviderTypeGemini:
 		return NewGeminiProvider(GeminiConfig{
 			APIKey:                config.APIKey,
 			DefaultEmbeddingModel: config.Model,
@@ -640,7 +686,7 @@ func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 			CustomHeaders:         config.CustomHeaders,
 		}), nil
 
-	case ProviderTypeAnthropic:
+	case ptype == ProviderTypeAnthropic:
 		return nil, fmt.Errorf("anthropic does not support embeddings")
 
 	default:

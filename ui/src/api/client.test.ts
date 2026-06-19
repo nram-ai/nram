@@ -764,6 +764,24 @@ describe("API Client E2E", () => {
       expect(slot!.api_key_set).toBe(true);
       expect(slot!.custom_header_keys ?? []).toContain("X-Keep");
     });
+
+    it("round-trips extra_body verbatim on read", async () => {
+      await adminAPI.updateProviderSlot("ingestion_decision", {
+        type: "vllm",
+        url: "http://localhost:8000",
+        model: "Qwen/Qwen3-8B",
+        extra_body: { chat_template_kwargs: { enable_thinking: true } },
+      });
+
+      const slots = await adminAPI.getProviderSlots();
+      const slot = slots.find((s) => s.slot === "ingestion_decision");
+      expect(slot).toBeDefined();
+      expect(slot!.type).toBe("vllm");
+      // Unlike headers, extra_body is not secret and is returned verbatim.
+      expect(slot!.extra_body).toEqual({
+        chat_template_kwargs: { enable_thinking: true },
+      });
+    });
   });
 
   // -----------------------------------------------------------------------

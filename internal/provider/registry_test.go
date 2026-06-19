@@ -183,6 +183,53 @@ func TestRegistryInvalidProviderType(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderType(t *testing.T) {
+	cases := map[string]string{
+		"custom":            ProviderTypeOpenAICompatible,
+		"openai-compatible": ProviderTypeOpenAICompatible,
+		"openai":            ProviderTypeOpenAI,
+		"vllm":              ProviderTypeVLLM,
+		"sglang":            ProviderTypeSGLang,
+		"ollama":            ProviderTypeOllama,
+		"":                  "",
+	}
+	for in, want := range cases {
+		if got := NormalizeProviderType(in); got != want {
+			t.Errorf("NormalizeProviderType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The OpenAI-compatible family (including the legacy "custom" alias and the new
+// vllm/sglang types) must construct working providers through the shared
+// adapter. A legacy "custom" slot must not hit the unsupported-type error.
+func TestRegistryOpenAICompatibleFamily(t *testing.T) {
+	for _, ptype := range []string{
+		ProviderTypeCustomLegacy,
+		ProviderTypeOpenAICompatible,
+		ProviderTypeVLLM,
+		ProviderTypeSGLang,
+	} {
+		t.Run(ptype, func(t *testing.T) {
+			cfg := RegistryConfig{
+				Embedding: SlotConfig{Type: ptype, BaseURL: "http://localhost:9", Model: "m"},
+				Fact:      SlotConfig{Type: ptype, BaseURL: "http://localhost:9", Model: "m"},
+				Entity:    SlotConfig{Type: ptype, BaseURL: "http://localhost:9", Model: "m"},
+			}
+			reg, err := NewRegistry(cfg, nil, nil)
+			if err != nil {
+				t.Fatalf("NewRegistry(%q): %v", ptype, err)
+			}
+			if reg.GetEmbedding() == nil {
+				t.Errorf("%q: embedding provider not built", ptype)
+			}
+			if reg.GetFact() == nil {
+				t.Errorf("%q: fact provider not built", ptype)
+			}
+		})
+	}
+}
+
 func TestRegistryReload(t *testing.T) {
 	// Start with only embedding.
 	cfg1 := RegistryConfig{

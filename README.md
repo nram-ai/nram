@@ -68,7 +68,7 @@ nram is not another memory tool bolted onto one app. It is the layer underneath 
 
 **Access and multi-tenancy.** Authentication via JWT, per-user API keys, WebAuthn passkeys, and per-organization OIDC SSO. Full OAuth 2.0 (Authorization Code + PKCE, dynamic client registration, resource indicators, discovery metadata). Five RBAC roles across REST and MCP. Organizations, hierarchical namespaces, and projects for isolation, plus share tokens for granting scoped external access without an account.
 
-**Operability.** The Web Console, a React app, manages providers, settings, the graph, dreaming, the enrichment queue, and analytics. Run on SQLite (zero-config) or PostgreSQL, with SQLite-to-Postgres migration tooling. Provider-agnostic across OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, and any OpenAI-compatible endpoint, with per-call token accounting. Real-time updates over SSE, HMAC-signed webhooks, Prometheus metrics at `/metrics`, and JSON / NDJSON import/export.
+**Operability.** The Web Console, a React app, manages providers, settings, the graph, dreaming, the enrichment queue, and analytics. Run on SQLite (zero-config) or PostgreSQL, with SQLite-to-Postgres migration tooling. Provider-agnostic across OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter, vLLM, SGLang, and any OpenAI-compatible endpoint, with per-call token accounting. Real-time updates over SSE, HMAC-signed webhooks, Prometheus metrics at `/metrics`, and JSON / NDJSON import/export.
 
 A full feature-by-feature reference lives across the [docs](#reference).
 
@@ -166,7 +166,7 @@ Navigate to `http://localhost:8674`, create the initial admin account, and **sav
 
 ### 5. Configure an LLM provider (required)
 
-Open **Settings → Providers** and configure three slots: **Embedding** (semantic search), **Fact Extraction**, and **Entity Extraction** (the knowledge graph and dreaming). Any of OpenAI, Anthropic (chat slots only; it has no embeddings API), Google Gemini, Ollama, OpenRouter, or an OpenAI-compatible endpoint works. Changes hot-reload; no restart needed.
+Open **Settings → Providers** and configure three slots: **Embedding** (semantic search), **Fact Extraction**, and **Entity Extraction** (the knowledge graph and dreaming). Any of OpenAI, Anthropic (chat slots only; it has no embeddings API), Google Gemini, Ollama, OpenRouter, vLLM, SGLang, or an OpenAI-compatible endpoint works. The **vLLM** and **SGLang** types automatically send `chat_template_kwargs.enable_thinking=false` to suppress a Qwen3-style reasoning pass (the analog of `reasoning_effort:none` on Ollama); override it, or send any other OpenAI `extra_body`, via the slot's **Extra Body** field. Changes hot-reload; no restart needed.
 
 Each slot also accepts **Custom Headers**: arbitrary key/value HTTP headers sent on every request to that provider, for proxies or gateways between nram and the endpoint (auth tokens, routing, tenant ids). They are available for all provider types. `Content-Type` (and, for Anthropic, `anthropic-version`) are reserved; everything else, including auth headers, can be set or overridden. Because a header can carry auth, the API key is optional: a slot may authenticate through a header alone. Header names are shown in the console; their values are write-only and never returned.
 

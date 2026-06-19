@@ -27,8 +27,32 @@ const PROVIDER_TYPES = [
   "gemini",
   "anthropic",
   "openrouter",
-  "custom",
+  "openai-compatible",
+  "vllm",
+  "sglang",
 ] as const;
+
+// Human-facing labels for the type dropdown and badge. The raw type strings
+// don't title-case cleanly (e.g. "openai" -> "Openai", "openrouter" ->
+// "Openrouter"), so brands are spelled out here; anything missing falls back to
+// a plain capitalize.
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  openai: "OpenAI",
+  ollama: "Ollama",
+  gemini: "Gemini",
+  anthropic: "Anthropic",
+  openrouter: "OpenRouter",
+  "openai-compatible": "OpenAI-Compatible",
+  vllm: "vLLM",
+  sglang: "SGLang",
+};
+
+function providerDisplayName(type: string): string {
+  return (
+    PROVIDER_DISPLAY_NAMES[type] ||
+    (type ? type.charAt(0).toUpperCase() + type.slice(1) : type)
+  );
+}
 
 const PROVIDER_BADGE_COLORS: Record<string, string> = {
   openai:
@@ -40,8 +64,15 @@ const PROVIDER_BADGE_COLORS: Record<string, string> = {
     "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
   openrouter:
     "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-300",
-  custom: "bg-muted text-muted-foreground",
+  vllm:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300",
+  sglang:
+    "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-300",
 };
+
+// Neutral badge for any type without a dedicated color above (e.g.
+// openai-compatible).
+const DEFAULT_BADGE_COLOR = "bg-muted text-muted-foreground";
 
 // Base URLs only; the backend appends each provider's versioned route path (e.g. /v1/...).
 const DEFAULT_URLS: Record<string, string> = {
@@ -50,10 +81,18 @@ const DEFAULT_URLS: Record<string, string> = {
   gemini: "https://generativelanguage.googleapis.com",
   anthropic: "https://api.anthropic.com",
   openrouter: "https://openrouter.ai/api",
-  custom: "",
+  "openai-compatible": "",
+  vllm: "http://localhost:8000",
+  sglang: "http://localhost:30000",
 };
 
 const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"]);
+
+// Gemini and Anthropic use non-OpenAI request bodies, so extra_body does not
+// apply to them; every other provider type is served by the OpenAI-compatible
+// adapter and accepts it. Expressed as the exclusion so new compatible types
+// (the common case) need no edit here.
+const NON_OPENAI_BODY_TYPES = new Set(["gemini", "anthropic"]);
 
 // Model suggestions per provider type, keyed by slot name.
 const MODEL_HINTS: Record<string, Record<string, string>> = {
@@ -81,6 +120,21 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     embedding: "e.g. openai/text-embedding-3-small",
     fact: "e.g. anthropic/claude-sonnet-4-6",
     entity: "e.g. anthropic/claude-haiku-4-5",
+  },
+  vllm: {
+    embedding: "the model id served by vLLM, e.g. Qwen/Qwen3-Embedding-0.6B",
+    fact: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+    entity: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+  },
+  sglang: {
+    embedding: "the model id served by SGLang, e.g. Qwen/Qwen3-Embedding-0.6B",
+    fact: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+    entity: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+  },
+  "openai-compatible": {
+    embedding: "the model id exposed by your endpoint",
+    fact: "the model id exposed by your endpoint",
+    entity: "the model id exposed by your endpoint",
   },
 };
 
@@ -408,6 +462,30 @@ interface EditFormState {
   // seeded with a blank value (their stored value is masked); a blank value on
   // save tells the backend to keep the stored one.
   custom_headers: HeaderRow[];
+  // Raw JSON text for the slot's extra_body (merged onto every OpenAI-compatible
+  // request body). Stored as text so an in-progress/invalid edit is preserved
+  // and validated on save; blank means "no extra_body".
+  extra_body: string;
+}
+
+// parseExtraBody validates the Extra Body textarea. Blank is valid (no body).
+// Otherwise it must parse to a plain JSON object; arrays, primitives, and
+// syntax errors are rejected so the backend never stores a non-object.
+function parseExtraBody(text: string): { value?: Record<string, unknown>; error?: string } {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { error: "Not valid JSON." };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: "Must be a JSON object, e.g. {\"chat_template_kwargs\": {\"enable_thinking\": false}}." };
+  }
+  return { value: parsed as Record<string, unknown> };
 }
 
 // headerRowsToRecord drops rows with a blank name and collapses the rest into a
@@ -453,6 +531,11 @@ function ProviderSlotEditForm({
   // which means "keep the stored key" (preserve-on-blank).
   const [clearApiKey, setClearApiKey] = useState(false);
   const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
+
+  // Validate the Extra Body JSON live so an invalid edit blocks Save with an
+  // inline message rather than failing on the server.
+  const extraBodyParse = parseExtraBody(form.extra_body);
+  const extraBodyError = extraBodyParse.error;
 
   // Header names that already existed when editing began; used to render the
   // "leave blank to keep" placeholder on their (masked) value inputs. Reuses
@@ -501,6 +584,11 @@ function ProviderSlotEditForm({
     }
     // Always send the header set so removals take effect. Empty map clears all.
     req.custom_headers = headerRowsToRecord(form.custom_headers);
+    // Send extra_body only when it parses to a non-empty object; a blank field
+    // omits the key, which clears any previously stored value on the backend.
+    if (extraBodyParse.value && Object.keys(extraBodyParse.value).length > 0) {
+      req.extra_body = extraBodyParse.value;
+    }
     onSave(req);
   };
 
@@ -519,7 +607,7 @@ function ProviderSlotEditForm({
           <option value="">Select a provider...</option>
           {PROVIDER_TYPES.map((t) => (
             <option key={t} value={t}>
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+              {providerDisplayName(t)}
             </option>
           ))}
         </select>
@@ -664,6 +752,34 @@ function ProviderSlotEditForm({
         onChange={(rows) => setForm((p) => ({ ...p, custom_headers: rows }))}
       />
 
+      {/* Extra Body (OpenAI-compatible adapter only) */}
+      {form.type !== "" && !NON_OPENAI_BODY_TYPES.has(form.type) && (
+        <div>
+          <label className="mb-1 block text-sm font-medium text-foreground">
+            Extra Body (JSON)
+          </label>
+          <textarea
+            value={form.extra_body}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, extra_body: e.target.value }))
+            }
+            placeholder={'{"chat_template_kwargs": {"enable_thinking": false}}'}
+            rows={4}
+            spellCheck={false}
+            className={`w-full rounded-md border bg-background px-3 py-2 font-mono text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-ring ${
+              extraBodyError ? "border-destructive" : "border-input"
+            }`}
+          />
+          {extraBodyError ? (
+            <p className="mt-1 text-xs text-destructive">{extraBodyError}</p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Merged onto every request body (OpenAI <code className="rounded bg-muted px-1 py-0.5">extra_body</code>). vLLM and SGLang already send <code className="rounded bg-muted px-1 py-0.5">chat_template_kwargs.enable_thinking=false</code> by default; set it here to override, or add other params.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Actions: replaced in-place by the destructive-action confirmation
           when the server gates an embedding-model swap on confirm_invalidate.
           Rendering it here (rather than at the top of the card) keeps the
@@ -721,7 +837,7 @@ function ProviderSlotEditForm({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!form.type || !form.url || !form.model || saving}
+            disabled={!form.type || !form.url || !form.model || !!extraBodyError || saving}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? (
@@ -769,7 +885,7 @@ function ProviderSlotCard({
   const description = slot.description || "";
   const isEmbedding = slot.slot === "embedding";
   const badgeCls =
-    PROVIDER_BADGE_COLORS[slot.type] || PROVIDER_BADGE_COLORS.custom;
+    PROVIDER_BADGE_COLORS[slot.type] || DEFAULT_BADGE_COLOR;
   const showModelMax =
     slot.context_window != null &&
     slot.context_window > 0 &&
@@ -864,6 +980,11 @@ function ProviderSlotCard({
     // Seed pre-existing headers with blank values (their stored values are
     // masked); a blank value on save preserves the stored one.
     custom_headers: (slot.custom_header_keys ?? []).map((key) => ({ key, value: "" })),
+    // extra_body values are not secret, so they round-trip; pretty-print for edit.
+    extra_body:
+      slot.extra_body && Object.keys(slot.extra_body).length > 0
+        ? JSON.stringify(slot.extra_body, null, 2)
+        : "",
   };
 
   return (
@@ -885,7 +1006,7 @@ function ProviderSlotCard({
           <span
             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeCls}`}
           >
-            {slot.type}
+            {providerDisplayName(slot.type)}
           </span>
         )}
       </div>

@@ -332,6 +332,16 @@ func main() {
 	// sink nil and the recording sites no-op.
 	promMetrics := metrics.New()
 
+	// Normalize legacy provider type values (pre-0.5.4 "custom" ->
+	// "openai-compatible") in the settings table before loading the registry so
+	// the persisted rows match the canonical names the UI now sends. Idempotent;
+	// a failure is non-fatal because the read path also normalizes on the fly.
+	if n, mErr := adminstore.MigrateProviderTypes(context.Background(), settingsRepo); mErr != nil {
+		slog.Warn("boot: provider type migration failed", "err", mErr)
+	} else if n > 0 {
+		slog.Info("boot: migrated legacy provider types", "slots", n)
+	}
+
 	regCfg := adminstore.LoadProviderRegistryConfig(context.Background(), settingsRepo)
 	registry, err := provider.NewRegistry(regCfg, tokenUsageRepo, namespaceRepo)
 	if err != nil {

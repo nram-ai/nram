@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.5.3
+  version: 0.5.4
   license:
     name: MIT
 
@@ -5660,6 +5660,12 @@ components:
             Values are never returned because they may carry secrets.
           items:
             type: string
+        extra_body:
+          type: object
+          description: >-
+            The slot's configured extra_body, returned verbatim (values are not
+            secret, unlike custom headers, so the UI can render and re-edit them).
+          additionalProperties: true
 
     ProviderTestRequest:
       type: object
@@ -5677,6 +5683,13 @@ components:
       properties:
         type:
           type: string
+          description: >-
+            Provider type. One of openai, ollama, gemini, anthropic, openrouter,
+            openai-compatible, vllm, sglang. openai/ollama/openrouter/
+            openai-compatible/vllm/sglang share the OpenAI-compatible adapter;
+            vllm and sglang additionally send chat_template_kwargs.enable_thinking
+            =false. The legacy value "custom" is accepted and normalized to
+            openai-compatible.
         url:
           type: string
         api_key:
@@ -5704,6 +5717,17 @@ components:
             cannot be overridden.
           additionalProperties:
             type: string
+        extra_body:
+          type: object
+          description: >-
+            Merged onto the top level of every OpenAI-compatible request body
+            (chat completions and embeddings), mirroring the OpenAI SDK's
+            extra_body. Primary use is chat_template_kwargs:{enable_thinking:false}
+            on a self-hosted vLLM/SGLang slot, but any key is allowed; user keys
+            override anything the provider type set. On update the map is the new
+            full set (omitted keys are removed). Ignored by the Gemini and
+            Anthropic adapters.
+          additionalProperties: true
         clear_api_key:
           type: boolean
           description: >-

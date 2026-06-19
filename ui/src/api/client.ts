@@ -853,6 +853,12 @@ export interface ProviderSlot {
    * are never returned because they may carry secrets (e.g. a proxy token).
    */
   custom_header_keys?: string[];
+  /**
+   * The slot's configured extra_body, returned verbatim. Unlike custom headers
+   * these values are not secret (e.g. chat_template_kwargs), so the UI renders
+   * and re-edits them.
+   */
+  extra_body?: Record<string, unknown> | null;
 }
 
 export interface UpdateProviderSlotRequest {
@@ -868,6 +874,12 @@ export interface UpdateProviderSlotRequest {
    * stored value, so masked headers survive a re-save.
    */
   custom_headers?: Record<string, string>;
+  /**
+   * Merged onto the top level of every OpenAI-compatible request body (chat and
+   * embeddings), mirroring the OpenAI SDK's extra_body. The map is the new full
+   * set; omitting it clears any stored value. Ignored for Gemini/Anthropic.
+   */
+  extra_body?: Record<string, unknown>;
   /**
    * Request-only flag: when true, the stored api_key is cleared instead of
    * preserved-on-blank (e.g. switching a slot to header-only auth).

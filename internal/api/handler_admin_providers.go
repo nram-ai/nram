@@ -102,6 +102,10 @@ type ProviderSlotStatus struct {
 	// (e.g. a fronting proxy's auth token); the UI shows the names so the user
 	// can see which headers exist and re-edit them.
 	CustomHeaderKeys []string `json:"custom_header_keys,omitempty"`
+	// ExtraBody echoes the slot's configured extra_body verbatim. Unlike custom
+	// headers, these values are not secret (e.g. chat_template_kwargs), so the
+	// full map is returned so the UI can render and re-edit it.
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.
@@ -127,6 +131,13 @@ type ProviderSlotConfig struct {
 	// full set (omitted names are removed); a header whose value is blank keeps
 	// its previously stored value (so masked headers survive a re-save).
 	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+	// ExtraBody is merged onto the top level of every OpenAI-compatible request
+	// body (chat completions and embeddings), mirroring the OpenAI SDK's
+	// extra_body. The primary use is chat_template_kwargs:{enable_thinking:false}
+	// on a self-hosted vLLM/SGLang slot, but any key is allowed. On update the
+	// map is the new full set (omitted keys are removed); values are not secret
+	// and are returned verbatim on read.
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // ProviderTestResult is the response body for POST /providers/test.

@@ -567,3 +567,168 @@ func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 		t.Errorf("OpenAI provider must not send Ollama extension \"reasoning_effort\"; body had it")
 	}
 }
+
+// chatCaptureServer returns a test server whose chat-completions handler decodes
+// the request body into *dst and replies with a minimal valid completion.
+func chatCaptureServer(t *testing.T, dst *map[string]any) *httptest.Server {
+	t.Helper()
+	return newTestServer(t, map[string]http.HandlerFunc{
+		"POST /v1/chat/completions": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(dst)
+			resp := openaiChatResponse{
+				Model: "qwen3",
+				Choices: []openaiChatChoice{{
+					Message:      openaiChatMessage{Role: "assistant", Content: "[]"},
+					FinishReason: "stop",
+				}},
+				Usage: openaiUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+}
+
+// nestedBool reads body[outer][inner] as a bool, reporting whether the path
+// existed and decoded to a bool. JSON objects decode to map[string]any.
+func nestedBool(body map[string]any, outer, inner string) (val, ok bool) {
+	m, isMap := body[outer].(map[string]any)
+	if !isMap {
+		return false, false
+	}
+	b, isBool := m[inner].(bool)
+	return b, isBool
+}
+
+// vLLM and SGLang disable a Qwen3 thinking pass via top-level
+// chat_template_kwargs:{enable_thinking:false} (reasoning_effort is ignored by
+// those engines). This is the analog of the Ollama gating above.
+func TestOpenAIComplete_ChatTemplateKwargsGated(t *testing.T) {
+	for _, ptype := range []string{ProviderTypeVLLM, ProviderTypeSGLang} {
+		t.Run(ptype, func(t *testing.T) {
+			var got map[string]any
+			srv := chatCaptureServer(t, &got)
+			defer srv.Close()
+
+			p := NewOpenAIProvider(OpenAIConfig{
+				BaseURL:      srv.URL,
+				DefaultModel: "qwen3",
+				ProviderType: ptype,
+				Timeout:      5 * time.Second,
+			})
+			if _, err := p.Complete(context.Background(), &CompletionRequest{
+				Messages: []Message{{Role: "user", Content: "ping"}},
+			}); err != nil {
+				t.Fatalf("complete: %v", err)
+			}
+
+			if v, ok := nestedBool(got, "chat_template_kwargs", "enable_thinking"); !ok {
+				t.Errorf("%s: expected chat_template_kwargs.enable_thinking in body, got %v", ptype, got["chat_template_kwargs"])
+			} else if v {
+				t.Errorf("%s: enable_thinking = true, want false", ptype)
+			}
+			if _, present := got["reasoning_effort"]; present {
+				t.Errorf("%s: must not send Ollama-only reasoning_effort", ptype)
+			}
+		})
+	}
+}
+
+// Strict OpenAI (and any non-vllm/sglang type) must not send the
+// chat_template_kwargs extension, which those endpoints would reject.
+func TestOpenAIComplete_ChatTemplateKwargsNotSentForOpenAI(t *testing.T) {
+	var got map[string]any
+	srv := chatCaptureServer(t, &got)
+	defer srv.Close()
+
+	p := NewOpenAIProvider(OpenAIConfig{
+		BaseURL:      srv.URL,
+		DefaultModel: "gpt-4o-mini",
+		ProviderType: ProviderTypeOpenAI,
+		Timeout:      5 * time.Second,
+	})
+	if _, err := p.Complete(context.Background(), &CompletionRequest{
+		Messages: []Message{{Role: "user", Content: "ping"}},
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, present := got["chat_template_kwargs"]; present {
+		t.Errorf("OpenAI provider must not send chat_template_kwargs; body had it")
+	}
+}
+
+// A user-configured extra_body merges onto the top level of the request and its
+// keys win, so a chat_template_kwargs override replaces the vllm/sglang default
+// and arbitrary extra params (here a sampling field) reach the wire.
+func TestOpenAIComplete_ExtraBodyOverlay(t *testing.T) {
+	var got map[string]any
+	srv := chatCaptureServer(t, &got)
+	defer srv.Close()
+
+	p := NewOpenAIProvider(OpenAIConfig{
+		BaseURL:      srv.URL,
+		DefaultModel: "qwen3",
+		ProviderType: ProviderTypeVLLM,
+		Timeout:      5 * time.Second,
+		ExtraBody: map[string]any{
+			"chat_template_kwargs": map[string]any{"enable_thinking": true},
+			"top_k":                20,
+		},
+	})
+	if _, err := p.Complete(context.Background(), &CompletionRequest{
+		Messages: []Message{{Role: "user", Content: "ping"}},
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	// User override wins over the vllm enable_thinking=false default.
+	if v, ok := nestedBool(got, "chat_template_kwargs", "enable_thinking"); !ok || !v {
+		t.Errorf("extra_body chat_template_kwargs must override default; got %v", got["chat_template_kwargs"])
+	}
+	// Arbitrary extra key reaches the body.
+	if got["top_k"] != float64(20) {
+		t.Errorf("extra_body top_k = %v, want 20", got["top_k"])
+	}
+	// nram-set fields survive the merge.
+	if got["model"] != "qwen3" {
+		t.Errorf("merge dropped model field; got %v", got["model"])
+	}
+	if _, ok := got["stream"]; !ok {
+		t.Errorf("merge dropped stream field")
+	}
+}
+
+// extra_body also applies on the embeddings path (doRequest is shared).
+func TestOpenAIEmbed_ExtraBodyOverlay(t *testing.T) {
+	var got map[string]any
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"POST /v1/embeddings": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			resp := openaiEmbeddingResponse{
+				Data:  []openaiEmbeddingData{{Object: "embedding", Embedding: []float32{0.1}, Index: 0}},
+				Model: "embed",
+				Usage: openaiUsage{PromptTokens: 1, TotalTokens: 1},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		},
+	})
+	defer srv.Close()
+
+	p := NewOpenAIProvider(OpenAIConfig{
+		BaseURL:               srv.URL,
+		DefaultEmbeddingModel: "embed",
+		ProviderType:          ProviderTypeOpenAICompatible,
+		Timeout:               5 * time.Second,
+		ExtraBody:             map[string]any{"truncate_prompt_tokens": 512},
+	})
+	if _, err := p.Embed(context.Background(), &EmbeddingRequest{Input: []string{"hi"}}); err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if got["truncate_prompt_tokens"] != float64(512) {
+		t.Errorf("extra_body not applied to embeddings; got %v", got["truncate_prompt_tokens"])
+	}
+	if got["model"] != "embed" {
+		t.Errorf("merge dropped model field on embeddings; got %v", got["model"])
+	}
+}

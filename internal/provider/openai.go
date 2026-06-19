@@ -31,20 +31,27 @@ type OpenAIConfig struct {
 	Timeout time.Duration
 
 	// ProviderType is the canonical type from registry.go ("openai", "ollama",
-	// "openrouter", "custom"). Gates provider-specific request extensions
-	// (reasoning_effort for Ollama, the reasoning field for OpenRouter) so they
-	// do not leak to strict OpenAI endpoints that reject unknown fields. Empty =
-	// treat as standard OpenAI-compatible (extensions omitted).
+	// "openrouter", "openai-compatible", "vllm", "sglang"). Gates provider-specific
+	// request extensions (reasoning_effort for Ollama, the reasoning field for
+	// OpenRouter, chat_template_kwargs.enable_thinking=false for vLLM/SGLang) so
+	// they do not leak to strict OpenAI endpoints that reject unknown fields.
+	// Empty = treat as standard OpenAI-compatible (extensions omitted).
 	ProviderType string
 
 	// CustomHeaders are user-configured headers applied to every outbound
 	// request (overriding built-ins except Content-Type). Intended for proxies.
 	CustomHeaders map[string]string
+
+	// ExtraBody is merged onto the top level of every request body (chat and
+	// embeddings) just before it is sent, mirroring the OpenAI SDK's extra_body.
+	// Its keys win over anything nram set, so a user-supplied chat_template_kwargs
+	// replaces the vllm/sglang enable_thinking default. Empty = nothing merged.
+	ExtraBody map[string]any
 }
 
 // OpenAIProvider implements both LLMProvider and EmbeddingProvider using any
 // OpenAI-compatible HTTP API. By changing BaseURL it works with OpenAI, Ollama,
-// OpenRouter, vLLM, LiteLLM, Azure, and any other compatible endpoint.
+// OpenRouter, vLLM, SGLang, LiteLLM, Azure, and any other compatible endpoint.
 type OpenAIProvider struct {
 	config OpenAIConfig
 	client *http.Client
@@ -122,6 +129,14 @@ type openaiChatRequest struct {
 	// ProviderTypeOpenRouter. Models that mandate reasoning reject it (rare; not
 	// used for extraction/decision tasks).
 	Reasoning *openrouterReasoning `json:"reasoning,omitempty"`
+	// ChatTemplateKwargs is passed verbatim into the serving engine's chat
+	// template. On vLLM and SGLang the documented way to suppress a Qwen3-style
+	// thinking pass is {"enable_thinking": false} here (reasoning_effort is
+	// ignored by those engines; chat_template_kwargs.enable_thinking is honored,
+	// verified against vLLM/SGLang docs). Gated by ProviderTypeVLLM/SGLang and
+	// the analog of reasoning_effort:none on Ollama. A user extra_body
+	// chat_template_kwargs overrides this at marshal time (see doRequest).
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 // openrouterReasoning is the body of OpenRouter's `reasoning` request field.
@@ -230,6 +245,14 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		// Force reasoning off for the same reason; OpenRouter's unified `reasoning`
 		// field disables it across the models that support toggling.
 		body.Reasoning = &openrouterReasoning{Enabled: false}
+	}
+	if p.config.ProviderType == ProviderTypeVLLM || p.config.ProviderType == ProviderTypeSGLang {
+		// vLLM and SGLang ignore reasoning_effort; on their OpenAI-compatible
+		// endpoints the documented knob to disable a Qwen3 thinking pass is the
+		// chat-template kwarg enable_thinking=false. This is the analog of
+		// reasoning_effort:none on Ollama. A user-supplied extra_body
+		// chat_template_kwargs replaces this whole map at marshal time.
+		body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
 	}
 
 	var chatResp openaiChatResponse
@@ -357,12 +380,42 @@ func (p *OpenAIProvider) setHeaders(req *http.Request) {
 	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type")
 }
 
+// mergeExtraBody overlays user-configured extra_body keys onto an
+// already-marshaled request body at the top level, mirroring how the OpenAI SDK
+// merges extra_body into the request JSON. User keys win, so a configured
+// chat_template_kwargs replaces the vllm/sglang enable_thinking default. The
+// base is re-parsed into a key->raw map so values nram already encoded (messages,
+// stream, etc.) are preserved untouched.
+func mergeExtraBody(base []byte, extra map[string]any) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(base, &m); err != nil {
+		return nil, fmt.Errorf("unmarshal base body: %w", err)
+	}
+	if m == nil {
+		m = make(map[string]json.RawMessage, len(extra))
+	}
+	for k, v := range extra {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("marshal extra_body[%q]: %w", k, err)
+		}
+		m[k] = raw
+	}
+	return json.Marshal(m)
+}
+
 // doRequest marshals the request body, sends it to the given path, and
 // unmarshals the response into dest. Non-2xx responses are parsed as errors.
 func (p *OpenAIProvider) doRequest(ctx context.Context, method, path string, body any, dest any) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+	if len(p.config.ExtraBody) > 0 {
+		jsonBody, err = mergeExtraBody(jsonBody, p.config.ExtraBody)
+		if err != nil {
+			return fmt.Errorf("failed to apply extra_body: %w", err)
+		}
 	}
 
 	url := p.config.BaseURL + path

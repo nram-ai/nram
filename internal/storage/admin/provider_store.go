@@ -164,6 +164,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		Status:           status,
 		APIKeySet:        persisted.APIKey != "",
 		CustomHeaderKeys: sortedHeaderKeys(persisted.CustomHeaders),
+		ExtraBody:        persisted.ExtraBody,
 	}
 }
 
@@ -198,8 +199,8 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 		return 0, 0
 	}
 	// Skip providers that don't expose context_length via API; avoids the
-	// per-render cache lookup and write for OpenAI / Anthropic / Gemini /
-	// Custom slots.
+	// per-render cache lookup and write for OpenAI / Anthropic / Gemini and the
+	// rest of the OpenAI-compatible family (openai-compatible / vLLM / SGLang).
 	if slot.Type != provider.ProviderTypeOllama && slot.Type != provider.ProviderTypeOpenRouter {
 		return 0, 0
 	}
@@ -262,6 +263,7 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		APIKey:        req.Config.APIKey,
 		Model:         req.Config.Model,
 		CustomHeaders: req.Config.CustomHeaders,
+		ExtraBody:     req.Config.ExtraBody,
 	}
 	if req.Config.Timeout != nil {
 		slotCfg.Timeout = *req.Config.Timeout
@@ -404,6 +406,10 @@ func (s *ProviderAdminStore) loadPersistedSlot(ctx context.Context, slot string)
 	if err := json.Unmarshal(setting.Value, &cfg); err != nil {
 		return nil
 	}
+	// Normalize legacy type aliases (e.g. "custom" -> "openai-compatible") so the
+	// status display, secret-merge, and update comparison all see the canonical
+	// value even before the boot-time migration has rewritten the stored row.
+	cfg.Type = provider.NormalizeProviderType(cfg.Type)
 	return &cfg
 }
 
@@ -542,13 +548,14 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			continue
 		}
 		sc := provider.SlotConfig{
-			Type:               apiCfg.Type,
+			Type:               provider.NormalizeProviderType(apiCfg.Type),
 			BaseURL:            apiCfg.URL,
 			APIKey:             apiCfg.APIKey,
 			Model:              apiCfg.Model,
 			PromptCacheEnabled: promptCache,
 			JSONModeToolUse:    anthropicJSONToolUse,
 			CustomHeaders:      apiCfg.CustomHeaders,
+			ExtraBody:          apiCfg.ExtraBody,
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout
@@ -556,6 +563,44 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 		cfg.SetSlotConfig(def.Name, sc)
 	}
 	return cfg
+}
+
+// MigrateProviderTypes rewrites any provider slot whose stored type is the
+// pre-0.5.4 alias "custom" to its canonical "openai-compatible" value,
+// persisting the change. Idempotent and safe to run on every boot: slots that
+// are already canonical (or unset) are left untouched. Returns the number of
+// slots rewritten. Read/decoded errors on a single slot are skipped so one bad
+// row cannot block the others.
+func MigrateProviderTypes(ctx context.Context, settingsRepo *storage.SettingsRepo) (int, error) {
+	migrated := 0
+	for _, def := range provider.Slots {
+		setting, err := settingsRepo.Get(ctx, def.SettingKey(), "global")
+		if err != nil || setting == nil {
+			continue
+		}
+		var apiCfg api.ProviderSlotConfig
+		if err := json.Unmarshal(setting.Value, &apiCfg); err != nil {
+			continue
+		}
+		canonical := provider.NormalizeProviderType(apiCfg.Type)
+		if canonical == apiCfg.Type {
+			continue // already canonical (or empty/unconfigured)
+		}
+		apiCfg.Type = canonical
+		value, err := json.Marshal(apiCfg)
+		if err != nil {
+			return migrated, fmt.Errorf("marshal migrated slot %q: %w", def.Name, err)
+		}
+		if err := settingsRepo.Set(ctx, &model.Setting{
+			Key:   def.SettingKey(),
+			Value: json.RawMessage(value),
+			Scope: "global",
+		}); err != nil {
+			return migrated, fmt.Errorf("persist migrated slot %q: %w", def.Name, err)
+		}
+		migrated++
+	}
+	return migrated, nil
 }
 
 // providerSettingBool resolves a boolean-typed global setting from the repo,

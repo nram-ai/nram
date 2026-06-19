@@ -360,6 +360,78 @@ func TestGetProviderConfigExposesHeaderKeysAndAPIKeySet(t *testing.T) {
 	}
 }
 
+func TestMigrateProviderTypesRewritesCustom(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	// Seed a slot with the legacy "custom" type (UpdateProviderSlot persists the
+	// type verbatim; normalization happens on read/migrate).
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "custom", URL: "http://localhost:8000", Model: "m",
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+	if got := readStoredSlot(t, settingsRepo, "fact").Type; got != "custom" {
+		t.Fatalf("seed stored type = %q, want custom", got)
+	}
+
+	n, err := MigrateProviderTypes(ctx, settingsRepo)
+	if err != nil {
+		t.Fatalf("MigrateProviderTypes: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("migrated count = %d, want 1", n)
+	}
+	if got := readStoredSlot(t, settingsRepo, "fact").Type; got != provider.ProviderTypeOpenAICompatible {
+		t.Errorf("stored type = %q, want %q", got, provider.ProviderTypeOpenAICompatible)
+	}
+
+	// Idempotent: a second run rewrites nothing.
+	if n2, err := MigrateProviderTypes(ctx, settingsRepo); err != nil {
+		t.Fatalf("MigrateProviderTypes (2nd): %v", err)
+	} else if n2 != 0 {
+		t.Errorf("second migrate count = %d, want 0", n2)
+	}
+}
+
+func TestUpdateProviderSlotRoundTripsExtraBody(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+		Type: "vllm", URL: "http://localhost:8000", Model: "Qwen/Qwen3-8B",
+		ExtraBody: map[string]any{"chat_template_kwargs": map[string]any{"enable_thinking": true}},
+	}, api.UpdateProviderSlotOpts{}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// Persisted verbatim.
+	stored := readStoredSlot(t, settingsRepo, "fact").ExtraBody
+	ctk, ok := stored["chat_template_kwargs"].(map[string]any)
+	if !ok || ctk["enable_thinking"] != true {
+		t.Errorf("stored extra_body = %v, want chat_template_kwargs.enable_thinking=true", stored)
+	}
+
+	// Returned on the read path (not secret, unlike headers).
+	resp, err := store.GetProviderConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetProviderConfig: %v", err)
+	}
+	var fact *api.ProviderSlotStatus
+	for i := range resp {
+		if resp[i].Slot == "fact" {
+			fact = &resp[i]
+		}
+	}
+	if fact == nil || fact.ExtraBody == nil {
+		t.Fatalf("fact slot missing extra_body in status: %+v", fact)
+	}
+}
+
 func TestGetRegistryConfig(t *testing.T) {
 	cfg := provider.RegistryConfig{
 		Embedding: provider.SlotConfig{
