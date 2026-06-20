@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.5.4
+  version: 0.6.0
   license:
     name: MIT
 
@@ -5838,11 +5838,13 @@ components:
         - "dreaming.synthesis.temperature"
         - "dreaming.synthesis_system_prompt"
         - "dreaming.transitive.budget_fraction"
+        - "dreaming.transitive.max_fanout"
         - "dreaming.transitive.max_per_cycle"
         - "dreaming.transitive.min_weight"
         - "dreaming.transitive.namespace_hard_cap"
         - "dreaming.transitive.namespace_high_water"
         - "dreaming.transitive.namespace_low_water"
+        - "dreaming.transitive.relations"
         - "dreaming.weight.ceiling"
         - "dreaming.weight.dead_source_multiplier"
         - "dreaming.weight.decay_factor"

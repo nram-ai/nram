@@ -148,6 +148,12 @@ func (s *staticDreamSettings) ResolveIntWithDefault(ctx context.Context, key, sc
 	}
 	return service.GetDefaultInt(key)
 }
+func (s *staticDreamSettings) ResolveStringWithDefault(_ context.Context, key, _ string) string {
+	if v, ok := s.values[key]; ok && v != "" {
+		return v
+	}
+	return service.GetDefaultString(key)
+}
 func (s *staticDreamSettings) ResolveFloatWithDefault(ctx context.Context, key, scope string) float64 {
 	if v, ok := s.floats[key]; ok {
 		return v

@@ -87,6 +87,9 @@ func (stubSettings) ResolveIntWithDefault(_ context.Context, key, _ string) int 
 func (stubSettings) ResolveFloatWithDefault(_ context.Context, _, _ string) float64 {
 	return 0
 }
+func (stubSettings) ResolveStringWithDefault(_ context.Context, _, _ string) string {
+	return ""
+}
 func (stubSettings) ResolveDurationSecondsWithDefault(_ context.Context, _, _ string) time.Duration {
 	return 0
 }

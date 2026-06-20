@@ -519,6 +519,17 @@ const (
 	SettingDreamTransitiveNamespaceHighWater = "dreaming.transitive.namespace_high_water"
 	SettingDreamTransitiveNamespaceLowWater  = "dreaming.transitive.namespace_low_water"
 
+	// Transitive semantic gates. A relation is only chained (A→B, B→C ⇒ A→C)
+	// when BOTH hops carry the SAME relation and that relation is listed in
+	// relations (a JSON array of canonical labels). This stops the two ways
+	// inference used to pollute the graph: copying the first hop's label onto
+	// an unrelated second hop, and treating non-transitive relations (e.g.
+	// "wife of") as transitive. max_fanout caps how many same-relation targets
+	// a single intermediate node may propagate, bounding blast radius through
+	// hub entities even if a non-transitive relation is mistakenly listed.
+	SettingDreamTransitiveRelations = "dreaming.transitive.relations"
+	SettingDreamTransitiveMaxFanout = "dreaming.transitive.max_fanout"
+
 	// Weight adjustment knobs. tier2_multiplier scales co-mention support
 	// (memory touches both endpoints but isn't direct lineage). decay_window_days
 	// is the age threshold past which 0.95-per-period decay applies; decay_factor
@@ -1003,6 +1014,13 @@ var settingDefaults = map[string]string{
 	SettingDreamTransitiveNamespaceHardCap:   "1000000",
 	SettingDreamTransitiveNamespaceHighWater: "0.95",
 	SettingDreamTransitiveNamespaceLowWater:  "0.80",
+	// This default list is also frozen, byte-for-byte, into the one-time
+	// cleanup migration migrations/{postgres,sqlite}/000056_prune_invalid_
+	// transitive_edges.up.sql. Editing the curated set here changes runtime
+	// inference going forward; the migration copy is a point-in-time snapshot
+	// and must NOT be edited retroactively (ship a new migration instead).
+	SettingDreamTransitiveRelations: `["part of","is part of","contains","located in","is located in","depends on","subclass of","is a","type of","ancestor of","descendant of","broader than","narrower than"]`,
+	SettingDreamTransitiveMaxFanout: "25",
 
 	SettingDreamWeightTier2Multiplier:      "0.5",
 	SettingDreamWeightDecayWindowDays:      "30",
@@ -1087,6 +1105,17 @@ func GetDefaultInt(key string) int {
 		panic("settings: registered default for " + key + " is not a valid int: " + def)
 	}
 	return i
+}
+
+// GetDefaultString returns the registered string default for key. Panics if
+// the key has no registered default. Unlike the numeric helpers there is no
+// parse step: the raw registered string is the value.
+func GetDefaultString(key string) string {
+	def, ok := settingDefaults[key]
+	if !ok {
+		panic("settings: GetDefaultString called for key with no registered default: " + key)
+	}
+	return def
 }
 
 // ResolveOrDefault returns the configured value for key, treating an empty

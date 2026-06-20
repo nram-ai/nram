@@ -147,6 +147,7 @@ type SettingsResolver interface {
 	ResolveBool(ctx context.Context, key string, scope string) bool
 	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
+	ResolveStringWithDefault(ctx context.Context, key, scope string) string
 	ResolveDurationSecondsWithDefault(ctx context.Context, key, scope string) time.Duration
 }
 

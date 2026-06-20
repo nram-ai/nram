@@ -63,6 +63,10 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 	minWeight := p.resolveFloat(ctx, service.SettingDreamTransitiveMinWeight)
 	maxPerCycle := p.resolveInt(ctx, service.SettingDreamTransitiveMaxPerCycle)
 	hardCap := p.resolveInt(ctx, service.SettingDreamTransitiveNamespaceHardCap)
+	// Semantic gates: only relations in this set may chain, and only when both
+	// hops carry the same relation; maxFanout bounds propagation through hubs.
+	transitiveRelations := p.resolveTransitiveRelations(ctx)
+	maxFanout := p.resolveInt(ctx, service.SettingDreamTransitiveMaxFanout)
 
 	// Operator-quiesce / misconfig short-circuit: skip the expensive
 	// ListByNamespace + adjacency build entirely when this cycle cannot
@@ -111,9 +115,20 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 		source, target uuid.UUID
 		relation       string
 	}
+	// relSource keys the same-relation adjacency index: an intermediate's
+	// outgoing hops for one relation, so the inner loop can fetch B's matching
+	// hops in O(1) instead of rescanning all of outgoing[B] on every A→B edge.
+	type relSource struct {
+		entity   uuid.UUID
+		relation string
+	}
 	edges := make(map[edgeKey]*model.Relationship, len(allRels))
-	// Outgoing edges per entity, only from non-transitive, non-expired relationships.
+	// Outgoing edges per entity (source iteration) and per (entity, relation)
+	// (same-relation lookup), both only from non-transitive, non-expired edges.
+	// sameRelationOut holds pointers into allRels (stable for the phase) to
+	// avoid copying the structs a second time.
 	outgoing := make(map[uuid.UUID][]model.Relationship)
+	sameRelationOut := make(map[relSource][]*model.Relationship)
 
 	for i := range allRels {
 		rel := &allRels[i]
@@ -130,6 +145,8 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 			continue
 		}
 		outgoing[rel.SourceID] = append(outgoing[rel.SourceID], *rel)
+		rk := relSource{rel.SourceID, rel.Relation}
+		sameRelationOut[rk] = append(sameRelationOut[rk], rel)
 	}
 
 	// Per-cycle cap, then clamp to remaining hard-cap headroom. After the
@@ -185,8 +202,31 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 				break
 			}
 
+			// Semantic gate (default-deny): only relations explicitly marked
+			// transitive may chain. Without this, non-transitive relations like
+			// "wife of" or symmetric ones like "related to" produce invalid
+			// inferences. relAB.Relation is stored canonical, so it matches the
+			// canonicalized set keys directly.
+			if !transitiveRelations[relAB.Relation] {
+				continue
+			}
+
 			entityB := relAB.TargetID
-			relsBC := outgoing[entityB]
+
+			// Same-relation closure (true r∘r): only chain B→C hops that carry
+			// the SAME relation as A→B, fetched in O(1) from the precomputed
+			// index. The previous code copied relAB.Relation onto any relBC
+			// regardless of relBC's own relation, which is what produced edges
+			// like "Emma --wife of--> sglang" (A--wife of-->B, B--anything-->C).
+			relsBC := sameRelationOut[relSource{entityB, relAB.Relation}]
+
+			// Fan-out cap: an intermediate node that points to more than
+			// maxFanout same-relation targets is treated as a hub and skipped,
+			// bounding blast radius even if a non-transitive relation is wrongly
+			// listed. maxFanout <= 0 disables the cap.
+			if maxFanout > 0 && len(relsBC) > maxFanout {
+				continue
+			}
 
 			for _, relBC := range relsBC {
 				if attempts >= maxNew {
@@ -310,6 +350,47 @@ func (p *TransitivePhase) resolveInt(ctx context.Context, key string) int {
 		return service.GetDefaultInt(key)
 	}
 	return p.settings.ResolveIntWithDefault(ctx, key, "global")
+}
+
+// resolveString reads a string setting via the *WithDefault helper, falling
+// back to the registered default when settings is nil (test path).
+func (p *TransitivePhase) resolveString(ctx context.Context, key string) string {
+	if p.settings == nil {
+		return service.GetDefaultString(key)
+	}
+	return p.settings.ResolveStringWithDefault(ctx, key, "global")
+}
+
+// resolveTransitiveRelations parses the relations setting (a JSON array of
+// relation labels) into a set of canonical labels. A malformed or empty
+// configured value falls back to the registered default, so a bad edit cannot
+// silently empty the set, which would either disable inference entirely (an
+// empty set is default-deny) or, worse if treated as "allow all", re-open the
+// graph to every relation. Returning the default on parse failure keeps the
+// gate conservative.
+func (p *TransitivePhase) resolveTransitiveRelations(ctx context.Context) map[string]bool {
+	set := parseTransitiveRelations(p.resolveString(ctx, service.SettingDreamTransitiveRelations))
+	if len(set) == 0 {
+		set = parseTransitiveRelations(service.GetDefaultString(service.SettingDreamTransitiveRelations))
+	}
+	return set
+}
+
+// parseTransitiveRelations unmarshals a JSON string array and returns the
+// canonicalized labels as a set. Returns nil on malformed JSON so callers can
+// detect the empty case and fall back to the default.
+func parseTransitiveRelations(raw string) map[string]bool {
+	var labels []string
+	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(labels))
+	for _, l := range labels {
+		if c := model.CanonicalRelation(l); c != "" {
+			set[c] = true
+		}
+	}
+	return set
 }
 
 // isTransitiveRelationship checks whether a relationship was created by the

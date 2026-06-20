@@ -37,6 +37,9 @@ func (f *fakeStuckSettings) ResolveIntWithDefault(_ context.Context, _, _ string
 func (f *fakeStuckSettings) ResolveFloatWithDefault(_ context.Context, _, _ string) float64 {
 	return 0
 }
+func (f *fakeStuckSettings) ResolveStringWithDefault(_ context.Context, _, _ string) string {
+	return ""
+}
 func (f *fakeStuckSettings) ResolveDurationSecondsWithDefault(_ context.Context, _, _ string) time.Duration {
 	return time.Duration(f.stuckThresholdSecs) * time.Second
 }
