@@ -5,6 +5,7 @@ import {
   useTestProviderSlot,
   useOllamaModels,
   usePullOllamaModel,
+  useProviderModels,
 } from "../hooks/useApi";
 import type {
   ProviderSlot,
@@ -88,6 +89,12 @@ const DEFAULT_URLS: Record<string, string> = {
 
 const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"]);
 
+// Provider types that serve exactly one model per process (fixed at launch), so
+// the served id can be detected from GET /v1/models and offered via the picker.
+// Mirrors the CLOUD_PROVIDERS set so adding a new single-model type needs no other
+// edit here.
+const SINGLE_MODEL_PROVIDERS = new Set(["vllm", "sglang"]);
+
 // Gemini and Anthropic use non-OpenAI request bodies, so extra_body does not
 // apply to them; every other provider type is served by the OpenAI-compatible
 // adapter and accepts it. Expressed as the exclusion so new compatible types
@@ -122,14 +129,14 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     entity: "e.g. anthropic/claude-haiku-4-5",
   },
   vllm: {
-    embedding: "the model id served by vLLM, e.g. Qwen/Qwen3-Embedding-0.6B",
-    fact: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
-    entity: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+    embedding: "served model id, e.g. Qwen/Qwen3-Embedding-0.6B — or click Load Models to detect",
+    fact: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
+    entity: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
   },
   sglang: {
-    embedding: "the model id served by SGLang, e.g. Qwen/Qwen3-Embedding-0.6B",
-    fact: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
-    entity: "the served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled)",
+    embedding: "served model id, e.g. Qwen/Qwen3-Embedding-0.6B — or click Load Models to detect",
+    fact: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
+    entity: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
   },
   "openai-compatible": {
     embedding: "the model id exposed by your endpoint",
@@ -368,6 +375,96 @@ function OllamaModelPicker({
   );
 }
 
+// VllmSglangModelPicker detects the model(s) a vLLM/SGLang server reports at
+// GET /v1/models. These servers load exactly one base model at launch, so the
+// list is usually a single id; when it is, and the field is empty, it is
+// auto-selected. When several are returned (a gateway/router or LoRA adapters),
+// the operator picks one. Unlike the Ollama picker there is no pull (no such
+// concept) and no embed-vs-chat guess (the OpenAI list does not expose that).
+function VllmSglangModelPicker({
+  url,
+  selectedModel,
+  onSelectModel,
+  customHeaders,
+}: {
+  url: string;
+  selectedModel: string;
+  onSelectModel: (model: string) => void;
+  customHeaders?: Record<string, string>;
+}) {
+  const modelsQuery = useProviderModels(url, customHeaders);
+
+  const loadModels = useCallback(async () => {
+    const res = await modelsQuery.refetch();
+    const models = res.data?.models ?? [];
+    // Auto-fill the single served model when the field has not been set yet.
+    if (models.length === 1 && !selectedModel) {
+      onSelectModel(models[0]);
+    }
+  }, [modelsQuery, selectedModel, onSelectModel]);
+
+  const models = modelsQuery.data?.models ?? [];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={loadModels}
+          disabled={!url || modelsQuery.isFetching}
+          className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {modelsQuery.isFetching ? (
+            <span className="flex items-center gap-1.5">
+              <FontAwesomeIcon icon={faSpinner} spin className="h-3.5 w-3.5" />
+              Loading...
+            </span>
+          ) : (
+            "Load Models"
+          )}
+        </button>
+      </div>
+
+      {modelsQuery.isError && (
+        <p className="text-sm text-destructive">
+          Failed to load models. Ensure the server is reachable at {url} and
+          exposes GET /v1/models.
+        </p>
+      )}
+
+      {modelsQuery.data && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            Served Models ({models.length})
+          </p>
+          <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-1">
+            {models.length === 0 ? (
+              <p className="px-2 py-3 text-center text-sm text-muted-foreground">
+                No models reported by the server.
+              </p>
+            ) : (
+              models.map((m: string) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => onSelectModel(m)}
+                  className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                    selectedModel === m
+                      ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200"
+                      : "hover:bg-muted"
+                  }`}
+                >
+                  <span className="font-medium">{m}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Custom Headers Editor
 // ---------------------------------------------------------------------------
@@ -544,6 +641,7 @@ function ProviderSlotEditForm({
 
   const isCloud = CLOUD_PROVIDERS.has(form.type);
   const isOllama = form.type === "ollama";
+  const isVllmSglang = SINGLE_MODEL_PROVIDERS.has(form.type);
 
   const reservedNote =
     form.type === "anthropic"
@@ -635,17 +733,15 @@ function ProviderSlotEditForm({
         <label className="mb-1 block text-sm font-medium text-foreground">
           Model
         </label>
-        {isOllama ? (
-          <div className="space-y-3">
-            <input
-              type="text"
-              value={form.model}
-              onChange={(e) =>
-                setForm((p) => ({ ...p, model: e.target.value }))
-              }
-              placeholder={modelPlaceholder}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
+        <div className="space-y-3">
+          <input
+            type="text"
+            value={form.model}
+            onChange={(e) => setForm((p) => ({ ...p, model: e.target.value }))}
+            placeholder={modelPlaceholder}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {isOllama && (
             <OllamaModelPicker
               ollamaUrl={form.url}
               selectedModel={form.model}
@@ -653,18 +749,16 @@ function ProviderSlotEditForm({
               slotName={slotName}
               customHeaders={headerRowsToRecord(form.custom_headers)}
             />
-          </div>
-        ) : (
-          <input
-            type="text"
-            value={form.model}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, model: e.target.value }))
-            }
-            placeholder={modelPlaceholder}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        )}
+          )}
+          {isVllmSglang && (
+            <VllmSglangModelPicker
+              url={form.url}
+              selectedModel={form.model}
+              onSelectModel={(m) => setForm((p) => ({ ...p, model: m }))}
+              customHeaders={headerRowsToRecord(form.custom_headers)}
+            />
+          )}
+        </div>
       </div>
 
       {/* API Key (cloud only) */}

@@ -109,6 +109,77 @@ func TestListOllamaModelsEmpty(t *testing.T) {
 	}
 }
 
+// newOpenAIModelsServer serves GET /v1/models with the given ids and records the
+// Authorization header and an X-Proxy header it received, for credential-fallback
+// assertions.
+func newOpenAIModelsServer(t *testing.T, ids []string, gotAuth, gotProxy *string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if gotAuth != nil {
+			*gotAuth = r.Header.Get("Authorization")
+		}
+		if gotProxy != nil {
+			*gotProxy = r.Header.Get("X-Proxy")
+		}
+		data := make([]map[string]string, len(ids))
+		for i, id := range ids {
+			data[i] = map[string]string{"id": id}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestListProviderModels(t *testing.T) {
+	srv := newOpenAIModelsServer(t, []string{"Qwen/Qwen3-8B"}, nil, nil)
+
+	store := NewProviderAdminStore(ProviderAdminDeps{})
+	models, err := store.ListProviderModels(context.Background(), srv.URL, nil)
+	if err != nil {
+		t.Fatalf("ListProviderModels: %v", err)
+	}
+	if len(models) != 1 || models[0] != "Qwen/Qwen3-8B" {
+		t.Fatalf("expected [Qwen/Qwen3-8B], got %v", models)
+	}
+}
+
+func TestListProviderModelsCredentialFallback(t *testing.T) {
+	var gotAuth, gotProxy string
+	srv := newOpenAIModelsServer(t, []string{"Qwen/Qwen3-8B"}, &gotAuth, &gotProxy)
+
+	// A saved slot at the same URL carries the API key and proxy header; with no
+	// forwarded form headers, ListProviderModels must borrow both.
+	reg, err := provider.NewRegistry(provider.RegistryConfig{
+		Fact: provider.SlotConfig{
+			Type:          "vllm",
+			BaseURL:       srv.URL,
+			APIKey:        "sk-saved",
+			Model:         "Qwen/Qwen3-8B",
+			CustomHeaders: map[string]string{"X-Proxy": "saved"},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	store := NewProviderAdminStore(ProviderAdminDeps{Registry: reg})
+	if _, err := store.ListProviderModels(context.Background(), srv.URL, nil); err != nil {
+		t.Fatalf("ListProviderModels: %v", err)
+	}
+	if gotAuth != "Bearer sk-saved" {
+		t.Errorf("Authorization=%q, want %q", gotAuth, "Bearer sk-saved")
+	}
+	if gotProxy != "saved" {
+		t.Errorf("X-Proxy=%q, want %q", gotProxy, "saved")
+	}
+}
+
 func TestResolveOllamaURLExplicitOverride(t *testing.T) {
 	store := NewProviderAdminStore(ProviderAdminDeps{})
 	url := store.resolveOllamaURL("http://custom:9999")

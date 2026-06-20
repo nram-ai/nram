@@ -24,13 +24,18 @@ type mockProviderAdminStore struct {
 	modelsErr    error
 	pullErr      error
 
+	providerModels    []string
+	providerModelsErr error
+
 	// capture args
-	updatedSlot   string
-	updatedCfg    ProviderSlotConfig
-	updatedOpts   UpdateProviderSlotOpts
-	pulledModel   string
-	listHeaders   map[string]string
-	pulledHeaders map[string]string
+	updatedSlot          string
+	updatedCfg           ProviderSlotConfig
+	updatedOpts          UpdateProviderSlotOpts
+	pulledModel          string
+	listHeaders          map[string]string
+	pulledHeaders        map[string]string
+	providerModelsURL    string
+	providerModelsHeader map[string]string
 }
 
 func (m *mockProviderAdminStore) GetProviderConfig(_ context.Context) (ProviderConfigResponse, error) {
@@ -67,6 +72,12 @@ func (m *mockProviderAdminStore) PullOllamaModel(_ context.Context, model string
 	m.pulledModel = model
 	m.pulledHeaders = headers
 	return m.pullErr
+}
+
+func (m *mockProviderAdminStore) ListProviderModels(_ context.Context, url string, headers map[string]string) ([]string, error) {
+	m.providerModelsURL = url
+	m.providerModelsHeader = headers
+	return m.providerModels, m.providerModelsErr
 }
 
 // --- tests ---
@@ -382,6 +393,50 @@ func TestAdminProvidersListOllamaModels(t *testing.T) {
 	}
 	if resp[1].Name != "mistral:latest" {
 		t.Errorf("expected mistral:latest, got %q", resp[1].Name)
+	}
+}
+
+func TestAdminProvidersListProviderModels(t *testing.T) {
+	store := &mockProviderAdminStore{
+		providerModels: []string{"Qwen/Qwen3-8B", "Qwen/Qwen3-Embedding-0.6B"},
+	}
+
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/admin/providers/models?url=http://host:8000", nil)
+	req.Header.Set("X-Nram-Provider-Header-X-Proxy", "v1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp []string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp) != 2 || resp[0] != "Qwen/Qwen3-8B" {
+		t.Fatalf("unexpected models: %v", resp)
+	}
+	if store.providerModelsURL != "http://host:8000" {
+		t.Errorf("url=%q, want http://host:8000", store.providerModelsURL)
+	}
+	if store.providerModelsHeader["X-Proxy"] != "v1" {
+		t.Errorf("forwarded header X-Proxy=%q, want v1", store.providerModelsHeader["X-Proxy"])
+	}
+}
+
+func TestAdminProvidersListProviderModelsMissingURL(t *testing.T) {
+	store := &mockProviderAdminStore{}
+
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/providers/models", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 

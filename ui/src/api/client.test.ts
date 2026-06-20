@@ -1119,6 +1119,15 @@ describe("API Client E2E", () => {
         expect(e).toBeInstanceOf(APIError);
       }
     });
+
+    it("getProviderModels() returns models or throws when unreachable", async () => {
+      try {
+        const res = await adminAPI.getProviderModels("http://127.0.0.1:1/");
+        expect(Array.isArray(res.models)).toBe(true);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
   });
 
   // -----------------------------------------------------------------------

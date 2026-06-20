@@ -1869,6 +1869,19 @@ export const adminAPI = {
       custom_headers:
         customHeaders && Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
     }),
+  // Detects the models an OpenAI-compatible server (vLLM/SGLang) reports at
+  // GET /v1/models. In-progress custom headers are forwarded as request headers
+  // (not query params) so secret values never land in the URL or access logs.
+  getProviderModels: async (url: string, customHeaders?: Record<string, string>) => {
+    const params = new URLSearchParams({ url });
+    const models = await request<string[]>(
+      "GET",
+      `/admin/providers/models?${params.toString()}`,
+      undefined,
+      forwardedProviderHeaders(customHeaders),
+    );
+    return { models };
+  },
 
   // Settings
   getSettings: () => {

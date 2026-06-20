@@ -17,6 +17,7 @@ type ProviderAdminStore interface {
 	UpdateProviderSlot(ctx context.Context, slot string, cfg ProviderSlotConfig, opts UpdateProviderSlotOpts) (*UpdateProviderSlotResult, error)
 	ListOllamaModels(ctx context.Context, ollamaURL string, headers map[string]string) ([]OllamaModel, error)
 	PullOllamaModel(ctx context.Context, model string, ollamaURL string, headers map[string]string) error
+	ListProviderModels(ctx context.Context, url string, headers map[string]string) ([]string, error)
 }
 
 // UpdateProviderSlotOpts carries request-only options for an update that
@@ -170,6 +171,8 @@ func NewAdminProvidersHandler(cfg ProviderAdminConfig) http.HandlerFunc {
 			handleOllamaModels(w, r, cfg)
 		case "ollama/pull":
 			handleOllamaPull(w, r, cfg)
+		case "models":
+			handleProviderModels(w, r, cfg)
 		default:
 			// Any canonical slot name is a slot-update path.
 			if provider.IsValidSlot(sub) {
@@ -332,6 +335,37 @@ func handleOllamaModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdmi
 
 	if models == nil {
 		writeJSON(w, http.StatusOK, []struct{}{})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, models)
+}
+
+// handleProviderModels handles GET /providers/models: lists the models any
+// OpenAI-compatible server (e.g. vLLM, SGLang) reports at /v1/models, so the UI
+// can detect the served model id instead of requiring the operator to type it.
+// The target URL comes from the url query param; in-progress custom headers are
+// forwarded as request headers (see forwardedHeaderPrefix).
+func handleProviderModels(w http.ResponseWriter, r *http.Request, cfg ProviderAdminConfig) {
+	if r.Method != http.MethodGet {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+
+	url := r.URL.Query().Get("url")
+	if url == "" {
+		WriteError(w, ErrBadRequest("url is required"))
+		return
+	}
+
+	models, err := cfg.Store.ListProviderModels(r.Context(), url, extractForwardedHeaders(r))
+	if err != nil {
+		WriteError(w, ErrInternal("failed to list provider models: "+err.Error()))
+		return
+	}
+
+	if models == nil {
+		writeJSON(w, http.StatusOK, []string{})
 		return
 	}
 

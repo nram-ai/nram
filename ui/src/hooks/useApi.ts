@@ -533,6 +533,14 @@ export function useOllamaModels(ollamaUrl?: string, customHeaders?: Record<strin
   });
 }
 
+export function useProviderModels(url: string, customHeaders?: Record<string, string>) {
+  return useQuery({
+    queryKey: ["admin", "provider-models", url],
+    queryFn: () => adminAPI.getProviderModels(url, customHeaders),
+    enabled: false,
+  });
+}
+
 export function usePullOllamaModel() {
   const qc = useQueryClient();
   return useMutation({

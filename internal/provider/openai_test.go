@@ -325,6 +325,77 @@ func TestOpenAIPingFailure(t *testing.T) {
 	}
 }
 
+func TestListOpenAIModels(t *testing.T) {
+	var gotAuth, gotHeader string
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"GET /v1/models": func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			gotHeader = r.Header.Get("X-Proxy")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Includes an empty id to confirm it is filtered out.
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"Qwen/Qwen3-8B"},{"id":""},{"id":"Qwen/Qwen3-Embedding-0.6B"}]}`))
+		},
+	})
+	defer srv.Close()
+
+	models, err := ListOpenAIModels(context.Background(), srv.URL, "sk-test", map[string]string{"X-Proxy": "v1"})
+	if err != nil {
+		t.Fatalf("ListOpenAIModels() error: %v", err)
+	}
+	want := []string{"Qwen/Qwen3-8B", "Qwen/Qwen3-Embedding-0.6B"}
+	if len(models) != len(want) {
+		t.Fatalf("got %v, want %v", models, want)
+	}
+	for i := range want {
+		if models[i] != want[i] {
+			t.Fatalf("model[%d]=%q, want %q", i, models[i], want[i])
+		}
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Errorf("Authorization=%q, want %q", gotAuth, "Bearer sk-test")
+	}
+	if gotHeader != "v1" {
+		t.Errorf("X-Proxy=%q, want %q", gotHeader, "v1")
+	}
+}
+
+func TestListOpenAIModelsEmpty(t *testing.T) {
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"GET /v1/models": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+		},
+	})
+	defer srv.Close()
+
+	models, err := ListOpenAIModels(context.Background(), srv.URL, "", nil)
+	if err != nil {
+		t.Fatalf("ListOpenAIModels() error: %v", err)
+	}
+	if models == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(models) != 0 {
+		t.Fatalf("expected 0 models, got %v", models)
+	}
+}
+
+func TestListOpenAIModelsError(t *testing.T) {
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"GET /v1/models": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`boom`))
+		},
+	})
+	defer srv.Close()
+
+	if _, err := ListOpenAIModels(context.Background(), srv.URL, "", nil); err == nil {
+		t.Fatal("expected error on non-200, got nil")
+	}
+}
+
 func TestOpenAICustomBaseURL(t *testing.T) {
 	var receivedHost string
 	srv := newTestServer(t, map[string]http.HandlerFunc{

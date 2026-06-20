@@ -366,6 +366,65 @@ func (p *OpenAIProvider) Ping(ctx context.Context) error {
 	return nil
 }
 
+// openaiModelsResponse mirrors the OpenAI GET /v1/models list shape
+// ({"object":"list","data":[{"id":...}]}). vLLM and SGLang serve a single base
+// model per process, so the list is typically one entry; only the id is decoded.
+type openaiModelsResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
+// ListOpenAIModels enumerates the models an OpenAI-compatible server reports at
+// GET /v1/models. Used by the admin UI to detect the served model id for vLLM and
+// SGLang slots (single-model servers) so operators do not have to hand-type a
+// string that must match the server's --served-model-name. baseURL is normalized
+// the same way NewOpenAIProvider normalizes it, so a slot URL that already carries
+// a /v1 suffix or trailing slash still resolves. Returns ids in the order the
+// server reports them; an empty (non-nil) slice when none are listed.
+func ListOpenAIModels(ctx context.Context, baseURL, apiKey string, headers map[string]string) ([]string, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	url := NormalizeBaseURL(baseURL) + "/v1/models"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("openai: create models request: %w", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	applyCustomHeaders(req, headers)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: models request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: read models response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openai: models returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var parsed openaiModelsResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("openai: unmarshal models response: %w", err)
+	}
+
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
+}
+
 // ---------- Internal helpers ----------
 
 // setHeaders sets the standard headers on an outbound request.

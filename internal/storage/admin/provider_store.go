@@ -654,6 +654,44 @@ func (s *ProviderAdminStore) PullOllamaModel(_ context.Context, modelName string
 	return client.PullModel(context.Background(), modelName, nil)
 }
 
+// ListProviderModels enumerates the models an OpenAI-compatible server (vLLM,
+// SGLang, or a generic openai-compatible endpoint) reports at GET /v1/models. The
+// admin UI calls this to detect the served model id for single-model servers so
+// the operator does not have to hand-type it. URL comes from the in-progress edit
+// form; headers fall back to the matching saved slot's so a proxied endpoint keeps
+// working before re-entry, mirroring resolveOllamaHeaders. The API key is borrowed
+// from the matching saved slot only (the form key is never forwarded); a brand-new
+// authenticated endpoint can carry auth via custom headers.
+func (s *ProviderAdminStore) ListProviderModels(ctx context.Context, url string, headers map[string]string) ([]string, error) {
+	resolvedHeaders, apiKey := s.resolveProviderModelCreds(url, headers)
+	return provider.ListOpenAIModels(ctx, url, apiKey, resolvedHeaders)
+}
+
+// resolveProviderModelCreds resolves the headers and API key to use for an ad-hoc
+// /v1/models probe. Forwarded form headers win; otherwise it borrows both headers
+// and the API key from a saved slot whose normalized URL matches the probe URL, so
+// editing an existing authenticated/proxied slot works without re-entering secrets.
+func (s *ProviderAdminStore) resolveProviderModelCreds(url string, formHeaders map[string]string) (map[string]string, string) {
+	if s.deps.Registry == nil {
+		return formHeaders, ""
+	}
+	target := provider.NormalizeBaseURL(url)
+	cfg := s.deps.Registry.GetConfig()
+	for _, slot := range []provider.SlotConfig{
+		cfg.Embedding, cfg.Fact, cfg.Entity, cfg.QueryAugment, cfg.IngestionDecision,
+	} {
+		if slot.BaseURL == "" || provider.NormalizeBaseURL(slot.BaseURL) != target {
+			continue
+		}
+		h := formHeaders
+		if len(h) == 0 {
+			h = slot.CustomHeaders
+		}
+		return h, slot.APIKey
+	}
+	return formHeaders, ""
+}
+
 // resolveOllamaHeaders returns the custom headers to attach to an ad-hoc Ollama
 // management call. Headers supplied by the in-progress edit form take
 // precedence; otherwise it falls back to the headers persisted on the matching

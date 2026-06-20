@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.6.0
+  version: 0.6.1
   license:
     name: MIT
 
@@ -2071,6 +2071,38 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/OllamaModel"
+
+  /v1/admin/providers/models:
+    get:
+      operationId: adminListProviderModels
+      tags: [Admin - Providers]
+      summary: List models served by an OpenAI-compatible endpoint
+      description: >-
+        Lists the model ids an OpenAI-compatible server reports at `GET
+        /v1/models`. Used to detect the served model for vLLM/SGLang slots
+        (single-model servers) so the operator does not have to hand-type an id
+        that must match the server's `--served-model-name`. In-progress custom
+        provider headers (for a proxied/authenticated endpoint not yet saved) may
+        be forwarded as request headers prefixed `X-Nram-Provider-Header-<Name>`,
+        keeping secret values out of the URL query string; when none are supplied,
+        the headers and API key persisted on a saved slot with the same URL are
+        used.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Base URL of the OpenAI-compatible server to probe.
+      responses:
+        "200":
+          description: Model id list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
 
   /v1/admin/providers/ollama/pull:
     post:
