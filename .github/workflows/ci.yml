@@ -278,7 +278,7 @@ jobs:
         run: SMOKE_PORT=18675 scripts/ci/smoke.sh
 
   ui-e2e:
-    name: UI e2e (make build + vitest, Linux)
+    name: UI e2e + coverage (make build + vitest, Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -297,6 +297,9 @@ jobs:
         run: |
           mkdir -p bin
           cp nram bin/nram
-      - name: Run UI tests
-        run: npm run test
+      # test:coverage runs the same vitest e2e suite but enforces the 100%
+      # statements/branches/functions/lines threshold on src/api/client.ts
+      # (ui/vitest.config.ts). A coverage regression fails the build.
+      - name: Run UI tests with coverage gate
+        run: npm run test:coverage
         working-directory: ui

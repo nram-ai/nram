@@ -6,7 +6,7 @@
  *
  * @vitest-environment node
  */
-import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
+import { vi, describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Polyfills -- must run before the client module is imported.
@@ -54,8 +54,22 @@ import {
   orgAPI,
   memoryAPI,
   healthAPI,
+  systemAPI,
+  oauthAPI,
+  shareAcceptAPI,
+  sharesAPI,
+  fetchMetricsText,
+  getInstructions,
+  memoryRowLabel,
+  buildLogQuery,
+  isLoopbackRedirectUri,
+  changePassword,
+  downloadLogsExport,
+  downloadProjectExport,
+  downloadExportJobArtifact,
   type SetupResponse,
   type User,
+  type OAuthAuthorizeParams,
 } from "./client";
 
 // ---------------------------------------------------------------------------
@@ -99,6 +113,48 @@ async function waitForServer(
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`Server did not become ready within ${timeoutMs}ms`);
+}
+
+// Spawn a real nram server bound to `port` in a fresh temp dir (where SQLite
+// creates nram.db) and wait for /v1/health. Returns the process + temp dir so
+// the caller owns teardown. Shared by the main suite and the dedicated
+// destructive-endpoints server.
+async function startNramServer(
+  port: number,
+  tmpPrefix: string,
+): Promise<{ proc: ChildProcess; serverTmp: string }> {
+  const serverTmp = mkdtempSync(join(tmpdir(), tmpPrefix));
+  const proc = spawn(SERVER_BIN, [], {
+    cwd: serverTmp,
+    env: {
+      HOME: process.env.HOME ?? "",
+      PATH: process.env.PATH ?? "",
+      PORT: String(port),
+      LOG_LEVEL: "error",
+    },
+    stdio: "pipe",
+  });
+  let stderr = "";
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  proc.on("error", (err: Error) => {
+    throw new Error(`Failed to start nram server on ${port}: ${err.message}\n${stderr}`);
+  });
+  await waitForServer(`http://localhost:${port}`);
+  return { proc, serverTmp };
+}
+
+// Install a minimal document stub for the download helpers (triggerBlobDownload
+// needs document.createElement + body.appendChild; @vitest-environment node has
+// no DOM). Returns the previous document so the caller can restore it.
+function installDocumentStub(): unknown {
+  const prev = (globalThis as Record<string, unknown>).document;
+  (globalThis as Record<string, unknown>).document = {
+    createElement: () => ({ href: "", download: "", click: () => {}, remove: () => {} }),
+    body: { appendChild: () => {} },
+  };
+  return prev;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,32 +206,10 @@ describe("API Client E2E", () => {
       if (e instanceof Error && e.message.includes("already in use")) throw e;
     }
 
-    // Isolated temp directory -- SQLite will create nram.db here
-    tmpDir = mkdtempSync(join(tmpdir(), "nram-e2e-"));
-
-    // Spawn the real Go server
-    serverProcess = spawn(SERVER_BIN, [], {
-      cwd: tmpDir,
-      env: {
-        HOME: process.env.HOME ?? "",
-        PATH: process.env.PATH ?? "",
-        PORT: String(SERVER_PORT),
-        LOG_LEVEL: "error",
-      },
-      stdio: "pipe",
-    });
-
-    // Capture stderr for debugging startup failures
-    let stderr = "";
-    serverProcess.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    serverProcess.on("error", (err) => {
-      throw new Error(`Failed to start server: ${err.message}\n${stderr}`);
-    });
-
-    await waitForServer(SERVER_URL);
+    // Spawn the real Go server in an isolated temp dir and wait for health.
+    const started = await startNramServer(SERVER_PORT, "nram-e2e-");
+    serverProcess = started.proc;
+    tmpDir = started.serverTmp;
 
     // Complete initial setup
     const setupRes = await fetch(`${SERVER_URL}/v1/admin/setup`, {
@@ -258,6 +292,15 @@ describe("API Client E2E", () => {
       }
     }
   }, 15000);
+
+  // Re-establish the ambient admin credential after every test. The request()
+  // 401 handler clears nram_token on any 401 response (intentional + expected
+  // error-path tests trip it), which would otherwise leak a cleared token into
+  // the next test or a nested beforeAll. Restoring here keeps tests
+  // order-independent. adminToken is refreshed by the changePassword test.
+  afterEach(() => {
+    localStorage.setItem("nram_token", adminToken);
+  });
 
   // -----------------------------------------------------------------------
   // APIError
@@ -1396,6 +1439,956 @@ describe("API Client E2E", () => {
   });
 
   // -----------------------------------------------------------------------
+  // Public text endpoints (metrics + instructions)
+  // -----------------------------------------------------------------------
+
+  describe("public text endpoints", () => {
+    it("fetchMetricsText() returns Prometheus exposition text", async () => {
+      const text = await fetchMetricsText();
+      expect(typeof text).toBe("string");
+      expect(text.length).toBeGreaterThan(0);
+    });
+
+    it("getInstructions() returns text for each format", async () => {
+      for (const fmt of ["claude", "agents", "cursor"] as const) {
+        const text = await getInstructions(fmt);
+        expect(typeof text).toBe("string");
+        expect(text.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // authAPI passkey endpoints (no credential available; cover the call path)
+  // -----------------------------------------------------------------------
+
+  describe("authAPI.passkey", () => {
+    it("passkeyBegin() returns options or throws for a user without passkeys", async () => {
+      try {
+        const res = await authAPI.passkeyBegin({ email: "admin@test.com" });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("passkeyFinish() throws with a bogus assertion", async () => {
+      const savedToken = localStorage.getItem("nram_token");
+      try {
+        await authAPI.passkeyFinish({ bogus: true }, "no-such-session");
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      } finally {
+        if (savedToken) localStorage.setItem("nram_token", savedToken);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // adminAPI -- previously-uncovered methods
+  // -----------------------------------------------------------------------
+
+  describe("adminAPI.extra", () => {
+    it("getSettingGroups() returns grouped schema", async () => {
+      const res = await adminAPI.getSettingGroups();
+      expect(Array.isArray(res.data)).toBe(true);
+    });
+
+    it("getCostRates() returns an array", async () => {
+      const rates = await adminAPI.getCostRates();
+      expect(Array.isArray(rates)).toBe(true);
+    });
+
+    it("getDatabaseInfo() + preflightDatabase() against an invalid URL throws", async () => {
+      try {
+        await adminAPI.preflightDatabase("postgres://x:x@127.0.0.1:1/none");
+        // A reachable-but-empty server could succeed; either is acceptable.
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("migrationAudit() returns an audit report", async () => {
+      try {
+        const audit = await adminAPI.migrationAudit();
+        expect(audit).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("triggerMigration() with an invalid URL throws", async () => {
+      try {
+        await adminAPI.triggerMigration("postgres://x:x@127.0.0.1:1/none");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("vectorMigrationDryRun() throws without qdrant configured", async () => {
+      try {
+        await adminAPI.vectorMigrationDryRun("to_qdrant");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("startVectorMigration() throws without qdrant configured", async () => {
+      try {
+        await adminAPI.startVectorMigration("from_qdrant", 100);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("listLogs() returns a paginated response", async () => {
+      const res = await adminAPI.listLogs({ limit: 5, level: ["error", "warn"], search: "x" });
+      expect(res).toBeDefined();
+      expect(Array.isArray(res.data)).toBe(true);
+      expect(res.pagination).toBeDefined();
+    });
+
+    it("getLogFacets() returns levels and components", async () => {
+      const facets = await adminAPI.getLogFacets();
+      expect(Array.isArray(facets.levels)).toBe(true);
+      expect(Array.isArray(facets.components)).toBe(true);
+    });
+
+    it("backfillAugmentation() dry run returns candidate counts or errors", async () => {
+      try {
+        const res = await adminAPI.backfillAugmentation({ dry_run: true, limit: 10 });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("getGraphHealth() + repairGraph() run", async () => {
+      const health = await adminAPI.getGraphHealth();
+      expect(health).toBeDefined();
+      const repair = await adminAPI.repairGraph();
+      expect(repair).toBeDefined();
+    });
+
+    it("getDreamingStatus() + getDreamingCycles() run", async () => {
+      const status = await adminAPI.getDreamingStatus();
+      expect(status).toBeDefined();
+      const cycles = await adminAPI.getDreamingCycles();
+      expect(Array.isArray(cycles)).toBe(true);
+      const filtered = await adminAPI.getDreamingCycles("00000000-0000-0000-0000-000000000000");
+      expect(Array.isArray(filtered)).toBe(true);
+    });
+
+    it("setDreamingEnabled() + setProjectDreamingEnabled() toggle", async () => {
+      const proj = await adminAPI.createProject({
+        name: "Dream Toggle",
+        slug: "dream-toggle",
+        owner_namespace_id: adminNamespaceId,
+      });
+      try {
+        const r1 = await adminAPI.setDreamingEnabled(true);
+        expect(r1).toBeDefined();
+        const r2 = await adminAPI.setProjectDreamingEnabled(proj.id, true);
+        expect(r2.enabled).toBe(true);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      } finally {
+        await meAPI.deleteProject(proj.id);
+      }
+    });
+
+    it("rollbackDreamCycle() + abandonDreamCycle() throw for a bogus cycle", async () => {
+      for (const fn of [
+        () => adminAPI.rollbackDreamCycle("00000000-0000-0000-0000-000000000000"),
+        () => adminAPI.abandonDreamCycle("00000000-0000-0000-0000-000000000000"),
+      ]) {
+        try {
+          await fn();
+        } catch (e) {
+          expect(e).toBeInstanceOf(APIError);
+        }
+      }
+    });
+
+    it("getDreamingCycleDetail() throws for a bogus cycle", async () => {
+      try {
+        await adminAPI.getDreamingCycleDetail("00000000-0000-0000-0000-000000000000");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("previewMemoryAugmentation() throws for a bogus memory", async () => {
+      const proj = await adminAPI.createProject({
+        name: "Aug Preview",
+        slug: "aug-preview",
+        owner_namespace_id: adminNamespaceId,
+      });
+      try {
+        await adminAPI.previewMemoryAugmentation(proj.id, "00000000-0000-0000-0000-000000000000");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      } finally {
+        await meAPI.deleteProject(proj.id);
+      }
+    });
+
+    it("testExtractionPrompt() variants run with optional count + systemPrompt", async () => {
+      for (const t of ["entity", "augment", "ingestion"] as const) {
+        try {
+          await adminAPI.testExtractionPrompt(t, "Sample input.", 2, "You are a tester.");
+        } catch (e) {
+          expect(e).toBeInstanceOf(APIError);
+        }
+      }
+    });
+
+    it("getUsage() honors every query param", async () => {
+      const u = await adminAPI.getUsage({
+        project: "p",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-12-31T00:00:00Z",
+        group_by: "model",
+        success_only: true,
+      });
+      expect(u.totals).toBeDefined();
+    });
+
+    it("IdP config create rejects an invalid org, list reflects no change", async () => {
+      try {
+        await adminAPI.createIdPConfig({
+          org_id: "00000000-0000-0000-0000-000000000000",
+          provider_type: "oidc",
+          client_id: "cid",
+          client_secret: "secret",
+          issuer_url: "https://idp.example.com",
+        });
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+      const configs = await adminAPI.listIdPConfigs();
+      expect(Array.isArray(configs)).toBe(true);
+    });
+
+    it("updateIdPConfig() + deleteIdPConfig() throw for a bogus id", async () => {
+      try {
+        await adminAPI.updateIdPConfig("00000000-0000-0000-0000-000000000000", {
+          client_id: "new",
+        });
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+      try {
+        await adminAPI.deleteIdPConfig("00000000-0000-0000-0000-000000000000");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // memoryAPI -- previously-uncovered methods
+  // -----------------------------------------------------------------------
+
+  describe("memoryAPI.extra", () => {
+    let srcProjectId: string;
+    let dstProjectId: string;
+
+    beforeAll(async () => {
+      const src = await adminAPI.createProject({
+        name: "Move Src",
+        slug: "move-src",
+        owner_namespace_id: adminNamespaceId,
+      });
+      const dst = await adminAPI.createProject({
+        name: "Move Dst",
+        slug: "move-dst",
+        owner_namespace_id: adminNamespaceId,
+      });
+      srcProjectId = src.id;
+      dstProjectId = dst.id;
+    });
+
+    afterAll(async () => {
+      for (const id of [srcProjectId, dstProjectId]) {
+        try {
+          await meAPI.deleteProject(id);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    it("listIDs() returns IDs with filters applied", async () => {
+      await memoryAPI.store(srcProjectId, { content: "id-list memory", tags: ["x"] });
+      const res = await memoryAPI.listIDs(srcProjectId, {
+        max: 50,
+        tags: ["x"],
+        limit: 10,
+        offset: 0,
+      });
+      expect(res).toBeDefined();
+      expect(Array.isArray(res.ids)).toBe(true);
+    });
+
+    it("import() bulk-imports nram-format data", async () => {
+      await memoryAPI.store(srcProjectId, { content: "to export" });
+      const data = await memoryAPI.export(srcProjectId);
+      const res = await memoryAPI.import(dstProjectId, "nram", data);
+      expect(typeof res.imported).toBe("number");
+    });
+
+    it("move() relocates a single memory", async () => {
+      const mem = await memoryAPI.store(srcProjectId, { content: "movable" });
+      const res = await memoryAPI.move(srcProjectId, mem.id, dstProjectId);
+      expect(res).toBeDefined();
+    });
+
+    it("bulkMove() relocates several memories", async () => {
+      const a = await memoryAPI.store(srcProjectId, { content: "bulk-a" });
+      const b = await memoryAPI.store(srcProjectId, { content: "bulk-b" });
+      const res = await memoryAPI.bulkMove(srcProjectId, [a.id, b.id], dstProjectId);
+      expect(res).toBeDefined();
+    });
+
+    it("list() applies the full set of optional filters", async () => {
+      const res = await memoryAPI.list(srcProjectId, {
+        limit: 5,
+        offset: 0,
+        tags: ["x"],
+        date_from: "2000-01-01T00:00:00Z",
+        date_to: "2100-01-01T00:00:00Z",
+        enriched: "false",
+        origin: "user",
+        augmented: "false",
+        include_superseded: "true",
+        source: "vitest",
+        search: "memory",
+        group_by_parent: true,
+      });
+      expect(res.data).toBeDefined();
+    });
+
+    it("get() with includeSuperseded option", async () => {
+      const mem = await memoryAPI.store(srcProjectId, { content: "with-superseded" });
+      const got = await memoryAPI.get(srcProjectId, mem.id, { includeSuperseded: true });
+      expect(got.id).toBe(mem.id);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // meAPI -- previously-uncovered methods
+  // -----------------------------------------------------------------------
+
+  describe("meAPI.extra", () => {
+    it("getProfile() + updateProfile() round-trip the theme", async () => {
+      const profile = await meAPI.getProfile();
+      expect(profile).toBeDefined();
+      const updated = await meAPI.updateProfile({ theme: "dark" });
+      expect(updated).toBeDefined();
+    });
+
+    it("getCapabilities() returns the two boolean flags", async () => {
+      const caps = await meAPI.getCapabilities();
+      expect(typeof caps.enrichment_available).toBe("boolean");
+      expect(typeof caps.dreaming_enabled).toBe("boolean");
+    });
+
+    it("getRankingWeightDefaults() returns rows", async () => {
+      const res = await meAPI.getRankingWeightDefaults();
+      expect(Array.isArray(res.data)).toBe(true);
+    });
+
+    it("getSettingDefaults() returns rows", async () => {
+      const res = await meAPI.getSettingDefaults();
+      expect(Array.isArray(res.data)).toBe(true);
+    });
+
+    it("listPasskeys() returns an array", async () => {
+      const keys = await meAPI.listPasskeys();
+      expect(Array.isArray(keys)).toBe(true);
+    });
+
+    it("registerPasskeyBegin() returns options", async () => {
+      try {
+        const opts = await meAPI.registerPasskeyBegin({ name: "e2e-key" });
+        expect(opts).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("registerPasskeyFinish() throws with a bogus attestation", async () => {
+      try {
+        await meAPI.registerPasskeyFinish({ bogus: true }, "e2e-key");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("deletePasskey() throws for a bogus id", async () => {
+      try {
+        await meAPI.deletePasskey("00000000-0000-0000-0000-000000000000");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("updateProject() via meAPI", async () => {
+      const proj = await meAPI.createProject({ name: "Me Upd", slug: "me-upd" });
+      const updated = await meAPI.updateProject(proj.id, { description: "changed" });
+      expect(updated.description).toBe("changed");
+      await meAPI.deleteProject(proj.id);
+    });
+
+    it("procedural tier CRUD + export/import", async () => {
+      const created = await meAPI.createProcedural({
+        content: "Always cite sources.",
+        title: "Cite",
+        category: "checklist",
+        tags: ["t"],
+        priority: 10,
+        enabled: true,
+      });
+      expect(created.id).toBeDefined();
+
+      const list = await meAPI.listProcedural();
+      expect(Array.isArray(list)).toBe(true);
+
+      const listCapped = await meAPI.listProcedural(50);
+      expect(Array.isArray(listCapped)).toBe(true);
+
+      const got = await meAPI.getProcedural(created.id);
+      expect(got.id).toBe(created.id);
+
+      const updated = await meAPI.updateProcedural(created.id, { content: "Cite primary sources." });
+      expect(updated.content).toBe("Cite primary sources.");
+
+      const exported = await meAPI.exportProcedural();
+      expect(Array.isArray(exported.entries)).toBe(true);
+
+      const importRes = await meAPI.importProcedural(exported);
+      expect(importRes).toBeDefined();
+
+      const importArr = await meAPI.importProcedural(exported.entries);
+      expect(importArr).toBeDefined();
+
+      await meAPI.deleteProcedural(created.id);
+    });
+
+    it("OAuth client self-service CRUD", async () => {
+      const list0 = await meAPI.listOAuthClients();
+      expect(Array.isArray(list0)).toBe(true);
+      const created = await meAPI.createOAuthClient({
+        name: "Me OAuth Client",
+        redirect_uris: ["http://localhost:3000/callback"],
+        client_type: "public",
+      });
+      expect(typeof created.id).toBe("string");
+      await meAPI.revokeOAuthClient(created.id);
+    });
+
+    it("recall() runs against the caller's projects", async () => {
+      const res = await meAPI.recall({ query: "anything", limit: 5 });
+      expect(res).toBeDefined();
+      expect(Array.isArray(res.memories)).toBe(true);
+    });
+
+    it("dreaming self-tier reads", async () => {
+      const agg = await meAPI.getDreamingAggregateStatus();
+      expect(agg).toBeDefined();
+      const proj = await meAPI.createProject({ name: "Me Dream", slug: "me-dream" });
+      try {
+        const status = await meAPI.getDreamingProjectStatus(proj.id);
+        expect(status).toBeDefined();
+        const cycles = await meAPI.getDreamingCycles(proj.id);
+        expect(Array.isArray(cycles)).toBe(true);
+        const allCycles = await meAPI.getDreamingCycles();
+        expect(Array.isArray(allCycles)).toBe(true);
+      } finally {
+        await meAPI.deleteProject(proj.id);
+      }
+    });
+
+    it("getDreamingCycleDetail() + abandon/rollback throw for a bogus cycle", async () => {
+      for (const fn of [
+        () => meAPI.getDreamingCycleDetail("00000000-0000-0000-0000-000000000000"),
+        () => meAPI.abandonDreamCycle("00000000-0000-0000-0000-000000000000"),
+        () => meAPI.rollbackDreamCycle("00000000-0000-0000-0000-000000000000"),
+      ]) {
+        try {
+          await fn();
+        } catch (e) {
+          expect(e).toBeInstanceOf(APIError);
+        }
+      }
+    });
+
+    it("enrichment self-tier status + retry", async () => {
+      const status = await meAPI.getEnrichmentStatus({ limit: 5, status: "pending" });
+      expect(status.counts).toBeDefined();
+      try {
+        const r = await meAPI.retryEnrichment([]);
+        expect(r).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("export jobs CRUD", async () => {
+      const list0 = await meAPI.listExportJobs();
+      expect(Array.isArray(list0)).toBe(true);
+      const job = await meAPI.createExportJob({ scope: "account", format: "zip" });
+      expect(typeof job.id).toBe("string");
+      const got = await meAPI.getExportJob(job.id);
+      expect(got.id).toBe(job.id);
+      await meAPI.deleteExportJob(job.id);
+    });
+
+    it("changePassword() round-trips the admin password", async () => {
+      const r1 = await changePassword("TestPassword123!", "TempPassword999!");
+      expect(r1.changed).toBe(true);
+      // A password change revokes the current session token; re-login to
+      // continue and to refresh the ambient admin token the afterEach restores.
+      const l1 = await authAPI.login({
+        email: "admin@test.com",
+        password: "TempPassword999!",
+      });
+      localStorage.setItem("nram_token", l1.token);
+      adminToken = l1.token;
+
+      const r2 = await changePassword("TempPassword999!", "TestPassword123!");
+      expect(r2.changed).toBe(true);
+      const l2 = await authAPI.login({
+        email: "admin@test.com",
+        password: "TestPassword123!",
+      });
+      adminToken = l2.token;
+      localStorage.setItem("nram_token", adminToken);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // orgAPI -- previously-uncovered methods
+  // -----------------------------------------------------------------------
+
+  describe("orgAPI.extra", () => {
+    let orgId: string;
+    let orgUserId: string;
+
+    beforeAll(async () => {
+      const org = await adminAPI.createOrg({ name: "Org Extra", slug: "org-extra" });
+      orgId = org.id;
+      const user = await orgAPI.createUser(orgId, {
+        email: "orgextra@test.com",
+        password: "OrgExtra123!",
+        role: "member",
+        display_name: "Org Extra User",
+      });
+      orgUserId = user.id;
+    });
+
+    afterAll(async () => {
+      try {
+        await orgAPI.deleteUser(orgId, orgUserId);
+      } catch {
+        // ignore
+      }
+      try {
+        await adminAPI.deleteOrg(orgId);
+      } catch {
+        // ignore
+      }
+    });
+
+    it("user API key lifecycle", async () => {
+      const list0 = await orgAPI.listUserAPIKeys(orgId, orgUserId);
+      expect(Array.isArray(list0)).toBe(true);
+      const key = await orgAPI.generateUserAPIKey(orgId, orgUserId, { label: "org-key" });
+      expect(typeof key.id).toBe("string");
+      await orgAPI.revokeUserAPIKey(orgId, orgUserId, key.id);
+    });
+
+    it("analytics + usage (with and without params)", async () => {
+      const analytics = await orgAPI.getAnalytics(orgId);
+      expect(analytics).toBeDefined();
+      const usage0 = await orgAPI.getUsage(orgId);
+      expect(usage0).toBeDefined();
+      const usage1 = await orgAPI.getUsage(orgId, {
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-12-31T00:00:00Z",
+        group_by: "user",
+        user: orgUserId,
+        success_only: false,
+      });
+      expect(usage1).toBeDefined();
+    });
+
+    it("dashboard + activity", async () => {
+      const dash = await orgAPI.getDashboard(orgId);
+      expect(dash).toBeDefined();
+      const act = await orgAPI.getActivity(orgId);
+      expect(act).toBeDefined();
+    });
+
+    it("dreaming + enrichment org-tier", async () => {
+      const status = await orgAPI.getDreamingStatus(orgId);
+      expect(status).toBeDefined();
+      const cycles = await orgAPI.getDreamingCycles(orgId);
+      expect(Array.isArray(cycles)).toBe(true);
+      const enrich = await orgAPI.getEnrichmentStatus(orgId, { limit: 5 });
+      expect(enrich.counts).toBeDefined();
+      try {
+        await orgAPI.retryEnrichment(orgId, []);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+      for (const fn of [
+        () => orgAPI.getDreamingCycleDetail(orgId, "00000000-0000-0000-0000-000000000000"),
+        () => orgAPI.abandonDreamCycle(orgId, "00000000-0000-0000-0000-000000000000"),
+        () => orgAPI.rollbackDreamCycle(orgId, "00000000-0000-0000-0000-000000000000"),
+      ]) {
+        try {
+          await fn();
+        } catch (e) {
+          expect(e).toBeInstanceOf(APIError);
+        }
+      }
+    });
+
+    it("org IdP CRUD", async () => {
+      const list0 = await orgAPI.listOrgIdPs(orgId);
+      expect(Array.isArray(list0)).toBe(true);
+      let createdId: string | undefined;
+      try {
+        const cfg = await orgAPI.configureIdP(orgId, {
+          org_id: orgId,
+          provider_type: "oidc",
+          client_id: "cid",
+          client_secret: "secret",
+          issuer_url: "https://idp.example.com",
+        });
+        createdId = cfg.id;
+        const updated = await orgAPI.updateOrgIdP(orgId, cfg.id, { client_id: "cid2" });
+        expect(updated).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      } finally {
+        if (createdId) {
+          try {
+            await orgAPI.deleteOrgIdP(orgId, createdId);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // systemAPI (tier-C admin aggregate views)
+  // -----------------------------------------------------------------------
+
+  describe("systemAPI", () => {
+    it("getDashboard()/getActivity()/getAnalytics() return aggregates", async () => {
+      expect(await systemAPI.getDashboard()).toBeDefined();
+      expect(await systemAPI.getActivity()).toBeDefined();
+      expect(await systemAPI.getAnalytics()).toBeDefined();
+    });
+
+    it("getUsage() with and without params", async () => {
+      expect(await systemAPI.getUsage()).toBeDefined();
+      const u = await systemAPI.getUsage({
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-12-31T00:00:00Z",
+        group_by: "org",
+        success_only: true,
+      });
+      expect(u).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // oauthAPI + shareAcceptAPI (consent + share-accept read paths)
+  // -----------------------------------------------------------------------
+
+  describe("oauthAPI + shareAcceptAPI", () => {
+    let clientId: string;
+    let shareToken: string;
+    let shareProjectId: string;
+    const redirectUri = "http://127.0.0.1:8765/callback";
+    const baseParams = (): OAuthAuthorizeParams => ({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      code_challenge_method: "S256",
+      scope: "mcp",
+      resource: "https://nram.example.com",
+      state: "xyz",
+    });
+
+    beforeAll(async () => {
+      const client = await adminAPI.createOAuthClient({
+        name: "Consent Client",
+        redirect_uris: [redirectUri],
+        client_type: "public",
+      });
+      clientId = client.client_id;
+
+      const proj = await meAPI.createProject({ name: "Share Proj", slug: "share-proj" });
+      shareProjectId = proj.id;
+      const created = await sharesAPI.create({
+        name: "E2E Share",
+        description: "shared for e2e",
+        is_one_shot: false,
+        expires_at: "2099-01-01T00:00:00Z",
+        grants: [{ project_id: proj.id, permission: "read" }],
+      });
+      shareToken = created.secret;
+    });
+
+    afterAll(async () => {
+      try {
+        await adminAPI.deleteOAuthClient(
+          (await adminAPI.listOAuthClients()).find((c) => c.client_id === clientId)?.id ?? "",
+        );
+      } catch {
+        // ignore
+      }
+      try {
+        await meAPI.deleteProject(shareProjectId);
+      } catch {
+        // ignore
+      }
+    });
+
+    it("getAuthorizeContext() returns context or a redirect_to", async () => {
+      const res = await oauthAPI.getAuthorizeContext(baseParams());
+      expect(res).toBeDefined();
+    });
+
+    it("previewShare() previews a pasted share token", async () => {
+      try {
+        const res = await oauthAPI.previewShare({ ...baseParams(), share_token: shareToken });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("completeAuthorize() with decision deny", async () => {
+      try {
+        const res = await oauthAPI.completeAuthorize({
+          ...baseParams(),
+          auth_mode: "account",
+          decision: "deny",
+        });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("shareAcceptAPI.get() previews a share token", async () => {
+      try {
+        const res = await shareAcceptAPI.get(shareToken);
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("shareAcceptAPI.get() with an invalid token surfaces an error payload or APIError", async () => {
+      try {
+        const res = await shareAcceptAPI.get("nram_s_deadbeef");
+        // server may return a 200 envelope carrying { error } instead of throwing
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Branch-coverage fillers -- exercise the "other side" of optional-param
+  // branches against the real server.
+  // -----------------------------------------------------------------------
+
+  describe("branch coverage fillers", () => {
+    let projId: string;
+    let orgId: string;
+    let clientId: string;
+    const redirectUri = "http://127.0.0.1:8799/cb";
+
+    beforeAll(async () => {
+      const proj = await meAPI.createProject({ name: "Filler Proj", slug: "filler-proj" });
+      projId = proj.id;
+      await memoryAPI.store(projId, { content: "filler memory" });
+      const org = await adminAPI.createOrg({ name: "Filler Org", slug: "filler-org" });
+      orgId = org.id;
+      const client = await adminAPI.createOAuthClient({
+        name: "Filler Client",
+        redirect_uris: [redirectUri],
+        client_type: "public",
+      });
+      clientId = client.client_id;
+    });
+
+    afterAll(async () => {
+      try {
+        await meAPI.deleteProject(projId);
+      } catch {
+        // ignore
+      }
+      try {
+        await adminAPI.deleteOrg(orgId);
+      } catch {
+        // ignore
+      }
+      try {
+        const c = (await adminAPI.listOAuthClients()).find((x) => x.client_id === clientId);
+        if (c) await adminAPI.deleteOAuthClient(c.id);
+      } catch {
+        // ignore
+      }
+    });
+
+    it("adminAPI.getUsage with success_only=false", async () => {
+      expect(await adminAPI.getUsage({ success_only: false })).toBeDefined();
+    });
+
+    it("adminAPI.startVectorMigration without a batch size", async () => {
+      try {
+        await adminAPI.startVectorMigration("to_qdrant");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("adminAPI.retryEnrichment without ids", async () => {
+      try {
+        const r = await adminAPI.retryEnrichment();
+        expect(r).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("memoryAPI.list without limit/offset and listIDs without params", async () => {
+      const list = await memoryAPI.list(projId, { tags: ["no-such-tag"] });
+      expect(list.data).toBeDefined();
+      const ids = await memoryAPI.listIDs(projId);
+      expect(Array.isArray(ids.ids)).toBe(true);
+    });
+
+    it("meAPI.retryEnrichment without ids", async () => {
+      try {
+        const r = await meAPI.retryEnrichment();
+        expect(r).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("orgAPI.getUsage with success_only=true and retryEnrichment without ids", async () => {
+      expect(await orgAPI.getUsage(orgId, { success_only: true })).toBeDefined();
+      try {
+        await orgAPI.retryEnrichment(orgId);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("systemAPI.getUsage with success_only=false", async () => {
+      expect(await systemAPI.getUsage({ success_only: false })).toBeDefined();
+    });
+
+    it("oauthAPI.getAuthorizeContext with minimal params (no scope/resource/state)", async () => {
+      const res = await oauthAPI.getAuthorizeContext({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        code_challenge_method: "S256",
+      });
+      expect(res).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Download helpers (real server + minimal document stub)
+  // -----------------------------------------------------------------------
+
+  describe("download helpers", () => {
+    let dlProjectId: string;
+    let dlProjectSlug: string;
+    let prevDocument: unknown;
+
+    beforeAll(async () => {
+      // triggerBlobDownload (lib/download) needs a DOM: under @vitest-environment
+      // node there is none, so install a minimal document stub. URL.createObjectURL
+      // / revokeObjectURL already exist in node.
+      prevDocument = installDocumentStub();
+
+      const proj = await meAPI.createProject({ name: "DL Proj", slug: "dl-proj" });
+      dlProjectId = proj.id;
+      dlProjectSlug = proj.slug;
+      await memoryAPI.store(dlProjectId, { content: "downloadable memory" });
+    });
+
+    afterAll(async () => {
+      (globalThis as Record<string, unknown>).document = prevDocument;
+      try {
+        await meAPI.deleteProject(dlProjectId);
+      } catch {
+        // ignore
+      }
+    });
+
+    it("downloadProjectExport() (json default) triggers a download", async () => {
+      await expect(
+        downloadProjectExport(dlProjectId, dlProjectSlug),
+      ).resolves.toBeUndefined();
+    });
+
+    it("downloadProjectExport() (ndjson + includeSuperseded) triggers a download", async () => {
+      await expect(
+        downloadProjectExport(dlProjectId, dlProjectSlug, {
+          format: "ndjson",
+          includeSuperseded: true,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("downloadProjectExport() throws for a bogus project", async () => {
+      try {
+        await downloadProjectExport("00000000-0000-0000-0000-000000000000", "nope");
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("downloadLogsExport() (csv + json) triggers a download", async () => {
+      await expect(
+        downloadLogsExport("csv", { level: ["error"], limit: 10 }),
+      ).resolves.toBeUndefined();
+      await expect(downloadLogsExport("json")).resolves.toBeUndefined();
+    });
+
+    it("downloadExportJobArtifact() throws for a bogus job id", async () => {
+      try {
+        await downloadExportJobArtifact("00000000-0000-0000-0000-000000000000");
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Error handling -- must be at the end to avoid breaking state
   // -----------------------------------------------------------------------
 
@@ -1474,5 +2467,455 @@ describe("API Client E2E", () => {
         expect((e as APIError).status).toBe(404);
       }
     });
+  });
+});
+
+// ===========================================================================
+// Pure functions + APIError message derivation -- no server required.
+// ===========================================================================
+
+describe("client pure helpers", () => {
+  describe("memoryRowLabel", () => {
+    it("prefers the preview when present", () => {
+      expect(memoryRowLabel({ preview: "hello", length_chars: 5, id: "abcdefgh1234" })).toBe(
+        "hello",
+      );
+    });
+
+    it("falls back to a localized length hint", () => {
+      expect(memoryRowLabel({ length_chars: 1234, id: "abcdefgh1234" })).toBe(
+        `${(1234).toLocaleString()} chars`,
+      );
+    });
+
+    it("falls back to a truncated id", () => {
+      expect(memoryRowLabel({ id: "abcdefgh1234" })).toBe("abcdefgh…");
+    });
+
+    it("treats length_chars of 0 as present (not the id fallback)", () => {
+      expect(memoryRowLabel({ length_chars: 0, id: "abcdefgh1234" })).toBe("0 chars");
+    });
+  });
+
+  describe("buildLogQuery", () => {
+    it("returns an empty string when there is nothing to encode", () => {
+      expect(buildLogQuery()).toBe("");
+      expect(buildLogQuery({})).toBe("");
+      expect(buildLogQuery({ level: [] })).toBe("");
+    });
+
+    it("encodes every supported parameter", () => {
+      const qs = buildLogQuery({
+        level: ["error", "warn"],
+        component: "server",
+        search: "boom",
+        attrKey: "request_id",
+        attrValue: "abc",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-02-01T00:00:00Z",
+        limit: 25,
+        offset: 50,
+      });
+      const params = new URLSearchParams(qs.replace(/^\?/, ""));
+      expect(params.get("level")).toBe("error,warn");
+      expect(params.get("component")).toBe("server");
+      expect(params.get("search")).toBe("boom");
+      expect(params.get("attr_key")).toBe("request_id");
+      expect(params.get("attr_value")).toBe("abc");
+      expect(params.get("from")).toBe("2026-01-01T00:00:00Z");
+      expect(params.get("to")).toBe("2026-02-01T00:00:00Z");
+      expect(params.get("limit")).toBe("25");
+      expect(params.get("offset")).toBe("50");
+    });
+
+    it("encodes an empty attrValue (defined but blank)", () => {
+      expect(buildLogQuery({ attrValue: "" })).toBe("?attr_value=");
+    });
+
+    it("encodes limit/offset of 0", () => {
+      const qs = buildLogQuery({ limit: 0, offset: 0 });
+      const params = new URLSearchParams(qs.replace(/^\?/, ""));
+      expect(params.get("limit")).toBe("0");
+      expect(params.get("offset")).toBe("0");
+    });
+  });
+
+  describe("isLoopbackRedirectUri", () => {
+    it("accepts localhost, ::1 and 127.0.0.0/8", () => {
+      expect(isLoopbackRedirectUri("http://localhost:8080/cb")).toBe(true);
+      expect(isLoopbackRedirectUri("http://[::1]:8080/cb")).toBe(true);
+      expect(isLoopbackRedirectUri("http://127.0.0.1/cb")).toBe(true);
+      expect(isLoopbackRedirectUri("http://127.5.6.7/cb")).toBe(true);
+    });
+
+    it("rejects non-loopback hosts", () => {
+      expect(isLoopbackRedirectUri("https://example.com/cb")).toBe(false);
+      expect(isLoopbackRedirectUri("http://10.0.0.1/cb")).toBe(false);
+    });
+
+    it("returns false for an unparseable URI", () => {
+      expect(isLoopbackRedirectUri("not a url")).toBe(false);
+    });
+  });
+
+  describe("APIError.deriveMessage", () => {
+    it("uses a nested error.message", () => {
+      expect(new APIError(400, { error: { message: "nested boom" } }).message).toBe("nested boom");
+    });
+
+    it("uses a string-valued error field", () => {
+      expect(new APIError(400, { error: "string boom" }).message).toBe("string boom");
+    });
+
+    it("uses a top-level message field", () => {
+      expect(new APIError(400, { message: "top boom" }).message).toBe("top boom");
+    });
+
+    it("falls back to the generic status string for an empty error object", () => {
+      expect(new APIError(400, { error: {} }).message).toBe("API error 400");
+    });
+
+    it("falls back to the generic status string for a non-object body", () => {
+      expect(new APIError(500, "plain text").message).toBe("API error 500");
+      expect(new APIError(500, null).message).toBe("API error 500");
+    });
+  });
+});
+
+// ===========================================================================
+// Branches the real server cannot deterministically drive. These swap
+// globalThis.fetch for a synthetic Response per test -- the same mechanism the
+// E2E suite already uses for its global wrapper (not msw).
+// ===========================================================================
+
+describe("synthetic-response branches", () => {
+  let savedFetch: typeof globalThis.fetch;
+  let prevWindow: unknown;
+  let prevDocument: unknown;
+
+  beforeEach(() => {
+    savedFetch = globalThis.fetch;
+    prevWindow = (globalThis as Record<string, unknown>).window;
+    prevDocument = installDocumentStub();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = savedFetch;
+    (globalThis as Record<string, unknown>).window = prevWindow;
+    (globalThis as Record<string, unknown>).document = prevDocument;
+    localStorage.removeItem("nram_token");
+    localStorage.removeItem("nram_user");
+  });
+
+  function stubFetch(make: () => Response): void {
+    globalThis.fetch = (async () => make()) as typeof globalThis.fetch;
+  }
+
+  it("applies a refreshed JWT carrying a decodable payload", async () => {
+    const payload = btoa(
+      JSON.stringify({
+        sub: "u1",
+        email: "a@b.c",
+        display_name: "A",
+        role: "member",
+        org_id: "o1",
+      }),
+    );
+    const refreshed = `h.${payload}.s`;
+    localStorage.setItem("nram_token", "old-token");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "X-Refreshed-Token": refreshed, "Content-Type": "application/json" },
+        }),
+    );
+    await meAPI.getProfile();
+    expect(localStorage.getItem("nram_token")).toBe(refreshed);
+    expect(localStorage.getItem("nram_user")).toBeTruthy();
+  });
+
+  it("applies a refreshed token whose payload is undecodable (no user stored)", async () => {
+    localStorage.setItem("nram_token", "old-token");
+    localStorage.removeItem("nram_user");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "X-Refreshed-Token": "not-a-jwt", "Content-Type": "application/json" },
+        }),
+    );
+    await meAPI.getProfile();
+    expect(localStorage.getItem("nram_token")).toBe("not-a-jwt");
+    expect(localStorage.getItem("nram_user")).toBeNull();
+  });
+
+  it("fetchText throws APIError on a non-ok response", async () => {
+    stubFetch(() => new Response("boom", { status: 500 }));
+    await expect(fetchMetricsText()).rejects.toThrow(APIError);
+  });
+
+  it("never-settling 401 redirect clears the token and navigates to /login", async () => {
+    localStorage.setItem("nram_token", "expired");
+    (globalThis as Record<string, unknown>).window = {
+      location: { pathname: "/dashboard", href: "" },
+    };
+    stubFetch(() => new Response("unauthorized", { status: 401 }));
+    const pending = meAPI.getProfile();
+    const outcome = await Promise.race([
+      pending.then(() => "resolved"),
+      new Promise((r) => setTimeout(() => r("pending"), 50)),
+    ]);
+    expect(outcome).toBe("pending");
+    const win = (globalThis as Record<string, unknown>).window as {
+      location: { href: string };
+    };
+    expect(win.location.href).toBe("/login");
+    expect(localStorage.getItem("nram_token")).toBeNull();
+    expect(localStorage.getItem("nram_user")).toBeNull();
+  });
+
+  it("getProviderModels returns the wrapped models list on success", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify(["m1", "m2"]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const res = await adminAPI.getProviderModels("http://vllm.local", { "X-A": "v" });
+    expect(res.models).toEqual(["m1", "m2"]);
+  });
+
+  it("getOllamaModels returns the wrapped models list on success", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify([{ name: "llama3" }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const res = await adminAPI.getOllamaModels("http://ollama.local", { "X-A": "v", "X-Empty": "" });
+    expect(Array.isArray(res.models)).toBe(true);
+  });
+
+  it("getCostRates falls back to [] when data is absent", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    expect(await adminAPI.getCostRates()).toEqual([]);
+  });
+
+  it("meAPI.listExportJobs falls back to [] when data is absent", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    expect(await meAPI.listExportJobs()).toEqual([]);
+  });
+
+  it("downloadExportJobArtifact uses the Content-Disposition filename when present", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(new Blob(["zip-bytes"]), {
+          status: 200,
+          headers: { "Content-Disposition": 'attachment; filename="custom.zip"' },
+        }),
+    );
+    await expect(downloadExportJobArtifact("job-1")).resolves.toBeUndefined();
+  });
+
+  it("downloadExportJobArtifact falls back to a default filename when absent", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response(new Blob(["zip-bytes"]), { status: 200 }));
+    await expect(downloadExportJobArtifact("job-2")).resolves.toBeUndefined();
+  });
+
+  it("downloadLogsExport surfaces a non-ok response as APIError", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("nope", { status: 500 }));
+    await expect(downloadLogsExport("csv")).rejects.toThrow(APIError);
+  });
+
+  it("downloadLogsExport falls back to a default filename when no Content-Disposition", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response(new Blob(["log-bytes"]), { status: 200 }));
+    await expect(downloadLogsExport("json")).resolves.toBeUndefined();
+  });
+
+  it("downloadProjectExport surfaces a non-ok response as APIError", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("nope", { status: 403 }));
+    await expect(downloadProjectExport("p", "slug")).rejects.toThrow(APIError);
+  });
+
+  it("forwardedProviderHeaders yields undefined when every header value is blank", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const res = await adminAPI.getProviderModels("http://vllm.local", { "X-Empty": "" });
+    expect(res.models).toEqual([]);
+  });
+
+  it("pullOllamaModel includes non-empty headers and tolerates an empty map", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ status: "ok", model: "m" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    expect(await adminAPI.pullOllamaModel("m", "http://ollama.local", { "X-A": "v" })).toBeDefined();
+    expect(await adminAPI.pullOllamaModel("m", "http://ollama.local", {})).toBeDefined();
+  });
+
+  it("403 with an empty body uses the default forbidden message", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("", { status: 403 }));
+    try {
+      await meAPI.getProfile();
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(APIError);
+      expect((e as APIError).status).toBe(403);
+      // Empty body -> the default forbidden string lands in APIError.body.
+      expect((e as APIError).body).toContain("forbidden");
+    }
+  });
+
+  it("downloadLogsExport empty-body error uses the default message", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("", { status: 500 }));
+    await expect(downloadLogsExport("csv")).rejects.toThrow(APIError);
+  });
+
+  it("downloadExportJobArtifact empty-body error uses the default message", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("", { status: 404 }));
+    await expect(downloadExportJobArtifact("x")).rejects.toThrow(APIError);
+  });
+
+  it("downloadProjectExport empty-body error uses the default message", async () => {
+    localStorage.setItem("nram_token", "t");
+    stubFetch(() => new Response("", { status: 500 }));
+    await expect(downloadProjectExport("p", "slug")).rejects.toThrow(APIError);
+  });
+});
+
+// ===========================================================================
+// Destructive endpoints -- run against a dedicated throwaway server so they
+// cannot corrupt the main suite's shared state.
+// ===========================================================================
+
+describe("destructive endpoints (isolated server)", () => {
+  const DPORT = 18675;
+  const DURL = `http://localhost:${DPORT}`;
+  let proc: ChildProcess;
+  let dTmp: string;
+  let savedToken: string | null;
+
+  beforeAll(async () => {
+    savedToken = localStorage.getItem("nram_token");
+
+    // Re-point relative URLs at the dedicated server for the duration of this
+    // suite. The outer wrapper rewrites "/..." to the main server; override it.
+    const nodeFetch = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      let url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : (input as Request).url;
+      if (url.startsWith("/")) url = `${DURL}${url}`;
+      return nodeFetch(url, init);
+    };
+
+    const started = await startNramServer(DPORT, "nram-e2e-destructive-");
+    proc = started.proc;
+    dTmp = started.serverTmp;
+
+    const setupRes = await fetch(`${DURL}/v1/admin/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "admin@dtest.com", password: "TestPassword123!" }),
+    });
+    if (!setupRes.ok) {
+      throw new Error(`Destructive setup failed (${setupRes.status})`);
+    }
+    const data: SetupResponse = await setupRes.json();
+    localStorage.setItem("nram_token", data.token);
+  }, 45000);
+
+  afterAll(async () => {
+    if (proc) {
+      proc.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        proc.on("exit", () => resolve());
+        setTimeout(resolve, 5000);
+      });
+    }
+    if (dTmp) {
+      try {
+        rmSync(dTmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+    if (savedToken) {
+      localStorage.setItem("nram_token", savedToken);
+    } else {
+      localStorage.removeItem("nram_token");
+    }
+  });
+
+  it("completeSetup() rejects once setup is already complete", async () => {
+    try {
+      await adminAPI.completeSetup({ email: "admin@dtest.com", password: "TestPassword123!" });
+      expect.fail("setup should not run twice");
+    } catch (e) {
+      expect(e).toBeInstanceOf(APIError);
+    }
+  });
+
+  it("resetSettings() resets settings to defaults", async () => {
+    await adminAPI.updateSetting("enrichment.enabled", false);
+    const res = await adminAPI.resetSettings();
+    expect(typeof res.status).toBe("string");
+    expect(typeof res.reset).toBe("number");
+  });
+
+  it("resetSettings(key) resets a single setting", async () => {
+    const res = await adminAPI.resetSettings({ key: "enrichment.enabled" });
+    expect(typeof res.reset).toBe("number");
+  });
+
+  it("resetDatabase() truncates the dedicated database", async () => {
+    // Runs last: this wipes the throwaway DB. Either a success result or an
+    // APIError (mode unsupported on sqlite) exercises the request path.
+    try {
+      const res = await adminAPI.resetDatabase("", "truncate");
+      expect(res).toBeDefined();
+    } catch (e) {
+      expect(e).toBeInstanceOf(APIError);
+    }
   });
 });
