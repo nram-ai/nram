@@ -1,0 +1,6 @@
+# Embedded text assets must keep LF on every platform. Their byte size is
+# asserted by size-limit tests (e.g. the cursor/ChatGPT instructions cap of
+# 1500 chars), and the content is what clients paste verbatim. Without this,
+# a Windows checkout rewrites LF to CRLF and inflates the embedded size,
+# failing those tests on windows-latest only.
+internal/instructions/data/* text eol=lf

@@ -37,6 +37,10 @@ const DREAMING_PROMPTS: SimplePromptSpec[] = [
   { systemKey: "dreaming.novelty.judge_system_prompt", title: "Novelty Judge" },
 ];
 
+const ASK_PROMPTS: SimplePromptSpec[] = [
+  { systemKey: "ask.synthesis.system_prompt", title: "Answer Synthesis" },
+];
+
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
 
 "John Smith works at Acme Corp as a senior engineer. He joined in January 2025 and primarily works with Python and Go. The company is headquartered in San Francisco and recently expanded to Austin, Texas."`;
@@ -613,6 +617,11 @@ export default function PromptTemplates() {
     systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
   }));
 
+  const askPrompts = ASK_PROMPTS.map((spec) => ({
+    spec,
+    systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
+  }));
+
   // Keep refs updated for test calls.
   factSystemPromptRef.current = factSystemPromptData.currentValue;
   entitySystemPromptRef.current = entitySystemPromptData.currentValue;
@@ -858,6 +867,34 @@ export default function PromptTemplates() {
 
             <div className="space-y-6">
               {dreamingPrompts.map(({ spec, systemData }) => (
+                <SimplePromptEditorCard
+                  key={spec.systemKey}
+                  title={spec.title}
+                  description={systemData.description}
+                  promptData={systemData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Ask Prompt Section */}
+          <div className="border-t border-border pt-8">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Ask Prompt
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This prompt is used by the ask tool to synthesize one grounded,
+                cited answer over the recalled memory neighborhood. It controls
+                how the LLM cites sources and stays within the provided context.
+                Used only when the ask feature is enabled.
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {askPrompts.map(({ spec, systemData }) => (
                 <SimplePromptEditorCard
                   key={spec.systemKey}
                   title={spec.title}
