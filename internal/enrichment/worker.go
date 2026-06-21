@@ -1966,6 +1966,13 @@ func (wp *WorkerPool) runMultiVectorFacetSweep(ctx context.Context, job *model.E
 	if embedder == nil {
 		return nil
 	}
+	// ListMultiVectorBackfillCandidates filters embedding_dim IS NOT NULL, so a
+	// backfill-enqueued job has a recorded dim to fetch here; a NULL dim would
+	// short-circuit fetchSingleVector to empty and skip below WITHOUT stamping
+	// faceted_at, re-selecting the row every cycle. The len==0 guard remains a
+	// safety net for jobs enqueued before that predicate (or whose vector was
+	// purged after enqueue): such rows belong to the embedding backfill, not this
+	// sweep.
 	parentVec, err := wp.fetchSingleVector(ctx, mem.ID, mem.EmbeddingDim)
 	if err != nil {
 		return fmt.Errorf("fetch stored vector: %w", err)
@@ -2045,6 +2052,26 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 	}
 	if p.shortCircuitDelete() {
 		return wp.finalizeShortCircuitDelete(ctx, p)
+	}
+
+	// A normal enrichable memory must come out of the embed batch carrying a
+	// stored vector. If an embedder is configured and the content is
+	// embeddable but no vector was produced (a provider hiccup, an empty
+	// embedding, or the batch otherwise yielding nothing for this row),
+	// finalizing here would persist enriched=true with embedding_dim=NULL and
+	// no vector via MarkEnriched(nil): a silent stranded state that the
+	// embedding-backfill cannot see (it keys on embedding_dim) and that the
+	// multi-vector facet backfill re-selects forever (the sweep skips a
+	// vectorless row without stamping faceted_at). Fail the job instead so the
+	// queue's bounded retry re-embeds it, mirroring the vectorWriteFailed path
+	// above. Scoped to "embedding was expected": when no embedder is configured
+	// (wp.embedProvider() == nil), enriched-without-vector is the intended
+	// degraded mode and is left untouched.
+	if p.mem.EmbeddingDim == nil && wp.embedProvider != nil && wp.embedProvider() != nil && strings.TrimSpace(p.mem.Content) != "" {
+		if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, "embed produced no vector"); failErr != nil {
+			logClaimLostOr(failErr, "enrichment: fail-mark after missing embedding", "job", p.job.ID, "worker", p.workerID)
+		}
+		return fmt.Errorf("embed produced no vector: memory %s", p.mem.ID)
 	}
 
 	// UPDATE: insert a supersedes lineage edge and mark the target memory

@@ -27,6 +27,7 @@ var phaseFractionKeys = map[string]string{
 	model.DreamPhaseEntityDedup:          service.SettingDreamEntityDedupFraction,
 	model.DreamPhaseEmbeddingBackfill:    service.SettingDreamEmbeddingBackfillFraction,
 	model.DreamPhaseAugmentationBackfill: service.SettingDreamAugmentationBackfillFraction,
+	model.DreamPhaseMultiVectorBackfill:  service.SettingDreamMultiVectorBackfillFraction,
 	model.DreamPhaseParaphraseDedup:      service.SettingDreamParaphraseFraction,
 	model.DreamPhaseTransitive:           service.SettingDreamTransitiveFraction,
 	model.DreamPhaseContradictions:       service.SettingDreamContradictionFraction,

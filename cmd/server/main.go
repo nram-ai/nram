@@ -808,10 +808,12 @@ func main() {
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool, heartbeatInterval, eventBus, settingsSvc,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore, settingsSvc),
-		// Embedding backfill repairs rows whose embedding_dim is set but
-		// whose memory_vectors_<dim> row is missing (no_vector divergence).
-		// Runs before paraphrase dedup so the downstream phase sees the
-		// repaired vector state in the same cycle.
+		// Embedding backfill repairs two divergences: rows whose embedding_dim is
+		// set but whose memory_vectors_<dim> row is missing (no_vector), and rows
+		// whose embedding_dim is NULL (restamp when the vector survived, re-embed
+		// otherwise). Runs before paraphrase dedup so the downstream phase sees the
+		// repaired vector state, and before multi-vector backfill so restored
+		// embedding_dims become facet candidates in the same cycle.
 		dreaming.NewEmbeddingBackfillPhase(memoryRepo, memoryRepo, vectorStore, embedProvider, settingsSvc),
 		// Augmentation backfill enqueues query-augmentation jobs for rows whose
 		// vector was built from raw content (augmented_embedding_at IS NULL),
@@ -819,6 +821,11 @@ func main() {
 		// Runs before consolidation so it only sweeps rows stranded by prior
 		// cycles, not the fresh syntheses consolidation enqueues itself.
 		dreaming.NewAugmentationBackfillPhase(memoryRepo, enrichmentQueueRepo, settingsSvc),
+		// Multi-vector backfill enqueues facet-only jobs for vectored memories not
+		// yet faceted (faceted_at IS NULL), automating per-topic faceting so it
+		// self-drains each cycle. Runs after embedding backfill so embedding_dims
+		// restored this cycle are already visible as facet candidates.
+		dreaming.NewMultiVectorBackfillPhase(memoryRepo, enrichmentQueueRepo, settingsSvc),
 		// Paraphrase dedup runs before contradiction so the LLM-judge pair
 		// walk operates on a deduped memory set.
 		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),

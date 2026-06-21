@@ -104,6 +104,11 @@ var settingsGroups = []api.SettingGroup{
 				Description: "Re-runs query augmentation for memories whose embedding was built from raw content (e.g. when the augment provider was briefly unavailable), so they become searchable by their augmented queries without a manual backfill.",
 			},
 			{
+				Category:    "dreaming_multi_vector_backfill",
+				Label:       "Multi-Vector Backfill",
+				Description: "Queues the per-topic facet backfill for vectored memories that have not been faceted yet, so multi-vector recall self-drains each cycle without a manual backfill.",
+			},
+			{
 				Category:    "dreaming_performance",
 				Label:       "Performance",
 				Description: "How many neighbors to consider, how similar two entities must be to merge, and how often the scheduler wakes up.",

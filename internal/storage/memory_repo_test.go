@@ -87,13 +87,18 @@ func TestMemoryRepo_ListMultiVectorBackfillCandidates_PrioritizesSyntheses(t *te
 		repo := NewMemoryRepo(db)
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
+		// Facet candidates must carry a stored vector (embedding_dim NOT NULL):
+		// the sweep reuses the stored facet-0 vector keyed off embedding_dim.
+		dim := 1024
 		plain := newTestMemory(nsID)
 		plain.Origin = model.OriginUser
+		plain.EmbeddingDim = &dim
 		if err := repo.Create(ctx, plain); err != nil {
 			t.Fatalf("create plain: %v", err)
 		}
 		synth := newTestMemory(nsID)
 		synth.Origin = model.OriginDream
+		synth.EmbeddingDim = &dim
 		if err := repo.Create(ctx, synth); err != nil {
 			t.Fatalf("create synthesis: %v", err)
 		}
@@ -121,22 +126,38 @@ func TestMemoryRepo_ListMultiVectorBackfillCandidates_ExcludesFaceted(t *testing
 		repo := NewMemoryRepo(db)
 		nsID := createTestMemoryNamespace(t, ctx, db)
 
+		dim := 1024
 		faceted := newTestMemory(nsID)
+		faceted.EmbeddingDim = &dim
 		if err := repo.Create(ctx, faceted); err != nil {
 			t.Fatalf("create faceted: %v", err)
 		}
 		pending := newTestMemory(nsID)
+		pending.EmbeddingDim = &dim
 		if err := repo.Create(ctx, pending); err != nil {
 			t.Fatalf("create pending: %v", err)
 		}
+		// A vectorless row (embedding_dim NULL) must never be a candidate: the
+		// sweep cannot fetch a facet-0 vector for it, so it would churn forever.
+		// It belongs to the embedding backfill, not this one.
+		vectorless := newTestMemory(nsID)
+		if err := repo.Create(ctx, vectorless); err != nil {
+			t.Fatalf("create vectorless: %v", err)
+		}
 
-		// Both are candidates before any facet stamp.
+		// Both vectored rows are candidates before any facet stamp; the
+		// vectorless row is excluded.
 		cands, err := repo.ListMultiVectorBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
 		if err != nil {
 			t.Fatalf("list before stamp: %v", err)
 		}
 		if len(cands) != 2 {
 			t.Fatalf("expected 2 candidates before stamping, got %d", len(cands))
+		}
+		for _, c := range cands {
+			if c.ID == vectorless.ID {
+				t.Errorf("vectorless (embedding_dim NULL) memory must not be a facet candidate")
+			}
 		}
 
 		// Stamp one as faceted (single topic, count 1).

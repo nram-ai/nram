@@ -555,6 +555,26 @@ describe("formatDreamLog: phase_summary", () => {
     ]);
   });
 
+  it("multi_vector_backfill phase_summary returns metrics in the configured order", () => {
+    const out = formatDreamLog(
+      mkLog({
+        phase: "multi_vector_backfill",
+        operation: "phase_summary",
+        target_type: "namespace",
+        target_id: A,
+        before_state: {},
+        after_state: { candidates: 9, enqueued: 7, errors: 0 },
+      }),
+    );
+    expect(out.isSummary).toBe(true);
+    expect(out.narrative).toBe("Multi-Vector Backfill summary");
+    expect(out.metrics?.map((m) => [m.label, m.value])).toEqual([
+      ["Candidates", 9],
+      ["Enqueued", 7],
+      ["Errors", 0],
+    ]);
+  });
+
   it("consolidation phase_summary tags the sub-phase", () => {
     const out = formatDreamLog(
       mkLog({

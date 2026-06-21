@@ -30,6 +30,7 @@ const (
 	DreamPhaseEntityDedup          = "entity_dedup"
 	DreamPhaseEmbeddingBackfill    = "embedding_backfill"
 	DreamPhaseAugmentationBackfill = "augmentation_backfill"
+	DreamPhaseMultiVectorBackfill  = "multi_vector_backfill"
 	DreamPhaseParaphraseDedup      = "paraphrase_dedup"
 	DreamPhaseTransitive           = "transitive_discovery"
 	DreamPhaseContradictions       = "contradiction_detection"

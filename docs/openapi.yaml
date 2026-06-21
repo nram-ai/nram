@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.7.1
+  version: 0.7.2
   license:
     name: MIT
 
@@ -5865,6 +5865,9 @@ components:
         - "dreaming.max_tokens_per_call"
         - "dreaming.max_tokens_per_cycle"
         - "dreaming.min_interval_seconds"
+        - "dreaming.multi_vector_backfill.budget_fraction"
+        - "dreaming.multi_vector_backfill.cap_per_cycle"
+        - "dreaming.multi_vector_backfill.enabled"
         - "dreaming.novelty.backfill_embed_high_threshold"
         - "dreaming.novelty.backfill_per_cycle"
         - "dreaming.novelty.embed_high_threshold"

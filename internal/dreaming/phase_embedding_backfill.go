@@ -36,12 +36,15 @@ func backfillDims() []int {
 	return dims
 }
 
-// EmbeddingBackfillPhase repairs rows whose embedding_dim is set but
-// whose memory_vectors_<dim> row is missing. For each divergent row it
-// either re-embeds and writes a fresh vector, or clears embedding_dim
-// so the row state matches the vector store. Runs before paraphrase
-// dedup so the downstream phase sees the repaired state in the same
-// cycle.
+// EmbeddingBackfillPhase repairs two vector/row divergences. First, rows whose
+// embedding_dim is set but whose memory_vectors_<dim> row is missing: each is
+// re-embedded (fresh vector) or has embedding_dim cleared so the row matches the
+// vector store. Second, rows whose embedding_dim is NULL (the embed never
+// recorded a dim): if a vector survived at some supported dim the dim is
+// restamped with no re-embed (desync), otherwise the row is re-embedded; demoted
+// rows stay vectorless. Runs before paraphrase dedup so the downstream phase
+// sees the repaired state in the same cycle, and before the multi-vector facet
+// backfill phase so restored embedding_dims become facet candidates same-cycle.
 type EmbeddingBackfillPhase struct {
 	repairer    MemoryDimRepairer
 	memWriter   MemoryWriter
@@ -156,6 +159,11 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		}
 	}
 
+	// Null-dim repair shares the same per-cycle cap as the per-dim scan above.
+	nullFound, nullVisited := p.repairNullDimRows(ctx, cycle, budget, cap-visited, concurrency, stats)
+	foundTotal += nullFound
+	visited += nullVisited
+
 	stats["candidates"] = foundTotal
 	stats["visited"] = visited
 	p.writePhaseSummary(ctx, logger, stats, budget, tokensBefore)
@@ -172,6 +180,126 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		}, nil
 	}
 	return PhaseResult{}, nil
+}
+
+// repairNullDimRows heals memories whose embedding_dim is NULL, which the
+// per-dim FindMemoriesMissingVector scan cannot see (it matches embedding_dim =
+// dim). These arise when the enrichment embed produced no vector yet the job
+// still finalized (now guarded at the write path in worker.finalizeJob, but
+// legacy rows persist). Within the supplied remaining cap: if a stored vector
+// still survives at some supported dim (embedding_dim was lost while the vector
+// remained = desync), embedding_dim is restamped with no re-embed; otherwise the
+// row is re-embedded. Returns how many candidates were found and processed so
+// the caller can fold them into the cycle's running totals.
+func (p *EmbeddingBackfillPhase) repairNullDimRows(ctx context.Context, cycle *model.DreamCycle, budget *TokenBudget, remaining, concurrency int, stats map[string]any) (found, processed int) {
+	if remaining <= 0 {
+		return 0, 0
+	}
+	nullRows, err := p.repairer.FindMemoriesNullEmbeddingDim(ctx, cycle.NamespaceID, remaining+1)
+	if err != nil {
+		slog.Warn("dreaming: embedding backfill null-dim find failed",
+			"cycle", cycle.ID, "namespace", cycle.NamespaceID, "err", err)
+		return 0, 0
+	}
+	found = len(nullRows)
+	toProcess := nullRows
+	if len(toProcess) > remaining {
+		toProcess = toProcess[:remaining]
+	}
+	if len(toProcess) == 0 {
+		return found, 0
+	}
+
+	existingDim := p.probeExistingVectors(ctx, cycle, toProcess)
+
+	// Re-embed only the genuinely vectorless rows (desync rows already have a
+	// vector). Embed in parallel, then persist serially in order.
+	embedDim := p.bestEmbedDim()
+	vecs := make([][]float32, len(toProcess))
+	errs := make([]error, len(toProcess))
+	needEmbed := make([]int, 0, len(toProcess))
+	for i := range toProcess {
+		if _, ok := existingDim[toProcess[i].ID]; !ok {
+			needEmbed = append(needEmbed, i)
+		}
+	}
+	runBounded(concurrency, len(needEmbed), func(k int) {
+		i := needEmbed[k]
+		m := toProcess[i]
+		vecs[i], errs[i] = p.embedForBackfill(ctx, &m, embedDim, budget)
+	})
+
+	for i := range toProcess {
+		processed++
+		mem := toProcess[i]
+		if d, ok := existingDim[mem.ID]; ok {
+			// Desync: the vector survived; restamp embedding_dim only.
+			mem.EmbeddingDim = &d
+			if err := p.memWriter.UpdateEmbeddingDim(ctx, mem.ID, d); err != nil {
+				slog.Warn("dreaming: embedding backfill null-dim restamp failed",
+					"memory", mem.ID, "dim", d, "err", err)
+				stats["update_errors"] = stats["update_errors"].(int) + 1
+				continue
+			}
+			stats["repaired"] = stats["repaired"].(int) + 1
+			continue
+		}
+		// No surviving vector: a fresh embed writes the vector and stamps
+		// embedding_dim (tryRepair). When no embedder is configured or the embed
+		// failed, leave embedding_dim NULL — there is no stale dim claim to clear.
+		p.tryRepair(ctx, &mem, vecs[i], errs[i], stats)
+	}
+	return found, processed
+}
+
+// probeExistingVectors returns, per candidate, the dim of any stored facet-0
+// vector that survived (the desync case). It probes through the vector-store
+// abstraction (GetByIDs), not raw memory_vectors_<dim> SQL, so pgvector, HNSW,
+// and Qdrant deployments are covered identically, and stops once every candidate
+// has been located.
+func (p *EmbeddingBackfillPhase) probeExistingVectors(ctx context.Context, cycle *model.DreamCycle, rows []model.Memory) map[uuid.UUID]int {
+	existingDim := make(map[uuid.UUID]int, len(rows))
+	if p.vectorStore == nil || len(rows) == 0 {
+		return existingDim
+	}
+	ids := make([]uuid.UUID, len(rows))
+	for i := range rows {
+		ids[i] = rows[i].ID
+	}
+	for _, dim := range backfillDims() {
+		if len(existingDim) == len(ids) {
+			break // every candidate already located; remaining dims add nothing
+		}
+		got, err := p.vectorStore.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
+		if err != nil {
+			slog.Warn("dreaming: embedding backfill null-dim probe failed",
+				"cycle", cycle.ID, "dim", dim, "err", err)
+			continue
+		}
+		for id, vec := range got {
+			if len(vec) == 0 {
+				continue
+			}
+			if _, seen := existingDim[id]; !seen {
+				existingDim[id] = dim
+			}
+		}
+	}
+	return existingDim
+}
+
+// bestEmbedDim returns the embedder's preferred dim, or 0 when no embedder is
+// configured (embedForBackfill then returns errBackfillNoEmbedder and the row
+// is left for a future cycle).
+func (p *EmbeddingBackfillPhase) bestEmbedDim() int {
+	if p.embedder == nil {
+		return 0
+	}
+	ep := p.embedder()
+	if ep == nil {
+		return 0
+	}
+	return storage.BestEmbeddingDimension(ep.Dimensions())
 }
 
 // embedForBackfill runs only the embedding call for a divergent row. It does

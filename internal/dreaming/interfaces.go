@@ -183,6 +183,7 @@ type MemoryHardDeleter interface {
 // vector store.
 type MemoryDimRepairer interface {
 	FindMemoriesMissingVector(ctx context.Context, namespaceID uuid.UUID, dim, limit int) ([]model.Memory, error)
+	FindMemoriesNullEmbeddingDim(ctx context.Context, namespaceID uuid.UUID, limit int) ([]model.Memory, error)
 }
 
 // AugmentationBacklogLister lists live memory IDs whose embedding was never
@@ -192,4 +193,13 @@ type MemoryDimRepairer interface {
 // *storage.MemoryRepo.ListAugmentationBackfillCandidates.
 type AugmentationBacklogLister interface {
 	ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+}
+
+// MultiVectorBacklogLister lists live, vectored memories not yet faceted
+// (faceted_at IS NULL AND embedding_dim IS NOT NULL), scoped to the given
+// namespaces. The multi-vector-backfill phase pages through them and enqueues a
+// facet-only enrichment job (JobMarkerOnlyMultiVector) for each. Satisfied by
+// *storage.MemoryRepo.ListMultiVectorBackfillCandidates.
+type MultiVectorBacklogLister interface {
+	ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }

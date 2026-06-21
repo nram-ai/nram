@@ -134,6 +134,7 @@ const (
 	SettingDreamEntityDedupFraction          = "dreaming.entity_dedup.budget_fraction"
 	SettingDreamEmbeddingBackfillFraction    = "dreaming.embedding_backfill.budget_fraction"
 	SettingDreamAugmentationBackfillFraction = "dreaming.augmentation_backfill.budget_fraction"
+	SettingDreamMultiVectorBackfillFraction  = "dreaming.multi_vector_backfill.budget_fraction"
 	SettingDreamParaphraseFraction           = "dreaming.paraphrase_dedup.budget_fraction"
 	SettingDreamTransitiveFraction           = "dreaming.transitive.budget_fraction"
 	SettingDreamContradictionFraction        = "dreaming.contradiction.budget_fraction"
@@ -204,6 +205,15 @@ const (
 	// phase), so it carries no budget fraction.
 	SettingDreamAugmentationBackfillEnabled     = "dreaming.augmentation_backfill.enabled"
 	SettingDreamAugmentationBackfillCapPerCycle = "dreaming.augmentation_backfill.cap_per_cycle"
+
+	// Multi-vector-backfill phase. Enqueues facet-only enrichment jobs
+	// (JobMarkerOnlyMultiVector) for live memories that carry a stored vector
+	// but have not been faceted (faceted_at IS NULL), automating what the admin
+	// "backfill multi-vector" button does so faceting self-drains each cycle.
+	// Gated additionally by enrichment.multi_vector.enabled. Enqueue-only (no
+	// LLM calls in the phase), so it carries no budget fraction.
+	SettingDreamMultiVectorBackfillEnabled     = "dreaming.multi_vector_backfill.enabled"
+	SettingDreamMultiVectorBackfillCapPerCycle = "dreaming.multi_vector_backfill.cap_per_cycle"
 
 	// Weight-adjustment phase tuning. support_gain is the multiplier alpha in
 	// weight *= 1 + alpha * (support - 1) when a relationship's supporting
@@ -851,6 +861,7 @@ var settingDefaults = map[string]string{
 	SettingDreamEntityDedupFraction:          "0.0",
 	SettingDreamEmbeddingBackfillFraction:    "0.10",
 	SettingDreamAugmentationBackfillFraction: "0.0",
+	SettingDreamMultiVectorBackfillFraction:  "0.0",
 	SettingDreamParaphraseFraction:           "0.05",
 	SettingDreamTransitiveFraction:           "0.0",
 	SettingDreamContradictionFraction:        "0.40",
@@ -870,6 +881,9 @@ var settingDefaults = map[string]string{
 
 	SettingDreamAugmentationBackfillEnabled:     "true",
 	SettingDreamAugmentationBackfillCapPerCycle: "1000",
+
+	SettingDreamMultiVectorBackfillEnabled:     "true",
+	SettingDreamMultiVectorBackfillCapPerCycle: "1000",
 
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",

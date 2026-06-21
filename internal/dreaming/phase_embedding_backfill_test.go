@@ -23,6 +23,13 @@ type fakeMemoryDimRepairer struct {
 	lastLimit   int
 	errOnDim    int
 	errToReturn error
+
+	// nullDimRows drives the null-embedding_dim repair sweep; nullDimErr is
+	// returned from FindMemoriesNullEmbeddingDim when set.
+	nullDimRows      []model.Memory
+	nullDimErr       error
+	nullDimCalls     int
+	nullDimLastLimit int
 }
 
 func (f *fakeMemoryDimRepairer) FindMemoriesMissingVector(_ context.Context, _ uuid.UUID, dim, limit int) ([]model.Memory, error) {
@@ -42,12 +49,30 @@ func (f *fakeMemoryDimRepairer) FindMemoriesMissingVector(_ context.Context, _ u
 	return append([]model.Memory(nil), rows...), nil
 }
 
+func (f *fakeMemoryDimRepairer) FindMemoriesNullEmbeddingDim(_ context.Context, _ uuid.UUID, limit int) ([]model.Memory, error) {
+	f.nullDimCalls++
+	f.nullDimLastLimit = limit
+	if f.nullDimErr != nil {
+		return nil, f.nullDimErr
+	}
+	rows := f.nullDimRows
+	if limit < len(rows) {
+		return append([]model.Memory(nil), rows[:limit]...), nil
+	}
+	return append([]model.Memory(nil), rows...), nil
+}
+
 // recordingVectorStore captures Upsert and Delete calls so backfill tests
 // can assert what got repaired vs. cleared.
 type recordingVectorStore struct {
 	upserts   []vectorUpsertRecord
 	deletes   []uuid.UUID
 	upsertErr error
+
+	// existing drives GetByIDs for the null-dim desync probe: vectors are
+	// returned only when the queried dimension equals existingDim.
+	existing    map[uuid.UUID][]float32
+	existingDim int
 }
 
 type vectorUpsertRecord struct {
@@ -71,8 +96,17 @@ func (r *recordingVectorStore) UpsertBatch(_ context.Context, _ []storage.Vector
 func (r *recordingVectorStore) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
 	return nil, nil
 }
-func (r *recordingVectorStore) GetByIDs(_ context.Context, _ storage.VectorKind, _ []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
-	return nil, nil
+func (r *recordingVectorStore) GetByIDs(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, dim int) (map[uuid.UUID][]float32, error) {
+	if r.existing == nil || dim != r.existingDim {
+		return nil, nil
+	}
+	out := make(map[uuid.UUID][]float32)
+	for _, id := range ids {
+		if v, ok := r.existing[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, nil
 }
 func (r *recordingVectorStore) Delete(_ context.Context, _ storage.VectorKind, id uuid.UUID) error {
 	r.deletes = append(r.deletes, id)
@@ -370,6 +404,100 @@ func TestEmbeddingBackfillPhase_SyncsDimWhenEmbedderReturnsDifferentDim(t *testi
 	}
 	if writer.embeddingDimUpdates[0].ID != row.ID {
 		t.Errorf("UpdateEmbeddingDim target = %s, want %s", writer.embeddingDimUpdates[0].ID, row.ID)
+	}
+}
+
+// memNullDim builds a content-bearing, searchable memory whose embedding_dim is
+// NULL — the shape FindMemoriesNullEmbeddingDim returns for the null-dim repair.
+func memNullDim(content string, ns uuid.UUID) model.Memory {
+	return model.Memory{
+		ID:          uuid.New(),
+		NamespaceID: ns,
+		Content:     content,
+		Confidence:  1.0,
+		UpdatedAt:   time.Now().UTC(),
+	}
+}
+
+// Null-dim, no surviving vector: the row is re-embedded and both the vector and
+// embedding_dim are written.
+func TestEmbeddingBackfillPhase_NullDimReembedsVectorless(t *testing.T) {
+	ns := uuid.New()
+	dim := 384
+	row := memNullDim("vectorless null-dim row", ns)
+
+	repairer := &fakeMemoryDimRepairer{nullDimRows: []model.Memory{row}}
+	writer := &updatingMemoryWriter{}
+	vs := &recordingVectorStore{} // GetByIDs returns nil → no surviving vector
+	emb := &staticEmbedder{vectors: [][]float32{makeUnitVec(dim)}}
+
+	phase := NewEmbeddingBackfillPhase(
+		repairer, writer, vs,
+		func() provider.EmbeddingProvider { return emb },
+		backfillSettings(true, 200),
+	)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(10000, 2048), logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if repairer.nullDimCalls != 1 {
+		t.Errorf("expected 1 null-dim find call; got %d", repairer.nullDimCalls)
+	}
+	if len(vs.upserts) != 1 {
+		t.Fatalf("expected 1 vector Upsert (re-embed); got %d", len(vs.upserts))
+	}
+	if vs.upserts[0].ID != row.ID || vs.upserts[0].Dimension != dim {
+		t.Errorf("upsert mismatch; got id=%s dim=%d, want id=%s dim=%d",
+			vs.upserts[0].ID, vs.upserts[0].Dimension, row.ID, dim)
+	}
+	if len(writer.embeddingDimUpdates) != 1 {
+		t.Fatalf("expected 1 UpdateEmbeddingDim (stamp dim); got %d", len(writer.embeddingDimUpdates))
+	}
+	if writer.embeddingDimUpdates[0].Dim != dim {
+		t.Errorf("stamped dim = %d, want %d", writer.embeddingDimUpdates[0].Dim, dim)
+	}
+}
+
+// Null-dim desync: a vector already survives at some dim, so the row's
+// embedding_dim is restamped with no re-embed and no upsert.
+func TestEmbeddingBackfillPhase_NullDimRestampsDesync(t *testing.T) {
+	ns := uuid.New()
+	dim := 768
+	row := memNullDim("vector survived, dim lost", ns)
+
+	repairer := &fakeMemoryDimRepairer{nullDimRows: []model.Memory{row}}
+	writer := &updatingMemoryWriter{}
+	vs := &recordingVectorStore{
+		existing:    map[uuid.UUID][]float32{row.ID: makeUnitVec(dim)},
+		existingDim: dim,
+	}
+	emb := &staticEmbedder{vectors: [][]float32{makeUnitVec(384)}}
+
+	phase := NewEmbeddingBackfillPhase(
+		repairer, writer, vs,
+		func() provider.EmbeddingProvider { return emb },
+		backfillSettings(true, 200),
+	)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if _, err := phase.Execute(context.Background(), cycle, NewTokenBudget(10000, 2048), logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(vs.upserts) != 0 {
+		t.Errorf("desync restamp must not upsert a vector; got %d", len(vs.upserts))
+	}
+	if emb.calls.Load() != 0 {
+		t.Errorf("desync restamp must not call the embedder; got %d", emb.calls.Load())
+	}
+	if len(writer.embeddingDimUpdates) != 1 {
+		t.Fatalf("expected 1 UpdateEmbeddingDim (restamp); got %d", len(writer.embeddingDimUpdates))
+	}
+	if writer.embeddingDimUpdates[0].ID != row.ID || writer.embeddingDimUpdates[0].Dim != dim {
+		t.Errorf("restamp mismatch; got id=%s dim=%d, want id=%s dim=%d",
+			writer.embeddingDimUpdates[0].ID, writer.embeddingDimUpdates[0].Dim, row.ID, dim)
 	}
 }
 

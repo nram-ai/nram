@@ -1198,17 +1198,27 @@ func (r *MemoryRepo) listBackfillCandidates(ctx context.Context, extraWhere []st
 }
 
 // ListMultiVectorBackfillCandidates lists live in-scope memories that have not
-// yet been faceted (faceted_at IS NULL). The facet pass stamps faceted_at on
-// every memory it processes (single-topic ones included), so the candidate
-// count drops to zero once a backfill completes and a re-run only picks up
-// genuinely new memories, rather than re-faceting the whole corpus. Dream syntheses
+// yet been faceted (faceted_at IS NULL) AND carry a stored whole-memory vector
+// (embedding_dim IS NOT NULL). The facet pass stamps faceted_at on every memory
+// it processes (single-topic ones included), so the candidate count drops to
+// zero once a backfill completes and a re-run only picks up genuinely new
+// memories, rather than re-faceting the whole corpus. Dream syntheses
 // are enqueued first because they are the population most prone to multi-topic
 // dilution (lexical consolidation fused unrelated sources) and many have already
 // purged their sources on supersession, so faceting is the only recall recovery
 // left for them; ordering them ahead of plain memories means a limited or
 // interrupted backfill repairs the highest-value memories first.
+//
+// The embedding_dim IS NOT NULL predicate is load-bearing: runMultiVectorFacetSweep
+// reuses the stored facet-0 vector and keys the fetch off memories.embedding_dim,
+// so a NULL-dim row (vector never written, or write soft-failed) can never be
+// faceted and the sweep would skip it WITHOUT stamping faceted_at, re-selecting it
+// on every run forever. Excluding NULL-dim rows here (matching what the worker can
+// actually act on, like ListEnrichedParentsWithExtractedChildren) stops that churn;
+// the embedding-backfill phase restores embedding_dim for such rows, after which
+// they become facet candidates again on the next cycle.
 func (r *MemoryRepo) ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
-	return r.listBackfillCandidates(ctx, []string{"faceted_at IS NULL"}, namespaceIDs, limit, "list multi-vector backfill candidates", "(origin = 'dream') DESC, created_at ASC")
+	return r.listBackfillCandidates(ctx, []string{"faceted_at IS NULL", "embedding_dim IS NOT NULL"}, namespaceIDs, limit, "list multi-vector backfill candidates", "(origin = 'dream') DESC, created_at ASC")
 }
 
 // ListAugmentationBackfillCandidates lists in-scope memories whose vector
@@ -1913,6 +1923,71 @@ func (r *MemoryRepo) FindMemoriesMissingVector(ctx context.Context, namespaceID 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("memory find missing vector iteration: %w", err)
+	}
+	return out, nil
+}
+
+// FindMemoriesNullEmbeddingDim returns live, searchable (confidence > 0)
+// memories with non-empty content whose embedding_dim is NULL — rows the
+// enrichment embed never recorded a dim for. These are invisible to
+// FindMemoriesMissingVector (which matches embedding_dim = dim), so the
+// embedding-backfill phase uses this finder to heal them: re-embedding the
+// genuinely vectorless ones and restamping any whose stored vector survived
+// while the dim was lost (the desync the enrichment write path could leave
+// before the worker.finalizeJob guard). Demoted rows (confidence = 0) are
+// excluded so the repair targets only memories that should currently be
+// searchable, matching FindMemoriesMissingVector. Pure memories-table query
+// (no vector-table join) so it is identical across postgres and sqlite and
+// independent of which vector store backs the deployment.
+func (r *MemoryRepo) FindMemoriesNullEmbeddingDim(ctx context.Context, namespaceID uuid.UUID, limit int) ([]model.Memory, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	selectCols := memoryColumnsAliased("m")
+
+	var query string
+	var args []any
+	if r.db.Backend() == BackendPostgres {
+		query = selectCols + ` FROM memories m
+			WHERE m.namespace_id = $1
+			  AND m.deleted_at IS NULL
+			  AND m.superseded_by IS NULL
+			  AND m.confidence > 0
+			  AND m.embedding_dim IS NULL
+			  AND m.content IS NOT NULL AND trim(m.content) <> ''
+			ORDER BY m.created_at DESC
+			LIMIT $2`
+		args = []any{namespaceID.String(), limit}
+	} else {
+		query = selectCols + ` FROM memories m
+			WHERE m.namespace_id = ?
+			  AND m.deleted_at IS NULL
+			  AND m.superseded_by IS NULL
+			  AND m.confidence > 0
+			  AND m.embedding_dim IS NULL
+			  AND m.content IS NOT NULL AND trim(m.content) <> ''
+			ORDER BY m.created_at DESC
+			LIMIT ?`
+		args = []any{namespaceID.String(), limit}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory find null embedding_dim: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []model.Memory{}
+	for rows.Next() {
+		mem, err := r.scanMemoryFromRows(rows)
+		if err != nil {
+			return nil, fmt.Errorf("memory find null embedding_dim scan: %w", err)
+		}
+		out = append(out, *mem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory find null embedding_dim iteration: %w", err)
 	}
 	return out, nil
 }
