@@ -25,6 +25,11 @@ Memories persist across all machines, agents, and conversations.
 - When you need context you lack: recall before asking the user
 Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
+**WHEN TO ASK** (ask, when the tool is available):
+- When you want one synthesized, cited answer composed over your memories rather than a ranked list to read yourself
+- ask runs the retrieval for you and writes a grounded answer with footnote citations; it spends a model call, so prefer recall for plain lookups
+- Omit project for a wide synthesis across all your projects; pass a project slug to scope it (same tiers as recall). ask is opt-in and appears only when an operator has enabled it
+
 **WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate
 - When you need context beyond what recall returns

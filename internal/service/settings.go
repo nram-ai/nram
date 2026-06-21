@@ -653,6 +653,21 @@ const (
 	SettingDreamSynthesisSystemPrompt     = "dreaming.synthesis_system_prompt"
 	SettingDreamAlignmentSystemPrompt     = "dreaming.alignment_system_prompt"
 	SettingDreamNoveltyJudgeSystemPrompt  = "dreaming.novelty.judge_system_prompt"
+	SettingAskSynthesisSystemPrompt       = "ask.synthesis.system_prompt"
+)
+
+// Ask synthesis tool settings. The ask tool runs recall over a wide aperture,
+// assembles a neighborhood, and makes one LLM call to synthesize an answer.
+// Gated OFF by default (SettingAskEnabled) so it never spends model tokens
+// until an operator opts in and configures the dedicated ask provider slot.
+const (
+	SettingAskEnabled                 = "ask.enabled"
+	SettingAskSynthesisTemperature    = "ask.synthesis.temperature"
+	SettingAskSynthesisMaxTokens      = "ask.synthesis.max_tokens"
+	SettingAskRecallCandidates        = "ask.recall.candidates"
+	SettingAskGraphDepth              = "ask.graph.depth"
+	SettingAskSiblingsPerCandidate    = "ask.siblings.per_candidate"
+	SettingAskNeighborhoodMaxMemories = "ask.neighborhood.max_memories"
 )
 
 // Provider prompt-delivery and Ollama keep-warm runtime settings.
@@ -783,6 +798,16 @@ Combine the following pieces of information into a single concise paragraph that
 
 Output ONLY the synthesized text:`
 
+	askSynthesisSystemPromptText = `You answer the user's question using ONLY the memory neighborhood provided below. You do not use outside knowledge.
+
+Each memory in the neighborhood is tagged with its id. Rules:
+- Answer the question directly and concisely from the neighborhood. Preserve technical terms, names, and numbers verbatim.
+- Cite the memory ids you used inline, in square brackets, e.g. [a1b2c3d4]. Cite only ids that appear in the neighborhood.
+- If the neighborhood does not contain the answer, say exactly: "Not in neighborhood." Do not guess or fill gaps.
+- Do not add commentary, greetings, or prefaces. Do not hedge.
+
+Output only the answer text (with inline id citations).`
+
 	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
 
 Score how strongly the evidence supports or contradicts the synthesis.
@@ -899,6 +924,15 @@ var settingDefaults = map[string]string{
 
 	SettingFactSystemPrompt:   factSystemPromptText,
 	SettingEntitySystemPrompt: entitySystemPromptText,
+
+	SettingAskEnabled:                 "false",
+	SettingAskSynthesisSystemPrompt:   askSynthesisSystemPromptText,
+	SettingAskSynthesisTemperature:    "0.1",
+	SettingAskSynthesisMaxTokens:      "4096",
+	SettingAskRecallCandidates:        "8",
+	SettingAskGraphDepth:              "1",
+	SettingAskSiblingsPerCandidate:    "3",
+	SettingAskNeighborhoodMaxMemories: "40",
 
 	SettingIngestionDecisionEnabled:      "true",
 	SettingIngestionDecisionShadow:       "false",

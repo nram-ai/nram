@@ -2,7 +2,7 @@ import React, { Suspense, useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { useSetupStatus, useHealth } from "./hooks/useApi";
-import { useEnrichmentAvailable } from "./hooks/useEnrichmentAvailable";
+import { useEnrichmentAvailable, useMeCapabilities } from "./hooks/useEnrichmentAvailable";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProjectProvider } from "./context/ProjectContext";
 import { ThemeProvider } from "./context/ThemeContext";
@@ -24,6 +24,7 @@ import {
   faPlug,
   faSliders,
   faMessage,
+  faComments,
   faSatelliteDish,
   faKey,
   faFingerprint,
@@ -67,6 +68,7 @@ const Authorize = React.lazy(() => import("./pages/Authorize"));
 const ShareAccept = React.lazy(() => import("./pages/ShareAccept"));
 
 const MemoryBrowser = React.lazy(() => import("./pages/MemoryBrowser"));
+const Ask = React.lazy(() => import("./pages/Ask"));
 const ProceduralMemory = React.lazy(() => import("./pages/ProceduralMemory"));
 const ProjectManagement = React.lazy(() => import("./pages/ProjectManagement"));
 const OrganizationManagement = React.lazy(() => import("./pages/OrganizationManagement"));
@@ -159,6 +161,8 @@ interface NavItem {
   minRole?: string;
   writeOnly?: boolean;
   requiresEnrichment?: boolean;
+  // requiresAsk hides the entry unless the ask feature flag (ask.enabled) is on.
+  requiresAsk?: boolean;
   // External links to a server-served (non-SPA) route, opened in a new tab.
   external?: boolean;
 }
@@ -166,6 +170,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview", icon: faGauge },
   { path: "/memories", label: "Memory Browser", section: "Data", icon: faBrain },
+  { path: "/ask", label: "Ask", section: "Data", icon: faComments, requiresAsk: true },
   { path: "/procedural", label: "Procedural Memory", section: "Data", icon: faScroll },
   { path: "/entities", label: "Entity Browser", section: "Data", icon: faCubes },
   { path: "/graph", label: "Graph Visualization", section: "Data", icon: faDiagramProject },
@@ -248,6 +253,8 @@ function AppLayout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { available: enrichmentAvailable } = useEnrichmentAvailable();
+  const { data: capabilities } = useMeCapabilities();
+  const askEnabled = capabilities?.ask_enabled === true;
   const { data: health } = useHealth();
   const buildCommit = health ? formatCommit(health.build) : null;
 
@@ -277,6 +284,9 @@ function AppLayout() {
       return false;
     }
     if (item.requiresEnrichment && !enrichmentAvailable) {
+      return false;
+    }
+    if (item.requiresAsk && !askEnabled) {
       return false;
     }
     return true;
@@ -435,6 +445,7 @@ function AppLayout() {
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/memories" element={<MemoryBrowser />} />
+                <Route path="/ask" element={<Ask />} />
                   <Route path="/procedural" element={<ProceduralMemory />} />
                   <Route path="/projects" element={<ProjectManagement />} />
                   <Route path="/organizations" element={<RequireRole minRole="administrator"><OrganizationManagement /></RequireRole>} />

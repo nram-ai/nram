@@ -378,6 +378,35 @@ export interface RecallRequest {
   graph_depth?: number;
 }
 
+export interface AskRequest {
+  query: string;
+  /** Optional project slug. Omit for a wide cross-project synthesis; supply a
+   * slug to scope to that project + global + about_me. */
+  project?: string;
+}
+
+export interface AskSource {
+  memory_id: string;
+  project_slug: string;
+  score: number;
+  /** Footnote number ([1], [2], …) carried inline in the answer; absent on the
+   * uncited fallback. */
+  citation?: number;
+}
+
+export interface AskSynthesisMeta {
+  latency_ms: number;
+  neighborhood_size: number;
+  synthesis_failed?: boolean;
+}
+
+export interface AskResponse {
+  answer: string;
+  sources: AskSource[];
+  confidence: number;
+  synthesis_meta: AskSynthesisMeta;
+}
+
 export interface MemoryListParams {
   limit?: number;
   offset?: number;
@@ -2203,6 +2232,9 @@ export const memoryAPI = {
       body,
     ),
 
+  ask: (projectId: string, body: AskRequest) =>
+    request<AskResponse>("POST", `/projects/${projectId}/memories/ask`, body),
+
   get: (
     projectId: string,
     memoryId: string,
@@ -2289,6 +2321,7 @@ export type MeProfile = UserInfo;
 export interface MeCapabilities {
   enrichment_available: boolean;
   dreaming_enabled: boolean;
+  ask_enabled: boolean;
 }
 
 // MeRankingWeightDefault is one row in the response of
@@ -2493,6 +2526,9 @@ export const meAPI = {
 
   recall: (body: RecallRequest) =>
     request<RecallResponse>("POST", "/me/memories/recall", body),
+
+  ask: (body: AskRequest) =>
+    request<AskResponse>("POST", "/me/memories/ask", body),
 
   // Self-tier dreaming observability. Read-only; write operations remain
   // admin-only at /admin/dreaming/*. Status returns per-project state when

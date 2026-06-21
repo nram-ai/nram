@@ -143,6 +143,12 @@ var settingsGroups = []api.SettingGroup{
 		},
 	},
 	{
+		ID:          "ask",
+		Label:       "Ask",
+		Description: "The ask tool synthesizes a single answer over your recalled memories using a dedicated LLM. Off by default; when enabled it appears in the MCP tool list and the REST API and needs the Ask Synthesis provider slot configured. The answer prompt is edited on the Prompt Templates page.",
+		SubSections: []api.SettingSubSection{{Category: "ask"}},
+	},
+	{
 		ID:          "api",
 		Label:       "API",
 		Description: "Public API rate limits, per-request caps, and graph defaults.",

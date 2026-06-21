@@ -43,6 +43,11 @@ const (
 	OperationProbe                  Operation = "system_probe"
 	OperationUnknown                Operation = "unknown"
 
+	// OperationAskSynthesis is the single-shot LLM call the ask tool makes to
+	// synthesize an answer over a recalled-memory neighborhood. Kept distinct so
+	// analytics can isolate ask traffic from the enrichment/dream operations.
+	OperationAskSynthesis Operation = "ask_synthesis"
+
 	// Dream-cycle operations. Kept distinct from the consolidation/
 	// contradiction-check generics so analytics can drill into the specific
 	// stage of the dream pipeline that consumed tokens.

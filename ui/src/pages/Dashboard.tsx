@@ -412,11 +412,6 @@ function ActivityFeed({
   );
 }
 
-const SLOT_LABELS: Record<string, string> = {
-  embedding: "Embedding",
-  fact: "Fact Extraction",
-  entity: "Entity Extraction",
-};
 
 function ProviderHealthCards({
   slots,
@@ -461,7 +456,7 @@ function ProviderHealthCards({
             <div key={s.slot} className="flex items-center gap-3 px-4 py-3">
               <StatusNode kind={kind} noIcon />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{SLOT_LABELS[s.slot] ?? s.slot}</p>
+                <p className="text-sm font-medium">{s.label || s.slot}</p>
                 <p className="truncate text-xs text-muted-foreground">
                   {statusText}
                 </p>

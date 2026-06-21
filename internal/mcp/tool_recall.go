@@ -95,6 +95,7 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		GraphDepth:           graphDepth,
 		DiversifyByTagPrefix: diversifyPrefix,
 		UserID:               &uid,
+		OrgID:                ac.OrgID,
 		APIKeyID:             ac.APIKeyID,
 	}
 

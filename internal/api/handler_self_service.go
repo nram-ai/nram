@@ -583,6 +583,9 @@ func NewMeProfilePatchHandler(repo MeProfileUpdater) http.HandlerFunc {
 type MeCapabilitiesResponse struct {
 	EnrichmentAvailable bool `json:"enrichment_available"`
 	DreamingEnabled     bool `json:"dreaming_enabled"`
+	// AskEnabled mirrors the cascade-resolved ask.enabled global setting so the
+	// SPA can show or hide the Ask nav entry without an admin-only settings read.
+	AskEnabled bool `json:"ask_enabled"`
 }
 
 // CapabilityResolver supplies the SettingsService.ResolveBool surface used by
@@ -630,6 +633,7 @@ func NewMeCapabilitiesHandler(cfg MeCapabilitiesConfig) http.HandlerFunc {
 		}
 		if cfg.Settings != nil {
 			resp.DreamingEnabled = cfg.Settings.ResolveBool(r.Context(), service.SettingDreamingEnabled, "global")
+			resp.AskEnabled = cfg.Settings.ResolveBool(r.Context(), service.SettingAskEnabled, "global")
 		}
 
 		writeJSON(w, http.StatusOK, resp)

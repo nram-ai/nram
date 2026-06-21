@@ -185,10 +185,10 @@ func TestIsAllowedOrigin(t *testing.T) {
 
 func TestBuildInstructions_UnderSizeLimit(t *testing.T) {
 	// Claude Code truncates server instructions at 2048 characters.
-	// The full variant (both providers) is the longest and must fit.
+	// The longest variant (both providers + ask enabled) must fit.
 	const maxChars = 2048
 
-	full := buildInstructions(true, true)
+	full := buildInstructions(true, true, true)
 	if len(full) > maxChars {
 		t.Errorf("full instructions are %d chars, must be under %d (over by %d)",
 			len(full), maxChars, len(full)-maxChars)
@@ -232,7 +232,7 @@ func TestToolDescriptions_UnderSizeLimit(t *testing.T) {
 // shrinking coverage.
 func TestEveryToolHasOutputSchema(t *testing.T) {
 	expected := []string{
-		"list", "store", "store_batch", "recall", "forget",
+		"list", "store", "store_batch", "recall", "ask", "forget",
 		"update", "get", "graph", "list_projects",
 		"delete_project", "update_project",
 		"procedural_fetch", "procedural_store", "procedural_update", "procedural_forget",
@@ -248,6 +248,11 @@ func TestEveryToolHasOutputSchema(t *testing.T) {
 		deps := Dependencies{
 			Backend:       backend,
 			ProjectDelete: &service.ProjectDeleteService{},
+			// ask registers only when Ask is wired; inject a sentinel so the
+			// output-schema contract covers it. ListTools() returns the raw
+			// registered set (the ask.enabled visibility filter runs only on
+			// tools/list requests), so ask appears here regardless of the flag.
+			Ask: &service.AskService{},
 		}
 		srv := newTestServer(deps)
 		tools := srv.MCPServer().ListTools()
@@ -317,7 +322,7 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 				"ALWAYS query first",
 				"recall",
 				"list",
-				"Enrichment is fully server-managed",
+				"Enrichment is server-managed",
 			},
 			mustNotContain: []string{
 				"No embedding provider",
@@ -352,7 +357,7 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 				"graph",
 				"ALWAYS query first",
 				"recall",
-				"Enrichment is fully server-managed",
+				"Enrichment is server-managed",
 				"specific tags",
 			},
 			mustNotContain: []string{
@@ -380,7 +385,7 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildInstructions(tt.hasEmbedding, tt.hasEnrichment)
+			result := buildInstructions(tt.hasEmbedding, tt.hasEnrichment, false)
 			for _, s := range tt.mustContain {
 				if !strings.Contains(result, s) {
 					t.Errorf("expected instructions to contain %q", s)
@@ -399,10 +404,10 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 			if !strings.Contains(result, "SESSION START") {
 				t.Errorf("expected instructions to contain SESSION START guidance")
 			}
-			if !strings.Contains(result, "your first action MUST be to call procedural_fetch") {
+			if !strings.Contains(result, "your first action this session MUST be procedural_fetch") {
 				t.Errorf("expected instructions to contain the blocking session-start directive")
 			}
-			if !strings.Contains(result, "reasoning or justifying a skip is itself a violation") {
+			if !strings.Contains(result, "Reasoning or justifying a skip is itself a violation") {
 				t.Errorf("expected instructions to contain the anti-rationalization clause")
 			}
 		})
@@ -411,7 +416,7 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 
 func TestBuildInstructions_RetrievalPrecedence(t *testing.T) {
 	// With enrichment: graph must come before recall, recall before list.
-	full := buildInstructions(true, true)
+	full := buildInstructions(true, true, false)
 	graphIdx := strings.Index(full, "graph")
 	recallIdx := strings.Index(full, "recall")
 	listIdx := strings.Index(full, "list")
@@ -428,7 +433,7 @@ func TestBuildInstructions_RetrievalPrecedence(t *testing.T) {
 }
 
 func TestBuildInstructions_BehavioralTriggers(t *testing.T) {
-	full := buildInstructions(true, true)
+	full := buildInstructions(true, true, false)
 	triggers := []string{
 		"preference",
 		"decision",

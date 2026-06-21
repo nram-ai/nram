@@ -50,6 +50,7 @@ export {
   faPlug,
   faSliders,
   faMessage,
+  faComments,
   faSatelliteDish,
   faKey,
   faFingerprint,

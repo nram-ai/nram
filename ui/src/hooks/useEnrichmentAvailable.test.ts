@@ -9,6 +9,7 @@ function caps(enrichment: boolean, dreaming = false): MeCapabilities {
   return {
     enrichment_available: enrichment,
     dreaming_enabled: dreaming,
+    ask_enabled: false,
   };
 }
 

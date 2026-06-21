@@ -58,6 +58,7 @@ All under `/v1/projects/{project_id}/memories`. Read operations are available to
 | `GET` | `/{id}` | Get a memory by ID |
 | `POST` | `/get` | Batch-get by ID list |
 | `POST` | `/recall` | Hybrid recall (vector + optional lexical + graph + ranking; fires reconsolidation) |
+| `POST` | `/ask` | Synthesize one cited answer over the project's memories (plus the global and persona tiers). Gated by the `ask.enabled` feature flag; 404 when disabled |
 | `GET` | `/export` | Export as JSON / NDJSON |
 | `POST` | `/` | Store a memory |
 | `PUT` | `/{id}` | Update a memory |
@@ -90,6 +91,7 @@ All under `/v1/me`.
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/memories/recall` | Cross-project recall for the current user |
+| `POST` | `/memories/ask` | Cross-project synthesis: one cited answer over the caller's memories (wide aperture, or one project when scoped). Gated by `ask.enabled`; 404 when disabled |
 | `GET` `POST` | `/procedural` | List (paginated, includes disabled) or create verbatim procedural entries |
 | `GET` `PUT` | `/procedural/{id}` | Get or partial-update a procedural entry |
 | `DELETE` | `/procedural/{id}` | Soft-delete a procedural entry |
@@ -177,6 +179,7 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport. It e
 | `get` | Retrieve a memory by ID. |
 | `list` | List memories with pagination. Superseded rows are always hidden on the MCP path; use the REST endpoint with `include_superseded=true` for a diagnostic view. |
 | `recall` | Hybrid (vector + lexical) recall. Graph entities and relationships are included when the graph is populated. `limit` is server-capped at `recall.max_limit` (default 50); `graph_depth` at `recall.graph.max_depth` (default 5). Optional `diversify_by_tag_prefix` for round-robin coverage across a tag axis. Similarity-threshold knobs are REST-only. |
+| `ask` | Synthesize one grounded, cited answer over recalled memories in a single model call: wide aperture by default (every project plus the global and persona tiers), or one project when `project` is supplied. Off by default behind the `ask.enabled` flag and a dedicated provider slot; appears in the tool list only when enabled. Share-token callers are scoped strictly to their granted projects. |
 | `forget` | Soft-delete a memory; cascades restricted to extraction lineage. Set `hard: true` for an unrecoverable hard delete. |
 | `graph` | Knowledge graph traversal. `depth` is server-capped at `recall.graph.max_depth` (default 5). |
 | `list_projects` | List projects. |

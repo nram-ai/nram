@@ -123,7 +123,11 @@ type RecallRequest struct {
 	// search and graph traversal are unchanged: this is a pure rerank step.
 	DiversifyByTagPrefix string `json:"diversify_by_tag_prefix,omitempty"`
 	// Caller context
-	UserID   *uuid.UUID `json:"-"`
+	UserID *uuid.UUID `json:"-"`
+	// OrgID stamps the query-embedding token_usage row so recall's embedding
+	// spend is attributed to the caller's org and surfaces in the org-scoped
+	// analytics. Without it the row records a NULL org_id and is filtered out.
+	OrgID    uuid.UUID  `json:"-"`
 	APIKeyID *uuid.UUID `json:"-"`
 	// Scope overrides (for user/org-level recall)
 	NamespaceID *uuid.UUID `json:"-"` // if set, search this namespace instead of project's
@@ -134,6 +138,12 @@ type RecallRequest struct {
 	// to the recall aperture alongside the primary and global namespaces, so
 	// self-knowledge surfaces by association. Mirrors GlobalNamespaceID.
 	AboutMeNamespaceID *uuid.UUID `json:"-"`
+	// ApertureNamespaceIDs widens the cross-namespace search to an explicit set
+	// of additional namespaces (unioned with the primary, global, and about_me
+	// namespaces). The ask tool sets this to every project namespace the caller
+	// owns, delivering a wide-aperture synthesis over the full curated corpus
+	// (§6). The ordinary recall paths leave it nil, so behavior is unchanged.
+	ApertureNamespaceIDs []uuid.UUID `json:"-"`
 }
 
 // RecallResult holds a single recalled memory with its computed score.
@@ -552,13 +562,24 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	projectByNamespace := map[uuid.UUID]projectAttribution{
 		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: true},
 	}
+	seedAttribution := func(ns uuid.UUID) {
+		if ns == namespaceID {
+			return
+		}
+		if _, ok := projectByNamespace[ns]; ok {
+			return
+		}
+		if p, err := s.projects.GetByNamespaceID(ctx, ns); err == nil && p != nil {
+			projectByNamespace[ns] = projectAttribution{ProjectID: p.ID, ProjectSlug: p.Slug}
+		}
+	}
 	for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
-		if extraNS == nil || *extraNS == namespaceID {
-			continue
+		if extraNS != nil {
+			seedAttribution(*extraNS)
 		}
-		if p, err := s.projects.GetByNamespaceID(ctx, *extraNS); err == nil && p != nil {
-			projectByNamespace[*extraNS] = projectAttribution{ProjectID: p.ID, ProjectSlug: p.Slug}
-		}
+	}
+	for _, ns := range req.ApertureNamespaceIDs {
+		seedAttribution(ns)
 	}
 	attribute := func(memNs uuid.UUID) projectAttribution {
 		if attr, ok := projectByNamespace[memNs]; ok {
@@ -581,10 +602,23 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// block's cross-namespace vector-channel entity activation share one
 	// definition of the [project, global, about_me] aperture.
 	searchNamespaces := []uuid.UUID{namespaceID}
-	for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
-		if extraNS != nil && *extraNS != namespaceID {
-			searchNamespaces = append(searchNamespaces, *extraNS)
+	seenNamespace := map[uuid.UUID]bool{namespaceID: true}
+	addNamespace := func(ns uuid.UUID) {
+		if seenNamespace[ns] {
+			return
 		}
+		seenNamespace[ns] = true
+		searchNamespaces = append(searchNamespaces, ns)
+	}
+	for _, extraNS := range []*uuid.UUID{req.GlobalNamespaceID, req.AboutMeNamespaceID} {
+		if extraNS != nil {
+			addNamespace(*extraNS)
+		}
+	}
+	// ApertureNamespaceIDs widens the aperture (ask tool: every owned project
+	// namespace). Deduped against the primary/global/about_me set above.
+	for _, ns := range req.ApertureNamespaceIDs {
+		addNamespace(ns)
 	}
 
 	// queryEmbeddingDim is the actual embedding dimension produced for the
@@ -617,10 +651,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			// token_usage row to the right org/user/project/namespace and
 			// correlate it back to the API key.
 			projectIDForCtx := projectID
-			recallCtx := provider.WithUsageContext(ctx, &model.UsageContext{
+			recallUC := &model.UsageContext{
 				UserID:    req.UserID,
 				ProjectID: &projectIDForCtx,
-			})
+			}
+			if req.OrgID != uuid.Nil {
+				org := req.OrgID
+				recallUC.OrgID = &org
+			}
+			recallCtx := provider.WithUsageContext(ctx, recallUC)
 			recallCtx = provider.WithNamespaceID(recallCtx, namespaceID)
 			recallCtx = provider.WithAPIKeyID(recallCtx, req.APIKeyID)
 			recallCtx = provider.WithOperation(recallCtx, provider.OperationEmbedding)

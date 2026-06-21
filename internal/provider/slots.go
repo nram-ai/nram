@@ -24,6 +24,7 @@ const (
 	SlotEntity            = "entity"
 	SlotQueryAugment      = "query_augment"
 	SlotIngestionDecision = "ingestion_decision"
+	SlotAsk               = "ask"
 )
 
 // SlotDef is the canonical descriptor for a provider slot.
@@ -76,6 +77,13 @@ var Slots = []SlotDef{
 		Description: "Judges ADD/UPDATE/DELETE/NONE on near-duplicate matches at write time. Optional; falls back to the Fact Extraction provider when left unconfigured.",
 		Kind:        KindLLM,
 		FallbackTo:  SlotFact,
+	},
+	{
+		Name:        SlotAsk,
+		Label:       "Ask Synthesis",
+		Description: "Synthesizes answers over recalled memories for the ask tool. Required when the ask feature is enabled; no fallback, so ask traffic never lands on the enrichment providers.",
+		Kind:        KindLLM,
+		FallbackTo:  "",
 	},
 }
 

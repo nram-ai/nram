@@ -127,6 +127,7 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 			uid := ac.UserID
 			req.UserID = &uid
 			req.APIKeyID = ac.APIKeyID
+			req.OrgID = ac.OrgID
 		}
 
 		resp, err := svc.Recall(r.Context(), req)
@@ -183,6 +184,7 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 		uid := ac.UserID
 		req.UserID = &uid
 		req.APIKeyID = ac.APIKeyID
+		req.OrgID = ac.OrgID
 
 		resp, err := svc.Recall(r.Context(), req)
 		if err != nil {

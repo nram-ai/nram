@@ -109,9 +109,13 @@ type RegistryConfig struct {
 	Entity    SlotConfig `json:"entity"`
 	// Optional per-operation slots. An empty Type means "unconfigured"; the
 	// corresponding Get accessor then falls back to the fact provider.
-	QueryAugment      SlotConfig           `json:"query_augment"`
-	IngestionDecision SlotConfig           `json:"ingestion_decision"`
-	CircuitBreaker    CircuitBreakerConfig `json:"circuit_breaker"`
+	QueryAugment      SlotConfig `json:"query_augment"`
+	IngestionDecision SlotConfig `json:"ingestion_decision"`
+	// Ask is the dedicated ask-synthesis slot. Unlike QueryAugment and
+	// IngestionDecision it has NO fallback (see provider.SlotAsk), so an empty
+	// Type leaves the ask tool's synthesis provider unconfigured.
+	Ask            SlotConfig           `json:"ask"`
+	CircuitBreaker CircuitBreakerConfig `json:"circuit_breaker"`
 }
 
 // slotConfig returns the SlotConfig for the named slot. This is the single
@@ -129,6 +133,8 @@ func (c RegistryConfig) slotConfig(name string) SlotConfig {
 		return c.QueryAugment
 	case SlotIngestionDecision:
 		return c.IngestionDecision
+	case SlotAsk:
+		return c.Ask
 	}
 	return SlotConfig{}
 }
@@ -147,6 +153,8 @@ func (c *RegistryConfig) SetSlotConfig(name string, sc SlotConfig) {
 		c.QueryAugment = sc
 	case SlotIngestionDecision:
 		c.IngestionDecision = sc
+	case SlotAsk:
+		c.Ask = sc
 	}
 }
 
@@ -280,6 +288,12 @@ func (r *Registry) GetQueryAugment() LLMProvider { return r.GetLLM(SlotQueryAugm
 // GetIngestionDecision returns the ingestion-decision provider (dedicated slot,
 // else the fact fallback per its SlotDef).
 func (r *Registry) GetIngestionDecision() LLMProvider { return r.GetLLM(SlotIngestionDecision) }
+
+// GetAsk returns the ask-synthesis provider. The slot has no fallback, so this
+// returns nil whenever its dedicated provider is unconfigured; the ask service
+// turns that nil into a clear "synthesis provider not configured" error rather
+// than routing synthesis traffic onto the enrichment providers.
+func (r *Registry) GetAsk() LLMProvider { return r.GetLLM(SlotAsk) }
 
 // SlotConfigured reports whether the named slot has a DEDICATED provider built
 // (ignoring any fallback), driving the admin "configured" status so operators

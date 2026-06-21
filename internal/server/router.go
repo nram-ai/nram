@@ -26,6 +26,11 @@ type RouterConfig struct {
 	// Wraps memory enrich, admin enrichment, and admin dreaming routes.
 	// If nil, no gate is applied (useful in tests that don't exercise it).
 	EnrichmentGate func(http.Handler) http.Handler
+	// AskGate is middleware that returns 404 when the ask feature flag
+	// (ask.enabled) is off, so the ask endpoints do not surface unless the
+	// feature is enabled. Wraps the user- and project-scoped ask routes.
+	// If nil, no gate is applied (useful in tests that don't exercise it).
+	AskGate func(http.Handler) http.Handler
 }
 
 // Handlers holds all handler instances. Nil handlers are replaced with a
@@ -41,6 +46,7 @@ type Handlers struct {
 	BatchStore http.HandlerFunc
 	BatchGet   http.HandlerFunc
 	Recall     http.HandlerFunc
+	Ask        http.HandlerFunc
 	BulkForget http.HandlerFunc
 	Move       http.HandlerFunc
 	BulkMove   http.HandlerFunc
@@ -53,6 +59,7 @@ type Handlers struct {
 
 	// User-scoped handlers
 	MeRecall            http.HandlerFunc
+	MeAsk               http.HandlerFunc
 	MeProjects          http.HandlerFunc // GET + POST
 	MeProjectItem       http.HandlerFunc // GET + PUT /v1/me/projects/{id}
 	MeProjectDelete     http.HandlerFunc // DELETE /v1/me/projects/{id}
@@ -403,6 +410,16 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Post("/recall", handler(handlers.Recall))
 			r.Get("/export", handler(handlers.Export))
 
+			// /ask is gated behind the ask feature flag: returns 404 unless
+			// ask.enabled is on, so the endpoint does not surface when the
+			// feature is disabled.
+			r.Group(func(r chi.Router) {
+				if config.AskGate != nil {
+					r.Use(config.AskGate)
+				}
+				r.Post("/ask", handler(handlers.Ask))
+			})
+
 			// Write operations: blocked for readonly users.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireWriteAccess())
@@ -437,6 +454,13 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		// User-scoped routes.
 		r.Route("/v1/me", func(r chi.Router) {
 			r.Post("/memories/recall", handler(handlers.MeRecall))
+			// /memories/ask is gated behind the ask feature flag (404 when off).
+			r.Group(func(r chi.Router) {
+				if config.AskGate != nil {
+					r.Use(config.AskGate)
+				}
+				r.Post("/memories/ask", handler(handlers.MeAsk))
+			})
 			r.HandleFunc("/projects", handler(handlers.MeProjects))
 			r.Get("/projects/{id}", handler(handlers.MeProjectItem))
 			r.Put("/projects/{id}", handler(handlers.MeProjectItem))

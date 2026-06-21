@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.7.3
+  version: 0.8.0
   license:
     name: MIT
 
@@ -866,6 +866,41 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/projects/{project_id}/memories/ask:
+    post:
+      operationId: askProjectMemories
+      tags: [Memories]
+      summary: Synthesize one answer over a project's memories (ask tool)
+      description: >-
+        Gated behind the ask.enabled feature flag; returns 404 when the feature
+        is disabled. Scopes the synthesis to this project plus the global and
+        about_me tiers.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Synthesized answer with cited sources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: The ask synthesis provider is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/projects/{project_id}/memories/forget:
     post:
       operationId: bulkForgetMemories
@@ -987,6 +1022,38 @@ paths:
                 $ref: "#/components/schemas/RecallResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
+
+  /v1/me/memories/ask:
+    post:
+      operationId: meAsk
+      tags: [User]
+      summary: Synthesize one answer over the user's memories (ask tool)
+      description: >-
+        Gated behind the ask.enabled feature flag; returns 404 when the feature
+        is disabled. With no project in the body, synthesizes over the caller's
+        wide aperture (every owned project plus global and about_me); with a
+        project slug, narrows to that project plus global and about_me.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Synthesized answer with cited sources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: The ask synthesis provider is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/me/projects:
     get:
@@ -4536,6 +4603,8 @@ components:
               $ref: "#/components/schemas/HealthProviderStatus"
             ingestion_decision:
               $ref: "#/components/schemas/HealthProviderStatus"
+            ask:
+              $ref: "#/components/schemas/HealthProviderStatus"
         enrichment_queue:
           type: [object, "null"]
           properties:
@@ -4978,6 +5047,79 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    AskRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: The question to answer from the caller's memories.
+        project:
+          type: string
+          description: >-
+            Optional project slug. Omit for a wide cross-project synthesis over
+            all of the caller's projects (plus global and about_me); supply a
+            slug to scope to that project plus global and about_me. Ignored on
+            the project-scoped endpoint, which takes the project from the path.
+
+    AskResponse:
+      type: object
+      required: [answer, sources, confidence, synthesis_meta]
+      properties:
+        answer:
+          type: string
+          description: >-
+            The synthesized answer as clean prose with inline footnote citations
+            ([1], [2], …) that map to the `citation` field on each source. Empty
+            when synthesis_meta.synthesis_failed is true.
+        sources:
+          type: array
+          description: >-
+            When the answer cited sources, this is the cited memories in
+            footnote order (each with its `citation` number). On the uncited
+            fallback (synthesis failure or "not in neighborhood") it is the
+            retrieved candidates with `citation` omitted.
+          items:
+            type: object
+            required: [memory_id, project_slug, score]
+            properties:
+              memory_id:
+                type: string
+                format: uuid
+              project_slug:
+                type: string
+              score:
+                type: number
+                format: double
+              citation:
+                type: integer
+                description: >-
+                  Footnote number ([1], [2], …) this source carries inline in
+                  the answer. Omitted on the uncited fallback.
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: >-
+            Derived from the source count and score distribution (not the
+            model's self-assessment). Zero when the answer is not grounded in
+            the neighborhood or synthesis failed.
+        synthesis_meta:
+          type: object
+          required: [latency_ms, neighborhood_size]
+          properties:
+            latency_ms:
+              type: integer
+              format: int64
+            neighborhood_size:
+              type: integer
+            synthesis_failed:
+              type: boolean
+              description: >-
+                True when the synthesizer call failed; the response then carries
+                the recalled sources with an empty answer instead of erroring.
 
     RecallRequest:
       type: object
@@ -5821,6 +5963,14 @@ components:
         - "api.rate_limit.stale_after_seconds"
         - "api.rate_limit_burst"
         - "api.rate_limit_rps"
+        - "ask.enabled"
+        - "ask.graph.depth"
+        - "ask.neighborhood.max_memories"
+        - "ask.recall.candidates"
+        - "ask.siblings.per_candidate"
+        - "ask.synthesis.max_tokens"
+        - "ask.synthesis.system_prompt"
+        - "ask.synthesis.temperature"
         - "auth.session_refresh_threshold_seconds"
         - "auth.session_token_ttl_seconds"
         - "cascade.cache_ttl_seconds"

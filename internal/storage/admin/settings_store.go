@@ -419,6 +419,18 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: service.SettingRecallOverfetchMultiplier, Type: "number", DefaultValue: json.RawMessage(`3`), Description: "How many extra candidates recall gathers before re-ranking and trimming to the requested count. 3 means fetch three times as many, then keep the best. Higher values can improve ranking quality at some query cost.", Category: "recall", Min: ptrF(1), Max: ptrF(20), Step: ptrF(0.5)},
 	{Key: service.SettingRecallOverfetchMin, Type: "number", DefaultValue: json.RawMessage(`10`), Description: "Smallest candidate pool recall will gather, so even a request for one result still has enough candidates for the ranker to choose well.", Category: "recall", Min: ptrF(1), Max: ptrF(1000), Step: ptrF(1)},
 
+	// Ask synthesis tool. Off by default so it never spends model tokens until
+	// an operator opts in and configures the dedicated ask provider slot. The
+	// ask system prompt is a "prompt" setting, surfaced on the Prompt Templates
+	// page under category ask_prompts (below).
+	{Key: service.SettingAskEnabled, Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "Enable the ask tool, which synthesizes a single answer over your recalled memories using a dedicated LLM. Off by default. When off, ask does not appear in the MCP tool list or the REST API. Requires the Ask Synthesis provider slot to be configured.", Category: "ask"},
+	{Key: service.SettingAskSynthesisTemperature, Type: "number", DefaultValue: json.RawMessage(`0.1`), Description: "Sampling temperature for the ask synthesis call (0.0 to 1.0). Low values keep the answer grounded in the recalled memories.", Category: "ask", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
+	{Key: service.SettingAskSynthesisMaxTokens, Type: "number", DefaultValue: json.RawMessage(`4096`), Description: "Maximum tokens the ask synthesis call may generate for one answer.", Category: "ask", Min: ptrF(256), Max: ptrF(32768), Step: ptrF(256)},
+	{Key: service.SettingAskRecallCandidates, Type: "number", DefaultValue: json.RawMessage(`8`), Description: "How many top recall hits ask uses as seeds when assembling the neighborhood it synthesizes from.", Category: "ask", Min: ptrF(1), Max: ptrF(50), Step: ptrF(1)},
+	{Key: service.SettingAskGraphDepth, Type: "number", DefaultValue: json.RawMessage(`1`), Description: "How many graph steps ask follows out from each seed to gather connected memories for the neighborhood. 0 disables graph expansion.", Category: "ask", Min: ptrF(0), Max: ptrF(5), Step: ptrF(1)},
+	{Key: service.SettingAskSiblingsPerCandidate, Type: "number", DefaultValue: json.RawMessage(`3`), Description: "How many sibling memories from the same project ask pulls per seed to round out the neighborhood.", Category: "ask", Min: ptrF(0), Max: ptrF(20), Step: ptrF(1)},
+	{Key: service.SettingAskNeighborhoodMaxMemories, Type: "number", DefaultValue: json.RawMessage(`40`), Description: "Hard cap on the number of memories ask packs into the neighborhood before the synthesis call, bounding prompt size and cost.", Category: "ask", Min: ptrF(1), Max: ptrF(200), Step: ptrF(1)},
+
 	// Pruning thresholds. Shared key between phase_pruning.go (active
 	// relationship expiry pass) and phase_weights.go (mid-cycle expiry on
 	// weight decay) so the two paths cannot drift.
@@ -501,6 +513,7 @@ var promptSchemaEntries = []api.SettingSchema{
 	{Key: service.SettingFactSystemPrompt, Type: "prompt", Description: "System prompt for fact extraction: the fact JSON shape, the hard rules, and the \"return only JSON\" contract. The input content is supplied as the user message.", Category: "enrichment_prompts"},
 	{Key: service.SettingEntitySystemPrompt, Type: "prompt", Description: "System prompt for entity and relationship extraction: the entities/relationships JSON shape and the \"return only JSON\" contract. The input content is supplied as the user message.", Category: "enrichment_prompts"},
 	{Key: service.SettingQueryAugmentSystemPrompt, Type: "prompt", Description: "System prompt for the query-augmentation phase: the task and the strict JSON-array output rules. The requested query count and memory content are supplied as the user message.", Category: "enrichment_prompts"},
+	{Key: service.SettingAskSynthesisSystemPrompt, Type: "prompt", Description: "System prompt for the ask tool: answer only from the supplied memory neighborhood, cite memory ids inline, say \"Not in neighborhood.\" when the answer is absent, no commentary. The question and the tagged neighborhood are supplied as the user message.", Category: "ask_prompts"},
 }
 
 func init() {

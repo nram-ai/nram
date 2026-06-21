@@ -644,11 +644,28 @@ func main() {
 		return registry != nil && registry.EnrichmentAvailable()
 	}
 
+	// Ask synthesis tool. Reads the dedicated ask provider slot live (so an
+	// admin provider edit is picked up without restart); the slot has no
+	// fallback, so an unconfigured slot yields nil and the service returns a
+	// clear "synthesis provider not configured" error rather than borrowing the
+	// enrichment provider. The feature flag (ask.enabled) gates visibility at
+	// the MCP filter and REST AskGate, not here.
+	askProvider := func() provider.LLMProvider {
+		if registry == nil {
+			return nil
+		}
+		return registry.GetAsk()
+	}
+	askSvc := service.NewAskService(
+		recallSvc, memoryRepo, projectRepo, relationshipRepo, askProvider, settingsSvc,
+	).WithMetrics(promMetrics)
+
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{
 		Backend:        db.Backend(),
 		Store:          storeSvc,
 		Recall:         recallSvc,
+		Ask:            askSvc,
 		Forget:         forgetSvc,
 		Update:         updateSvc,
 		BatchGet:       batchGetSvc,
@@ -983,6 +1000,7 @@ func main() {
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, eventBus),
 		BatchGet:   api.NewBatchGetHandler(batchGetSvc),
 		Recall:     api.NewRecallHandler(recallSvc),
+		Ask:        api.NewAskHandler(askSvc, userRepo, projectRepo),
 		BulkForget: api.NewBulkForgetHandler(forgetSvc, eventBus),
 		Move:       api.NewMoveHandler(moveSvc, projectAccessCfg, eventBus),
 		BulkMove:   api.NewBulkMoveHandler(moveSvc, projectAccessCfg, eventBus),
@@ -998,6 +1016,7 @@ func main() {
 
 		// User-scoped handlers
 		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
+		MeAsk:               api.NewMeAskHandler(askSvc, userRepo),
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
 		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo),
 		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
@@ -1274,6 +1293,11 @@ func main() {
 		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
 		ProjectAccess:  api.ProjectAccessMiddleware(projectAccessCfg),
 		EnrichmentGate: api.EnrichmentGateMiddleware(enrichmentAvailable),
+		// Resolved live per request so toggling ask.enabled in the admin UI
+		// surfaces or hides the ask endpoints without a restart.
+		AskGate: api.AskGateMiddleware(func(ctx context.Context) bool {
+			return settingsSvc.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
+		}),
 	}
 
 	r := server.NewRouter(routerCfg, handlers)

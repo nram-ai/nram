@@ -518,8 +518,8 @@ func TestMeCapabilities_ReturnsBothFlags(t *testing.T) {
 		EnrichmentAvailable: func() bool { return true },
 		Settings: &fakeCapabilityResolver{
 			resolveFn: func(_ context.Context, key, scope string) bool {
-				if key != "dreaming.enabled" {
-					t.Errorf("expected key dreaming.enabled, got %q", key)
+				if key != "dreaming.enabled" && key != "ask.enabled" {
+					t.Errorf("unexpected settings key %q", key)
 				}
 				if scope != "global" {
 					t.Errorf("expected scope global, got %q", scope)
@@ -545,6 +545,9 @@ func TestMeCapabilities_ReturnsBothFlags(t *testing.T) {
 	}
 	if !resp.DreamingEnabled {
 		t.Error("expected dreaming_enabled=true")
+	}
+	if !resp.AskEnabled {
+		t.Error("expected ask_enabled=true")
 	}
 }
 

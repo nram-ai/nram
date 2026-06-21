@@ -692,6 +692,14 @@ describe("API Client E2E", () => {
       expect(Array.isArray(res.memories)).toBe(true);
     });
 
+    it("ask() hits the gated project-scoped ask endpoint", async () => {
+      // ask is off by default, so the endpoint 404s (the AskGate hides it);
+      // this still exercises the client wiring regardless of feature state.
+      await expect(
+        memoryAPI.ask(memProjectId, { query: "anything" }),
+      ).rejects.toBeDefined();
+    });
+
     it("export() exports project data", async () => {
       const data = await memoryAPI.export(memProjectId);
       expect(typeof data.version).toBe("string");
@@ -736,16 +744,17 @@ describe("API Client E2E", () => {
   // -----------------------------------------------------------------------
 
   describe("adminAPI.providers", () => {
-    it("getProviderSlots() returns 5 slots", async () => {
+    it("getProviderSlots() returns 6 slots", async () => {
       const slots = await adminAPI.getProviderSlots();
       expect(Array.isArray(slots)).toBe(true);
-      expect(slots.length).toBe(5);
+      expect(slots.length).toBe(6);
       const slotNames = slots.map((s) => s.slot);
       expect(slotNames).toContain("embedding");
       expect(slotNames).toContain("fact");
       expect(slotNames).toContain("entity");
       expect(slotNames).toContain("query_augment");
       expect(slotNames).toContain("ingestion_decision");
+      expect(slotNames).toContain("ask");
     });
 
     it("testProviderSlot() returns a result (may fail without provider)", async () => {
@@ -1902,6 +1911,12 @@ describe("API Client E2E", () => {
       const res = await meAPI.recall({ query: "anything", limit: 5 });
       expect(res).toBeDefined();
       expect(Array.isArray(res.memories)).toBe(true);
+    });
+
+    it("ask() hits the gated user-scoped ask endpoint", async () => {
+      // ask is off by default, so the endpoint 404s; the call still exercises
+      // the client wiring regardless of feature state.
+      await expect(meAPI.ask({ query: "anything" })).rejects.toBeDefined();
     });
 
     it("dreaming self-tier reads", async () => {

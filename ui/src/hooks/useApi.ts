@@ -32,6 +32,8 @@ import {
   type ImportFormat,
   type MemoryListParams,
   type RecallRequest,
+  type AskRequest,
+  type AskResponse,
   type MemoryUpdateRequest,
   type ForgetRequest,
   type EnrichRequest,
@@ -1469,6 +1471,16 @@ export function useMemoryRecall(
     queryKey: ["memories", "recall", projectId, body],
     queryFn: () => memoryAPI.recall(projectId, body!),
     enabled: !!projectId && !!body,
+  });
+}
+
+// useAsk drives the ask synthesis tool. It is a mutation, not a query, because
+// each call spends an LLM token budget: the user explicitly submits a question
+// rather than the answer recomputing on every keystroke. An empty project
+// scopes wide (all of the caller's projects); a project slug narrows.
+export function useAsk() {
+  return useMutation<AskResponse, Error, AskRequest>({
+    mutationFn: (body: AskRequest) => meAPI.ask(body),
   });
 }
 

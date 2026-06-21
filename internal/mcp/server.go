@@ -80,9 +80,14 @@ type RelationshipTraverser interface {
 
 // Dependencies holds all service and repository references that MCP tool handlers require.
 type Dependencies struct {
-	Backend        string
-	Store          *service.StoreService
-	Recall         *service.RecallService
+	Backend string
+	Store   *service.StoreService
+	Recall  *service.RecallService
+	// Ask backs the ask synthesis tool. Optional: when nil the tool is not
+	// registered. When non-nil it is registered but its visibility is gated
+	// live by the ask.enabled setting via the tool-list filter, so toggling
+	// the feature flag takes effect without a restart.
+	Ask            *service.AskService
 	Forget         *service.ForgetService
 	Update         *service.UpdateService
 	BatchGet       *service.BatchGetService
@@ -142,12 +147,12 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 // search is unavailable; without enrichment providers, the graph tool returns
 // empty results and stored memories sit in the enrichment queue until the
 // admin configures the missing providers.
-func buildInstructions(hasEmbedding, hasEnrichment bool) string {
+func buildInstructions(hasEmbedding, hasEnrichment, askEnabled bool) string {
 	var b strings.Builder
 
 	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md; use nram tools exclusively.
 
-SESSION START (BLOCKING, not optional): before you do anything this session, your first action MUST be to call procedural_fetch. Nothing comes first: no task, no answer, no other tool call; reasoning or justifying a skip is itself a violation. It is paginated: page through EVERY entry before acting. Re-fetch after any rule change or compaction.
+SESSION START (BLOCKING, not optional): your first action this session MUST be procedural_fetch, before any task, answer, or other tool call. Reasoning or justifying a skip is itself a violation. It is paginated: page through EVERY entry before acting. Re-fetch after any rule change or compaction.
 
 RETRIEVAL: follow this order at each task start:
 `)
@@ -156,13 +161,13 @@ RETRIEVAL: follow this order at each task start:
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
 2. recall: then search for detailed memories with natural language.
 3. list: browse/paginate when you need a full overview, not a query.
-If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory instead of re-querying.
+If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory.
 `)
 	} else if hasEnrichment {
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
 2. recall: then search using specific tags (no embedding provider).
 3. list: browse/paginate when you need a full overview, not a query.
-If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory instead of re-querying.
+If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory.
 `)
 	} else if hasEmbedding {
 		b.WriteString(`1. recall: search with natural language (semantic search is active).
@@ -174,6 +179,10 @@ If recall is noisy or misses an expected fact, walk the graph from that concept 
 `)
 	}
 
+	if askEnabled {
+		b.WriteString("ask: one synthesized, cited answer over your memories (a model call); use recall for plain lookups.\n")
+	}
+
 	b.WriteString(`Recall before assumptions, before storing (avoid duplicates), and whenever you lack context.
 
 STORAGE (store / store_batch):
@@ -183,11 +192,11 @@ STORAGE (store / store_batch):
 - Project config, setup, environment → store
 - End of complex task → store summary of what and why
 
-Enrichment is fully server-managed: every new memory is auto-enqueued for entity/relationship extraction, drained once enrichment.enabled and the providers are configured. No per-call opt-in.
+Enrichment is server-managed: every new memory is auto-enqueued for entity/relationship extraction, drained once enrichment.enabled and providers are configured.
 
 KEY RULES:
 - ALWAYS call list_projects first; reuse the existing project that fits.
-- Create a new project only for a genuinely new major boundary (repo, product, domain), never per task/feature/topic or an unknown slug (silently auto-creates one).
+- Create a project only for a genuinely new major boundary (repo, product, domain), never per task/feature/topic or an unknown slug (auto-creates one).
 - Omit project for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
 - Use tags/metadata for sub-categorization, not new projects.
 - Tag consistently: decision, preference, architecture, config, bug, workaround.`)
@@ -209,21 +218,27 @@ func NewServer(deps Dependencies) *Server {
 		panic("mcp.NewServer: Dependencies.Metrics is required (truncation telemetry depends on it)")
 	}
 
-	// Build initial instructions from current provider state.
+	// Build initial instructions from current provider state. The per-connection
+	// AfterInitialize hook below rebuilds these live; this boot snapshot just
+	// seeds WithInstructions.
 	hasEmbed, hasEnrich := false, false
 	if deps.ProviderStatus != nil {
 		hasEmbed, hasEnrich = deps.ProviderStatus()
 	}
+	askEnabled := deps.Settings.ResolveBoolWithDefault(context.Background(), service.SettingAskEnabled, "global")
 
 	// Use a hook to rebuild instructions at connection time so they reflect
 	// the current provider configuration, not a boot-time snapshot.
 	hooks := &server.Hooks{}
-	hooks.AddAfterInitialize(func(_ context.Context, _ any, _ *mcp.InitializeRequest, result *mcp.InitializeResult) {
+	hooks.AddAfterInitialize(func(ctx context.Context, _ any, _ *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		he, hr := false, false
 		if deps.ProviderStatus != nil {
 			he, hr = deps.ProviderStatus()
 		}
-		result.Instructions = buildInstructions(he, hr)
+		// Resolved per-connection so toggling ask.enabled is reflected without a
+		// restart, and the guidance only mentions ask when the tool is live.
+		ask := deps.Settings.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
+		result.Instructions = buildInstructions(he, hr, ask)
 		result.ServerInfo.Icons = []mcp.Icon{iconAnnotation()}
 	})
 
@@ -233,9 +248,20 @@ func NewServer(deps Dependencies) *Server {
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
 		server.WithRecovery(),                        // recover from panics in tool handlers
-		server.WithInstructions(buildInstructions(hasEmbed, hasEnrich)),
+		server.WithInstructions(buildInstructions(hasEmbed, hasEnrich, askEnabled)),
 		server.WithHooks(hooks),
-		server.WithToolFilter(shareToolFilter), // hide disallowed tools from share-bearer connections
+		// Combined tool-list filter: first hide tools disallowed for
+		// share-bearer connections, then hide the ask tool whenever the
+		// ask.enabled feature flag is off. Runs on every tools/list, so the
+		// flag toggles ask's visibility live (no restart). The handler also
+		// guards, so a direct out-of-band call is rejected when off.
+		server.WithToolFilter(func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
+			tools = shareToolFilter(ctx, tools)
+			if !askVisible(ctx, deps) {
+				tools = filterOutTool(tools, "ask")
+			}
+			return tools
+		}),
 	)
 
 	httpSrv := server.NewStreamableHTTPServer(
@@ -265,6 +291,7 @@ func NewServer(deps Dependencies) *Server {
 	RegisterStoreTools(s)
 	RegisterUpdateGetTools(s)
 	RegisterRecallTool(s)
+	RegisterAskTool(s)
 	RegisterListTool(s)
 	RegisterForgetTool(s)
 	RegisterGraphProjectsTools(s)
@@ -342,6 +369,7 @@ func checkWriteAccess(ctx context.Context) *mcp.CallToolResult {
 // fails closed.
 var shareToolPolicy = map[string]model.SharePermission{
 	"recall":        model.SharePermissionRead,
+	"ask":           model.SharePermissionRead,
 	"list":          model.SharePermissionRead,
 	"get":           model.SharePermissionRead,
 	"graph":         model.SharePermissionRead,
@@ -467,6 +495,25 @@ func shareToolFilter(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
 		}
 	}
 	return filtered
+}
+
+// askVisible reports whether the ask tool should appear in tools/list: the Ask
+// service must be wired AND the ask.enabled feature flag on. Read on every
+// tools/list so the flag toggles ask's visibility live (no restart).
+func askVisible(ctx context.Context, deps Dependencies) bool {
+	return deps.Ask != nil && deps.Settings.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
+}
+
+// filterOutTool returns tools with any entry named name removed. Used by the
+// combined tool-list filter to hide the ask tool when its feature flag is off.
+func filterOutTool(tools []mcp.Tool, name string) []mcp.Tool {
+	out := tools[:0:0]
+	for _, t := range tools {
+		if t.Name != name {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Backend returns the storage backend identifier ("sqlite" or "postgres")
