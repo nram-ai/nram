@@ -71,6 +71,11 @@ type EnrichmentAdminConfig struct {
 	// endpoint with a 503 response in deployments where the service is not
 	// wired.
 	BackfillExtractedFactParaphrase func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
+
+	// BackfillMultiVector enqueues live memories for re-faceting so existing
+	// memories (stored before multi-vector was enabled) gain topic facets. Nil
+	// disables the endpoint with a 503 response.
+	BackfillMultiVector func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
 }
 
 // EnrichmentQueueStatus is the response for GET /enrichment/queue.
@@ -281,6 +286,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentTestPrompt(w, r, cfg)
 		case "backfill-augmentation":
 			handleEnrichmentBackfillAugmentation(w, r, cfg)
+		case "backfill-multi-vector":
+			handleEnrichmentBackfillMultiVector(w, r, cfg)
 		case "backfill-extracted-fact-paraphrase":
 			handleEnrichmentBackfillExtractedFactParaphrase(w, r, cfg)
 		default:
@@ -741,6 +748,39 @@ func handleEnrichmentBackfillAugmentation(w http.ResponseWriter, r *http.Request
 	count, enq, err := cfg.BackfillAugmentation(r.Context(), projectID, body.DryRun, body.Limit)
 	if err != nil {
 		WriteError(w, ErrInternal("backfill augmentation: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         body.DryRun,
+	})
+}
+
+// handleEnrichmentBackfillMultiVector handles POST /enrichment/backfill-multi-vector.
+// ProjectID is optional; omit to sweep the whole deployment. DryRun returns the
+// candidate count without enqueueing. Limit caps how many memories this call enqueues.
+func handleEnrichmentBackfillMultiVector(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillMultiVector == nil {
+		http.Error(w, "backfill-multi-vector not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	count, enq, err := cfg.BackfillMultiVector(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("backfill multi-vector: "+err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{

@@ -479,6 +479,78 @@ func (s *stubAugLister) ListAugmentationBackfillCandidates(_ context.Context, _ 
 	return cands, nil
 }
 
+// stubMVLister returns a fixed list of candidate memory IDs for the
+// multi-vector backfill.
+type stubMVLister struct {
+	ids []uuid.UUID
+}
+
+func (s *stubMVLister) ListMultiVectorBackfillCandidates(_ context.Context, _ []uuid.UUID, _ int) ([]storage.BackfillCandidate, error) {
+	cands := make([]storage.BackfillCandidate, len(s.ids))
+	for i, id := range s.ids {
+		cands[i] = storage.BackfillCandidate{ID: id}
+	}
+	return cands, nil
+}
+
+func TestBackfillMultiVector_DryRunDoesNotEnqueue(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		id1: makeEnrichMemory(id1, nsID, true),
+		id2: makeEnrichMemory(id2, nsID, true),
+	}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachMultiVectorLister(&stubMVLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillMultiVector(context.Background(), &BackfillMultiVectorRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if resp.CandidateCount != 2 || resp.Enqueued != 0 {
+		t.Fatalf("dry run expected 2 candidates / 0 enqueued; got %d/%d", resp.CandidateCount, resp.Enqueued)
+	}
+	if len(queue.jobs) != 0 {
+		t.Fatalf("dry run enqueued %d jobs; expected 0", len(queue.jobs))
+	}
+}
+
+func TestBackfillMultiVector_Enqueues(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		id1: makeEnrichMemory(id1, nsID, true),
+		id2: makeEnrichMemory(id2, nsID, true),
+	}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachMultiVectorLister(&stubMVLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillMultiVector(context.Background(), &BackfillMultiVectorRequest{})
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if resp.Enqueued != 2 || len(queue.jobs) != 2 {
+		t.Fatalf("expected 2 enqueued/2 jobs; got %d/%d", resp.Enqueued, len(queue.jobs))
+	}
+	gotIDs := map[uuid.UUID]bool{queue.jobs[0].MemoryID: true, queue.jobs[1].MemoryID: true}
+	if !gotIDs[id1] || !gotIDs[id2] {
+		t.Fatalf("enqueued job memory IDs %v don't cover both candidates", gotIDs)
+	}
+}
+
+func TestBackfillMultiVector_NoListerReturnsError(t *testing.T) {
+	_, _, projects := setupEnrichFixtures()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	if _, err := svc.BackfillMultiVector(context.Background(), &BackfillMultiVectorRequest{}); err == nil {
+		t.Fatal("expected error when multi-vector lister is unwired")
+	}
+}
+
 func TestBackfillAugmentation_DryRunDoesNotEnqueue(t *testing.T) {
 	_, nsID, projects := setupEnrichFixtures()
 	id1, id2 := uuid.New(), uuid.New()

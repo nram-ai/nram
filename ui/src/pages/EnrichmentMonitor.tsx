@@ -444,10 +444,13 @@ const QUERY_AUGMENT_SKIP_LABELS: Record<string, string> = {
 // cost surfaces.
 const PHASE_METRIC_LABELS: Record<string, string> = {
   ingestion_decision: "Ingestion decision",
+  ingestion_embedding: "Ingestion embedding",
   fact_extraction: "Fact extraction",
+  fact_guard_embedding: "Fact-guard embedding",
   entity_extraction: "Entity extraction",
   query_augment: "Query augmentation",
   embedding: "Embedding",
+  facet_embedding: "Facet embedding",
 };
 
 function StepStatusIcon({

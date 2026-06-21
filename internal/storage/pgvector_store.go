@@ -37,10 +37,22 @@ var supportedEntityDimensions = map[int]string{
 // PgVectorStore implements VectorStore using PostgreSQL with pgvector.
 type PgVectorStore struct {
 	pool *pgxpool.Pool
+	// maxFacetsFn resolves enrichment.multi_vector.max_facets so the faceted
+	// Search over-fetch tracks the configured cap (see overFetchFor). Nil until
+	// SetMaxFacetsResolver is called; nil falls back to the over-fetch floor.
+	maxFacetsFn func() int
 }
 
-// Compile-time interface check.
-var _ VectorStore = (*PgVectorStore)(nil)
+// SetMaxFacetsResolver injects the resolver for enrichment.multi_vector.max_facets
+// so the faceted Search candidate window scales with the configured facet cap
+// instead of a fixed multiplier. Wired at boot; safe to leave unset in tests.
+func (s *PgVectorStore) SetMaxFacetsResolver(fn func() int) { s.maxFacetsFn = fn }
+
+// Compile-time interface checks.
+var (
+	_ VectorStore      = (*PgVectorStore)(nil)
+	_ FacetVectorStore = (*PgVectorStore)(nil)
+)
 
 // NewPgVectorStore creates a new PgVectorStore from the given DSN.
 // It creates a pgxpool.Pool with AfterConnect that registers pgvector types.
@@ -75,6 +87,7 @@ type pgvectorTableSpec struct {
 	parent      string         // parent row table for namespace JOINs
 	idColumn    string         // foreign-key column (memory_id / entity_id)
 	softDeletes bool           // parent table has a deleted_at column
+	faceted     bool           // table carries facet_id (memory tables only)
 	dimTables   map[int]string // every dim table for this kind, used for delete-all-dim
 }
 
@@ -99,6 +112,7 @@ func resolveTableSpec(kind VectorKind, dimension int) (pgvectorTableSpec, error)
 			parent:      "memories",
 			idColumn:    "memory_id",
 			softDeletes: true,
+			faceted:     true,
 			dimTables:   supportedMemoryDimensions,
 		}, nil
 	case VectorKindEntity:
@@ -124,17 +138,30 @@ func (s *PgVectorStore) Upsert(ctx context.Context, kind VectorKind, id uuid.UUI
 		return err
 	}
 
-	query := fmt.Sprintf(
-		`INSERT INTO %s (%s, embedding) VALUES ($1, $2)
-		 ON CONFLICT (%s) DO UPDATE SET embedding = EXCLUDED.embedding`,
-		spec.table, spec.idColumn, spec.idColumn,
-	)
-
+	query := upsertQuery(spec)
 	_, err = s.pool.Exec(ctx, query, id, pgvector.NewVector(embedding))
 	if err != nil {
 		return fmt.Errorf("pgvector: upsert failed for table %s: %w", spec.table, err)
 	}
 	return nil
+}
+
+// upsertQuery builds the single-vector upsert for a spec. For faceted (memory)
+// tables it targets facet 0 with the composite-key conflict target so it never
+// clobbers topic facets; for entity tables it conflicts on the bare id column.
+func upsertQuery(spec pgvectorTableSpec) string {
+	if spec.faceted {
+		return fmt.Sprintf(
+			`INSERT INTO %s (%s, facet_id, embedding) VALUES ($1, 0, $2)
+			 ON CONFLICT (%s, facet_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
+			spec.table, spec.idColumn, spec.idColumn,
+		)
+	}
+	return fmt.Sprintf(
+		`INSERT INTO %s (%s, embedding) VALUES ($1, $2)
+		 ON CONFLICT (%s) DO UPDATE SET embedding = EXCLUDED.embedding`,
+		spec.table, spec.idColumn, spec.idColumn,
+	)
 }
 
 // UpsertBatch inserts or updates multiple vectors, grouping by (kind, dimension)
@@ -170,11 +197,7 @@ func (s *PgVectorStore) UpsertBatch(ctx context.Context, items []VectorUpsertIte
 		spec, _ := resolveTableSpec(key.kind, key.dim) // already validated above
 
 		batch := &pgx.Batch{}
-		query := fmt.Sprintf(
-			`INSERT INTO %s (%s, embedding) VALUES ($1, $2)
-			 ON CONFLICT (%s) DO UPDATE SET embedding = EXCLUDED.embedding`,
-			spec.table, spec.idColumn, spec.idColumn,
-		)
+		query := upsertQuery(spec)
 		for _, item := range group {
 			batch.Queue(query, item.ID, pgvector.NewVector(item.Embedding))
 		}
@@ -197,6 +220,51 @@ func (s *PgVectorStore) UpsertBatch(ctx context.Context, items []VectorUpsertIte
 	return nil
 }
 
+// UpsertFacets atomically replaces a memory's entire facet set at the given
+// dimension. facets[0] is facet 0 (the pooled whole-memory vector); facets[1:]
+// are topic facets written at facet_id = their slice index. The delete-then-
+// insert runs in one transaction so a concurrent reader never sees a partial
+// set. An empty slice removes all facets for the memory at that dimension.
+func (s *PgVectorStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, _ uuid.UUID, dimension int, facets [][]float32) error {
+	spec, err := resolveTableSpec(VectorKindMemory, dimension)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("pgvector: upsert-facets begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s = $1", spec.table, spec.idColumn), memoryID); err != nil {
+		return fmt.Errorf("pgvector: upsert-facets clear %s: %w", spec.table, err)
+	}
+
+	if len(facets) > 0 {
+		insert := fmt.Sprintf("INSERT INTO %s (%s, facet_id, embedding) VALUES ($1, $2, $3)", spec.table, spec.idColumn)
+		batch := &pgx.Batch{}
+		for i, vec := range facets {
+			batch.Queue(insert, memoryID, i, pgvector.NewVector(vec))
+		}
+		br := tx.SendBatch(ctx, batch)
+		for range facets {
+			if _, err := br.Exec(); err != nil {
+				_ = br.Close()
+				return fmt.Errorf("pgvector: upsert-facets insert %s: %w", spec.table, err)
+			}
+		}
+		if err := br.Close(); err != nil {
+			return fmt.Errorf("pgvector: upsert-facets batch close %s: %w", spec.table, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pgvector: upsert-facets commit: %w", err)
+	}
+	return nil
+}
+
 // Search finds the nearest vectors within a namespace using cosine distance.
 // It joins the dimension table with the parent (memories or entities) for
 // namespace scoping. Memory searches additionally exclude soft-deleted rows;
@@ -212,17 +280,48 @@ func (s *PgVectorStore) Search(ctx context.Context, kind VectorKind, embedding [
 		whereExtra = " AND p.deleted_at IS NULL"
 	}
 
-	query := fmt.Sprintf(
-		`SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
-		 FROM %s v
-		 JOIN %s p ON v.%s = p.id
-		 WHERE p.namespace_id = $2%s
-		 ORDER BY v.embedding <=> $1
-		 LIMIT $3`,
-		spec.idColumn, spec.table, spec.parent, spec.idColumn, whereExtra,
-	)
+	var query string
+	var args []any
+	if spec.faceted {
+		// Multiple facet rows can share a memory_id. Scan the index-ordered top
+		// (topK * overFetch) candidate facet rows, keep the best (nearest) facet
+		// per memory via ROW_NUMBER, then take topK distinct memories. The inner
+		// ORDER BY ... LIMIT uses the hnsw index; the window runs over only that
+		// bounded candidate set. Score = 1 - min(distance) = best facet.
+		query = fmt.Sprintf(
+			`SELECT %s, score, namespace_id FROM (
+			   SELECT %s, score, namespace_id,
+			          ROW_NUMBER() OVER (PARTITION BY %s ORDER BY score DESC) AS rn
+			   FROM (
+			     SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
+			     FROM %s v
+			     JOIN %s p ON v.%s = p.id
+			     WHERE p.namespace_id = $2%s
+			     ORDER BY v.embedding <=> $1
+			     LIMIT $3
+			   ) cand
+			 ) ranked
+			 WHERE rn = 1
+			 ORDER BY score DESC
+			 LIMIT $4`,
+			spec.idColumn, spec.idColumn, spec.idColumn, spec.idColumn,
+			spec.table, spec.parent, spec.idColumn, whereExtra,
+		)
+		args = []any{pgvector.NewVector(embedding), namespaceID, topK * overFetchFor(s.maxFacetsFn), topK}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
+			 FROM %s v
+			 JOIN %s p ON v.%s = p.id
+			 WHERE p.namespace_id = $2%s
+			 ORDER BY v.embedding <=> $1
+			 LIMIT $3`,
+			spec.idColumn, spec.table, spec.parent, spec.idColumn, whereExtra,
+		)
+		args = []any{pgvector.NewVector(embedding), namespaceID, topK}
+	}
 
-	rows, err := s.pool.Query(ctx, query, pgvector.NewVector(embedding), namespaceID, topK)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector: search query failed: %w", err)
 	}
@@ -252,7 +351,13 @@ func (s *PgVectorStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uui
 		return nil, err
 	}
 
-	query := fmt.Sprintf(`SELECT %s, embedding FROM %s WHERE %s = ANY($1)`, spec.idColumn, spec.table, spec.idColumn)
+	// Faceted (memory) tables hold multiple rows per id; callers of GetByIDs want
+	// the pooled whole-memory vector, which is facet 0.
+	facetFilter := ""
+	if spec.faceted {
+		facetFilter = " AND facet_id = 0"
+	}
+	query := fmt.Sprintf(`SELECT %s, embedding FROM %s WHERE %s = ANY($1)%s`, spec.idColumn, spec.table, spec.idColumn, facetFilter)
 	rows, err := s.pool.Query(ctx, query, ids)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector: get-by-ids query failed for table %s: %w", spec.table, err)

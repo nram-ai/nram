@@ -60,3 +60,9 @@ If one phase is starved of budget by the others, the `dreaming.<phase>.budget_fr
 ### Restoring after a drain
 
 Restore every dreaming setting you touched back to its default. The defaults are tuned for steady-state load, not first-pass backfill; leaving them elevated keeps token spend permanently higher than it needs to be. The Settings page shows the default value inline beside each field, and the per-cycle counters on the Dreaming page plateau once the residual clears, which is the signal to restore.
+
+## Multi-vector facet backfill
+
+After enabling `enrichment.multi_vector.enabled`, use the Settings page backfill button (or `POST /v1/admin/enrichment/backfill-multi-vector`, optional `project_id`, `dry_run`, and `limit`) to facet memories stored beforehand. Dream syntheses are enqueued first because they are the population most prone to multi-topic dilution; a single-topic memory is left with just its whole-memory vector. Re-running is safe: faceting replaces a memory's facet set.
+
+The backfill is embedding-intensive: each memory's sentences are embedded in addition to the whole-memory embedding, so a full sweep multiplies embedding load across every enrichment worker. `enrichment.multi_vector.embed_concurrency` (default `4`) bounds how many memories are facet-embedded at once across the whole pool, so a bulk backfill cannot stampede a modest embedder; lower it if a backfill destabilises the embedder, raise it on a provider that sustains parallel calls (takes effect on restart). `enrichment.multi_vector.max_facets` (default `8`) caps vectors per memory; the faceted search candidate window scales with it automatically.

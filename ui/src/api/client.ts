@@ -1537,6 +1537,15 @@ export interface AugmentationBackfillResponse {
   dry_run: boolean;
 }
 
+// Response for POST /admin/enrichment/backfill-multi-vector. Same shape as the
+// augmentation backfill: enqueued is 0 on a dry run, else the count of memories
+// enqueued for re-faceting.
+export interface MultiVectorBackfillResponse {
+  candidate_count: number;
+  enqueued: number;
+  dry_run: boolean;
+}
+
 // Response for POST /v1/projects/{id}/memories/{id}/preview-augmentation.
 // Mirrors the server's MemoryPreviewAugmentResponse: queries and the rendered
 // embed-ready content the augmentation phase would have produced, without
@@ -2035,6 +2044,20 @@ export const adminAPI = {
     request<AugmentationBackfillResponse>(
       "POST",
       "/admin/enrichment/backfill-augmentation",
+      req,
+    ),
+
+  // Enqueue existing memories for multi-vector re-faceting. dry_run reports the
+  // candidate count without enqueueing. project_id omitted scans the whole
+  // deployment; limit caps how many memories land in the queue this call.
+  backfillMultiVector: (req: {
+    project_id?: string;
+    dry_run?: boolean;
+    limit?: number;
+  }) =>
+    request<MultiVectorBackfillResponse>(
+      "POST",
+      "/admin/enrichment/backfill-multi-vector",
       req,
     ),
 

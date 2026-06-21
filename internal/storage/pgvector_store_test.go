@@ -68,28 +68,40 @@ func setupPgVectorTestWithSchema(t *testing.T) *PgVectorStore {
 		);
 
 		CREATE TABLE IF NOT EXISTS memory_vectors_384 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(384) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(384) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 		CREATE TABLE IF NOT EXISTS memory_vectors_512 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(512) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(512) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 		CREATE TABLE IF NOT EXISTS memory_vectors_768 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(768) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(768) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 		CREATE TABLE IF NOT EXISTS memory_vectors_1024 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(1024) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(1024) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 		CREATE TABLE IF NOT EXISTS memory_vectors_1536 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(1536) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(1536) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 		CREATE TABLE IF NOT EXISTS memory_vectors_3072 (
-			memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-			embedding vector(3072) NOT NULL
+			memory_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+			facet_id SMALLINT NOT NULL DEFAULT 0,
+			embedding vector(3072) NOT NULL,
+			PRIMARY KEY (memory_id, facet_id)
 		);
 	`
 	if _, err := pool.Exec(ctx, setupSQL); err != nil {
@@ -191,7 +203,13 @@ func TestPgVectorStore_UpsertAndSearch(t *testing.T) {
 
 	dim := 384
 	emb1 := makeEmbedding(dim, 1.0)
-	emb2 := makeEmbedding(dim, 0.5)
+	// emb2 is a genuinely different direction (half ones), not a scalar multiple
+	// of emb1, so cosine(emb1, emb2) < 1 and the "exact match ranks first"
+	// assertion is deterministic rather than a tie between parallel vectors.
+	emb2 := makeEmbedding(dim, 1.0)
+	for i := dim / 2; i < dim; i++ {
+		emb2[i] = 0
+	}
 
 	// Upsert two vectors.
 	if err := store.Upsert(ctx, VectorKindMemory, memID1, nsID, emb1, dim); err != nil {
@@ -570,6 +588,150 @@ func TestPgVectorStore_GetByIDs_PartialAndEmpty(t *testing.T) {
 	}
 	if len(emptyResult) != 0 {
 		t.Errorf("expected empty map for nil input, got %d", len(emptyResult))
+	}
+}
+
+// orthEmbedding builds a unit-ish vector concentrated on one axis so distinct
+// axes are near-orthogonal, letting a test target one facet's "topic".
+func orthEmbedding(dim, axis int) []float32 {
+	v := make([]float32, dim)
+	v[axis%dim] = 1.0
+	return v
+}
+
+func TestPgVectorStore_UpsertFacets_SearchCollapsesToBestFacet(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	multi := uuid.New()  // a multi-topic memory: facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // a single-topic memory on axis 5
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "facet-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	for _, id := range []uuid.UUID{multi, single} {
+		if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", id, nsID, "m"); err != nil {
+			t.Fatalf("insert memory: %v", err)
+		}
+	}
+
+	dim := 384
+	// Multi-topic memory: pooled facet on axis 0, topic facet on axis 5.
+	if err := store.UpsertFacets(ctx, multi, nsID, dim, [][]float32{
+		orthEmbedding(dim, 0),
+		orthEmbedding(dim, 5),
+	}); err != nil {
+		t.Fatalf("UpsertFacets multi: %v", err)
+	}
+	// Single-topic memory living on axis 5 too.
+	if err := store.Upsert(ctx, VectorKindMemory, single, nsID, orthEmbedding(dim, 5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+
+	// Query on axis 5: both memories should match strongly. The multi memory
+	// must appear exactly once (collapsed across its two facets) and score on
+	// its best facet (axis 5 ~ 1.0), not its pooled axis-0 facet (~0.0).
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 5), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	seen := map[uuid.UUID]int{}
+	scoreOf := map[uuid.UUID]float64{}
+	for _, r := range results {
+		seen[r.ID]++
+		scoreOf[r.ID] = r.Score
+	}
+	if seen[multi] != 1 {
+		t.Fatalf("multi-topic memory appeared %d times, want exactly 1 (collapsed)", seen[multi])
+	}
+	if scoreOf[multi] < 0.99 {
+		t.Errorf("multi memory scored %f on its axis-5 facet, want ~1.0 (best facet, not pooled)", scoreOf[multi])
+	}
+	if _, ok := scoreOf[single]; !ok {
+		t.Errorf("single-topic memory missing from results")
+	}
+}
+
+func TestPgVectorStore_UpsertFacets_ReplacesSetAndGetByIDsReturnsFacet0(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	mem := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "replace-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", mem, nsID, "m"); err != nil {
+		t.Fatalf("insert memory: %v", err)
+	}
+
+	dim := 384
+	pooled := orthEmbedding(dim, 0)
+	// First write 3 facets.
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{pooled, orthEmbedding(dim, 1), orthEmbedding(dim, 2)}); err != nil {
+		t.Fatalf("UpsertFacets first: %v", err)
+	}
+	// GetByIDs must return facet 0 (the pooled vector), exactly one vector.
+	got, err := store.GetByIDs(ctx, VectorKindMemory, []uuid.UUID{mem}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if !approxEqualVec(got[mem], pooled) {
+		t.Errorf("GetByIDs returned non-facet-0 vector")
+	}
+
+	// Replace with a smaller set; the old facet on axis 2 must be gone.
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{pooled}); err != nil {
+		t.Fatalf("UpsertFacets replace: %v", err)
+	}
+	var rowCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM memory_vectors_384 WHERE memory_id = $1", mem).Scan(&rowCount); err != nil {
+		t.Fatalf("count facets: %v", err)
+	}
+	if rowCount != 1 {
+		t.Errorf("after replace facet count = %d, want 1", rowCount)
+	}
+
+	// A query on the now-removed axis-2 topic must not match this memory.
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 2), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range results {
+		if r.ID == mem && r.Score > 0.5 {
+			t.Errorf("removed facet still matches: score %f", r.Score)
+		}
+	}
+}
+
+func TestPgVectorStore_Delete_RemovesAllFacets(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	mem := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "del-facets-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", mem, nsID, "m"); err != nil {
+		t.Fatalf("insert memory: %v", err)
+	}
+	dim := 384
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{orthEmbedding(dim, 0), orthEmbedding(dim, 1)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	if err := store.Delete(ctx, VectorKindMemory, mem); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	var rowCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM memory_vectors_384 WHERE memory_id = $1", mem).Scan(&rowCount); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("after Delete facet count = %d, want 0", rowCount)
 	}
 }
 

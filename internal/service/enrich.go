@@ -57,6 +57,12 @@ type ParaphraseCandidateLister interface {
 	ListEnrichedParentsWithExtractedChildren(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
+// MultiVectorCandidateLister returns live memories to re-facet for the
+// multi-vector backfill. Same tiny-interface pattern as the others.
+type MultiVectorCandidateLister interface {
+	ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+}
+
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
 	memories         MemoryReader
@@ -65,6 +71,7 @@ type EnrichService struct {
 	lineage          LineageQuerier
 	augLister        AugmentationCandidateLister
 	paraphraseLister ParaphraseCandidateLister
+	mvLister         MultiVectorCandidateLister
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.
@@ -87,6 +94,12 @@ func NewEnrichService(
 // explanatory error rather than silently no-oping.
 func (s *EnrichService) AttachAugmentationLister(lister AugmentationCandidateLister) {
 	s.augLister = lister
+}
+
+// AttachMultiVectorLister wires the candidate lister used by BackfillMultiVector.
+// Optional: when nil, BackfillMultiVector returns an explanatory error.
+func (s *EnrichService) AttachMultiVectorLister(lister MultiVectorCandidateLister) {
+	s.mvLister = lister
 }
 
 // AttachParaphraseCandidateLister wires the candidate lister used by
@@ -211,38 +224,54 @@ type BackfillAugmentationResponse struct {
 // fact and entity extraction are skipped automatically for already-enriched
 // rows, so the cost is one extra LLM augmentation call plus one embed call
 // per memory.
-func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillAugmentationRequest) (*BackfillAugmentationResponse, error) {
-	start := time.Now()
-	if s.augLister == nil {
-		return nil, fmt.Errorf("augmentation candidate lister not configured (call AttachAugmentationLister)")
-	}
+// BackfillMultiVectorRequest scopes the multi-vector (facet) backfill. ProjectID
+// is optional; omit to sweep the whole deployment. Limit caps candidates per call.
+type BackfillMultiVectorRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+}
 
+// BackfillMultiVectorResponse reports the backfill outcome.
+type BackfillMultiVectorResponse struct {
+	CandidateCount int   `json:"candidate_count"`
+	Enqueued       int   `json:"enqueued"`
+	DryRun         bool  `json:"dry_run"`
+	LatencyMs      int64 `json:"latency_ms"`
+}
+
+// BackfillMultiVector enqueues live memories for re-enrichment so the worker's
+// facet pass (gated by enrichment.multi_vector.enabled) re-vectorizes them with
+// topic facets. This is the path that recovers facets for memories stored before
+// the feature was enabled, including high-confidence syntheses that already
+// superseded their sources. Idempotent: re-faceting replaces the facet set.
+// candidateLister lists backfill candidates (id+namespace) for a project scope.
+type candidateLister func(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+
+// runBackfill resolves the optional project scope to a namespace filter, lists
+// candidates, and (unless dryRun) enqueues a plain re-enrichment job per
+// candidate. Shared by BackfillMultiVector and BackfillAugmentation, which are
+// identical apart from their lister and typed response. (BackfillExtractedFact-
+// Paraphrase stays separate: it stamps a job marker.) The candidate's namespace
+// rides along so the enqueue needs no per-id read on the whole-deployment sweep.
+func (s *EnrichService) runBackfill(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int, list candidateLister) (candidateCount, enqueued int, err error) {
 	var namespaceIDs []uuid.UUID
-	if req.ProjectID != uuid.Nil {
-		project, err := s.projects.GetByID(ctx, req.ProjectID)
-		if err != nil {
-			return nil, fmt.Errorf("project not found: %w", err)
+	if projectID != uuid.Nil {
+		project, perr := s.projects.GetByID(ctx, projectID)
+		if perr != nil {
+			return 0, 0, fmt.Errorf("project not found: %w", perr)
 		}
 		namespaceIDs = []uuid.UUID{project.NamespaceID}
 	}
 
-	candidates, err := s.augLister.ListAugmentationBackfillCandidates(ctx, namespaceIDs, req.Limit)
+	candidates, err := list(ctx, namespaceIDs, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list backfill candidates: %w", err)
+		return 0, 0, err
+	}
+	if dryRun || len(candidates) == 0 {
+		return len(candidates), 0, nil
 	}
 
-	resp := &BackfillAugmentationResponse{
-		CandidateCount: len(candidates),
-		DryRun:         req.DryRun,
-	}
-	if req.DryRun || len(candidates) == 0 {
-		resp.LatencyMs = time.Since(start).Milliseconds()
-		return resp, nil
-	}
-
-	// The lister returns each candidate's namespace, so the job can be
-	// enqueued directly without a per-id read (which would have to cross
-	// namespaces for the whole-deployment admin sweep).
 	now := time.Now()
 	for _, cand := range candidates {
 		job := &model.EnrichmentJob{
@@ -256,16 +285,49 @@ func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillA
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
-		if err != nil {
-			return nil, fmt.Errorf("enqueue augmentation backfill for memory %s: %w", cand.ID, err)
+		inserted, ierr := s.enrichmentQueue.Enqueue(ctx, job)
+		if ierr != nil {
+			return 0, 0, fmt.Errorf("enqueue backfill for memory %s: %w", cand.ID, ierr)
 		}
 		if inserted {
-			resp.Enqueued++
+			enqueued++
 		}
 	}
-	resp.LatencyMs = time.Since(start).Milliseconds()
-	return resp, nil
+	return len(candidates), enqueued, nil
+}
+
+func (s *EnrichService) BackfillMultiVector(ctx context.Context, req *BackfillMultiVectorRequest) (*BackfillMultiVectorResponse, error) {
+	start := time.Now()
+	if s.mvLister == nil {
+		return nil, fmt.Errorf("multi-vector candidate lister not configured (call AttachMultiVectorLister)")
+	}
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, s.mvLister.ListMultiVectorBackfillCandidates)
+	if err != nil {
+		return nil, err
+	}
+	return &BackfillMultiVectorResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         req.DryRun,
+		LatencyMs:      time.Since(start).Milliseconds(),
+	}, nil
+}
+
+func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillAugmentationRequest) (*BackfillAugmentationResponse, error) {
+	start := time.Now()
+	if s.augLister == nil {
+		return nil, fmt.Errorf("augmentation candidate lister not configured (call AttachAugmentationLister)")
+	}
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, s.augLister.ListAugmentationBackfillCandidates)
+	if err != nil {
+		return nil, err
+	}
+	return &BackfillAugmentationResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         req.DryRun,
+		LatencyMs:      time.Since(start).Milliseconds(),
+	}, nil
 }
 
 // Enrich enqueues enrichment jobs for the specified memories or all un-enriched

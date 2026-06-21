@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.6.2
+  version: 0.7.0
   license:
     name: MIT
 
@@ -3932,6 +3932,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/EnrichmentBackfillResponse"
 
+  /v1/admin/enrichment/backfill-multi-vector:
+    post:
+      operationId: adminBackfillMultiVector
+      tags: [Enrichment]
+      summary: Backfill multi-vector facets for existing memories (administrator only)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentBackfillRequest"
+      responses:
+        "200":
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
   /v1/admin/enrichment/backfill-extracted-fact-paraphrase:
     post:
       operationId: adminBackfillFactParaphrase
@@ -5813,6 +5832,8 @@ components:
         - "dreaming.consolidation.alignment_sample_size"
         - "dreaming.consolidation.audit_budget_fraction"
         - "dreaming.consolidation.budget_fraction"
+        - "dreaming.consolidation.cluster_cosine_threshold"
+        - "dreaming.consolidation.cluster_mode"
         - "dreaming.consolidation.cluster_overlap_threshold"
         - "dreaming.consolidation.consolidate_budget_fraction"
         - "dreaming.consolidation.reinforce_budget_fraction"
@@ -5912,6 +5933,10 @@ components:
         - "enrichment.ingestion_decision.temperature"
         - "enrichment.ingestion_decision.threshold"
         - "enrichment.ingestion_decision.top_k"
+        - "enrichment.multi_vector.embed_concurrency"
+        - "enrichment.multi_vector.enabled"
+        - "enrichment.multi_vector.facet_threshold"
+        - "enrichment.multi_vector.max_facets"
         - "enrichment.pool_tick_interval_seconds"
         - "enrichment.query_augment.count"
         - "enrichment.query_augment.enabled"

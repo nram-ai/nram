@@ -31,18 +31,20 @@ func setupHNSWTestDB(t *testing.T) *sql.DB {
 	// Create memory_vectors table.
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS memory_vectors (
-			memory_id TEXT PRIMARY KEY,
+			memory_id TEXT NOT NULL,
+			facet_id INTEGER NOT NULL DEFAULT 0,
 			namespace_id TEXT NOT NULL,
 			dimension INTEGER NOT NULL,
 			embedding BLOB NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			PRIMARY KEY (memory_id, facet_id)
 		)`)
 	if err != nil {
 		t.Fatalf("create memory_vectors: %v", err)
 	}
 
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_vectors_ns_dim ON memory_vectors(namespace_id, dimension)`)
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_vectors_ns_dim ON memory_vectors(namespace_id, dimension, facet_id)`)
 	if err != nil {
 		t.Fatalf("create index: %v", err)
 	}
@@ -131,6 +133,114 @@ func TestHNSWStoreUpsertAndSearch(t *testing.T) {
 	}
 	if results[0].NamespaceID != nsID {
 		t.Errorf("expected namespace_id %s, got %s", nsID, results[0].NamespaceID)
+	}
+}
+
+func TestHNSWStore_UpsertFacets_BruteForceCollapse(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+	axis := func(a int) []float32 { v := make([]float32, dim); v[a] = 1; return v }
+
+	multi := uuid.New()  // facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // axis 5 (facet 0 only)
+	if err := store.UpsertFacets(ctx, multi, nsID, dim, [][]float32{axis(0), axis(5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	if err := store.Upsert(ctx, storage.VectorKindMemory, single, nsID, axis(5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+
+	// Query on axis 5: multi must surface once (collapsed) at its topic-facet
+	// strength (~1.0), proving the brute-forced facet beat its pooled facet 0.
+	results, err := store.Search(ctx, storage.VectorKindMemory, axis(5), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	seen := map[uuid.UUID]int{}
+	score := map[uuid.UUID]float64{}
+	for _, r := range results {
+		seen[r.ID]++
+		score[r.ID] = r.Score
+	}
+	if seen[multi] != 1 {
+		t.Fatalf("multi appeared %d times, want exactly 1 (collapsed)", seen[multi])
+	}
+	if score[multi] < 0.99 {
+		t.Errorf("multi score %f on axis-5 facet, want ~1.0", score[multi])
+	}
+	if _, ok := score[single]; !ok {
+		t.Error("single-topic memory missing from results")
+	}
+
+	// Query on axis 0 (multi's pooled facet 0, served by the graph) finds it too.
+	r0, err := store.Search(ctx, storage.VectorKindMemory, axis(0), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search axis0: %v", err)
+	}
+	var found bool
+	for _, r := range r0 {
+		if r.ID == multi && r.Score > 0.99 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("multi not found at high score on its facet-0 axis")
+	}
+}
+
+func TestHNSWStore_UpsertFacets_ReplaceAndDelete(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+	axis := func(a int) []float32 { v := make([]float32, dim); v[a] = 1; return v }
+
+	mem := uuid.New()
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{axis(0), axis(3)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	// Replace with a single facet; the axis-3 topic must no longer match.
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{axis(0)}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	res, err := store.Search(ctx, storage.VectorKindMemory, axis(3), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	for _, r := range res {
+		if r.ID == mem && r.Score > 0.5 {
+			t.Errorf("removed facet still matches at %f", r.Score)
+		}
+	}
+	// GetByIDs returns facet 0 (the pooled vector from the graph).
+	got, err := store.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{mem}, dim)
+	if err != nil {
+		t.Fatalf("GetByIDs: %v", err)
+	}
+	if len(got[mem]) != dim {
+		t.Errorf("expected facet-0 vector of dim %d, got %d", dim, len(got[mem]))
+	}
+	// Delete removes every facet row.
+	if err := store.Delete(ctx, storage.VectorKindMemory, mem); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM memory_vectors WHERE memory_id = ?", mem.String()).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("after delete rows = %d, want 0", n)
 	}
 }
 
@@ -436,18 +546,20 @@ func setupHNSWTestDBNoCleanup(t *testing.T) *sql.DB {
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS memory_vectors (
-			memory_id TEXT PRIMARY KEY,
+			memory_id TEXT NOT NULL,
+			facet_id INTEGER NOT NULL DEFAULT 0,
 			namespace_id TEXT NOT NULL,
 			dimension INTEGER NOT NULL,
 			embedding BLOB NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			PRIMARY KEY (memory_id, facet_id)
 		)`)
 	if err != nil {
 		t.Fatalf("create memory_vectors: %v", err)
 	}
 
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_vectors_ns_dim ON memory_vectors(namespace_id, dimension)`)
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_vectors_ns_dim ON memory_vectors(namespace_id, dimension, facet_id)`)
 	if err != nil {
 		t.Fatalf("create index: %v", err)
 	}

@@ -17,7 +17,23 @@ const (
 	OperationFactExtraction         Operation = "fact_extraction"
 	OperationEntityExtraction       Operation = "entity_extraction"
 	OperationRelationshipExtraction Operation = "relationship_extraction"
-	OperationEmbedding              Operation = "embedding"
+	// OperationEmbedding is the canonical stored-vector embed: the whole-memory
+	// (augmented when query augmentation is on) vector plus its entity vectors,
+	// embedded together in one call. The other per-job embeds below are split
+	// onto their own operations so each registers independently in the per-phase
+	// metrics on the enrichment queue detail view, where one operation collapses
+	// to one row.
+	OperationEmbedding Operation = "embedding"
+	// OperationIngestionEmbedding is the embed the ingestion-decision phase makes
+	// to find near-duplicates before the ADD/UPDATE/DELETE call. When query
+	// augmentation is off this vector is reused as the stored vector; when on it
+	// is superseded by the augmented OperationEmbedding re-embed.
+	OperationIngestionEmbedding Operation = "ingestion_embedding"
+	// OperationFactGuardEmbedding is the extracted-fact paraphrase guard's embed
+	// of a candidate fact (and the parent) used to drop near-duplicate children.
+	OperationFactGuardEmbedding Operation = "fact_guard_embedding"
+	// OperationFacetEmbedding is the multi-vector facet sentence-embed.
+	OperationFacetEmbedding         Operation = "facet_embedding"
 	OperationConsolidation          Operation = "consolidation"
 	OperationConsolidationAlignment Operation = "consolidation_alignment"
 	OperationConsolidationAudit     Operation = "consolidation_audit"
@@ -47,10 +63,13 @@ const (
 func EnrichmentPhaseOperations() []Operation {
 	return []Operation{
 		OperationIngestionDecision,
+		OperationIngestionEmbedding,
 		OperationFactExtraction,
+		OperationFactGuardEmbedding,
 		OperationEntityExtraction,
 		OperationQueryAugment,
 		OperationEmbedding,
+		OperationFacetEmbedding,
 	}
 }
 

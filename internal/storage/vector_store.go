@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"sort"
 
 	"github.com/google/uuid"
 )
@@ -99,4 +100,79 @@ type VectorStore interface {
 
 	// Ping checks vector store connectivity.
 	Ping(ctx context.Context) error
+}
+
+// FacetVectorStore is an optional capability implemented by vector backends that
+// support multi-vector (per-facet) storage for memories. A memory's vector set
+// is facet 0 (the pooled whole-memory embedding) plus zero or more topic
+// facets. Backends that do not implement this interface degrade cleanly: a
+// caller type-asserts and falls back to the base single-vector Upsert (facet 0
+// only) when the assertion fails.
+//
+// Faceting applies to VectorKindMemory only; entity vectors are single-concept
+// and stay single-vector. The read-side max-over-facets collapse is internal to
+// each backend's Search, so Search keeps returning one result per memory (score
+// = best facet) and no caller of Search changes.
+type FacetVectorStore interface {
+	// UpsertFacets atomically replaces the entire facet set for a memory at the
+	// given dimension. facets[0] is facet 0 (the pooled whole-memory vector) and
+	// facets[1:] are topic facets, written at facet_id = their slice index. An
+	// empty slice removes every facet for the memory at that dimension.
+	UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error
+}
+
+// collapseFacets turns a best-score-per-memory map (the result of folding a
+// faceted Search's over-fetched candidates) into a deterministically ordered
+// VectorSearchResult slice truncated to topK: score descending, ID ascending as
+// a stable tiebreak. Shared by the in-memory-fold backends (HNSW, Qdrant) so the
+// collapse ordering is provably identical; pgvector does the equivalent in SQL.
+func collapseFacets(best map[uuid.UUID]float64, namespaceID uuid.UUID, topK int) []VectorSearchResult {
+	out := make([]VectorSearchResult, 0, len(best))
+	for id, score := range best {
+		out = append(out, VectorSearchResult{ID: id, Score: score, NamespaceID: namespaceID})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	if len(out) > topK {
+		out = out[:topK]
+	}
+	return out
+}
+
+// isFacetedKind reports whether a vector kind carries facets. Memory vectors are
+// faceted; entity vectors are single-concept. The zero value defaults to memory,
+// matching VectorUpsertItem.EffectiveKind. Single source of truth for the
+// empty-string-means-memory rule that the SQL backends bake into their specs.
+func isFacetedKind(kind VectorKind) bool {
+	return kind == "" || kind == VectorKindMemory
+}
+
+// facetSearchOverFetch is the floor multiplier on topK when a faceted backend
+// scans candidate facet rows, so that after collapsing multiple facets of the
+// same memory to one result the query still yields topK distinct memories.
+// It is a floor only: the effective multiplier tracks the configured
+// enrichment.multi_vector.max_facets (see overFetchFor) because a memory can
+// carry up to that many facets, and the candidate window must be at least
+// max_facets * topK rows to guarantee topK distinct memories after collapse.
+const facetSearchOverFetch = 8
+
+// overFetchFor returns the candidate over-fetch multiplier for a faceted Search.
+// It is max(facetSearchOverFetch, configured max_facets): the window must hold at
+// least max_facets * topK rows so that even if the top topK-1 memories each
+// contribute their full max_facets facets, at least one more distinct memory
+// remains to reach topK after the max-over-facets collapse. maxFacetsFn is the
+// store's resolver for enrichment.multi_vector.max_facets; nil (test wiring or a
+// store without the resolver attached) falls back to the floor.
+func overFetchFor(maxFacetsFn func() int) int {
+	of := facetSearchOverFetch
+	if maxFacetsFn != nil {
+		if mf := maxFacetsFn(); mf > of {
+			of = mf
+		}
+	}
+	return of
 }

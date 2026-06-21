@@ -1564,6 +1564,15 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("backfillMultiVector() dry run returns candidate counts or errors", async () => {
+      try {
+        const res = await adminAPI.backfillMultiVector({ dry_run: true, limit: 10 });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("getGraphHealth() + repairGraph() run", async () => {
       const health = await adminAPI.getGraphHealth();
       expect(health).toBeDefined();

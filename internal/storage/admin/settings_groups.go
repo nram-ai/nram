@@ -50,6 +50,11 @@ var settingsGroups = []api.SettingGroup{
 				Label:       "Query Augmentation",
 				Description: "Off by default. When enabled, the enrichment worker asks the LLM for N paraphrased queries per memory and prepends them to the content before embedding so a single vector captures both the fact and the ways someone would ask about it. After flipping the switch, use the Backfill Augmentation button to re-embed memories whose vector pre-dates the flag.",
 			},
+			{
+				Category:    "enrichment_multi_vector",
+				Label:       "Multi-Vector Facets",
+				Description: "Off by default. When enabled, each memory is split into topic facets (plus the whole-memory vector) so a query about one sub-topic of a multi-topic memory retrieves it at that sub-topic's strength instead of a diluted average. After flipping the switch, use the Backfill button to facet memories stored beforehand.",
+			},
 		},
 	},
 	{

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/cluster"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
@@ -1348,9 +1349,9 @@ func (p *ConsolidationPhase) consolidate(
 		return false, nil
 	}
 
-	// Simple clustering: group by overlapping content (batches of related memories).
-	clusterOverlap := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamConsolidationClusterOverlapThreshold, "global")
-	clusters := p.clusterMemories(candidates, clusterOverlap)
+	// Group related memories. Cosine mode clusters by embedding similarity
+	// (semantically coherent syntheses); lexical mode uses word overlap.
+	clusters := p.clusterCandidates(ctx, candidates)
 	stale, eligibleClusters := collectConsolidateStale(clusters)
 	stats["clusters_total"] = len(clusters)
 	stats["clusters_eligible"] = eligibleClusters
@@ -1886,6 +1887,65 @@ func (p *ConsolidationPhase) auditNovelty(
 // Each memory appears in at most one cluster. overlapThreshold is the
 // word-overlap fraction at or above which two memories are placed in the
 // same cluster.
+// clusterCandidates groups candidate memories for consolidation. In cosine mode
+// (the default) it clusters by embedding similarity using the shared anchor
+// clusterer, which produces semantically coherent syntheses rather than the
+// lexical word-overlap groupings that mixed unrelated sub-topics. Candidates
+// with no stored vector (or any failure to resolve the embedder/vector store)
+// fall back to the lexical clusterer rather than being dropped.
+func (p *ConsolidationPhase) clusterCandidates(ctx context.Context, candidates []model.Memory) [][]model.Memory {
+	overlap := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamConsolidationClusterOverlapThreshold, "global")
+	mode := p.settings.ResolveStringWithDefault(ctx, service.SettingDreamConsolidationClusterMode, "global")
+	if mode != "cosine" || p.vectorStore == nil || p.embedderProvider == nil {
+		return p.clusterMemories(candidates, overlap)
+	}
+	embedder := p.embedderProvider()
+	if embedder == nil {
+		return p.clusterMemories(candidates, overlap)
+	}
+	dim := storage.BestEmbeddingDimension(embedder.Dimensions())
+	if dim <= 0 {
+		return p.clusterMemories(candidates, overlap)
+	}
+	ids := make([]uuid.UUID, len(candidates))
+	for i, m := range candidates {
+		ids[i] = m.ID
+	}
+	vecs, err := p.vectorStore.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
+	if err != nil {
+		slog.Warn("dreaming: cosine clustering vector fetch failed; using lexical", "err", err)
+		return p.clusterMemories(candidates, overlap)
+	}
+
+	var withVec []model.Memory
+	var withVecVectors [][]float32
+	var withoutVec []model.Memory
+	for _, m := range candidates {
+		if v, ok := vecs[m.ID]; ok && len(v) > 0 {
+			withVec = append(withVec, m)
+			withVecVectors = append(withVecVectors, v)
+		} else {
+			withoutVec = append(withoutVec, m)
+		}
+	}
+
+	threshold := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamConsolidationClusterCosineThreshold, "global")
+	var clusters [][]model.Memory
+	for _, idxs := range cluster.AnchorClusters(withVecVectors, threshold) {
+		group := make([]model.Memory, len(idxs))
+		for i, idx := range idxs {
+			group[i] = withVec[idx]
+		}
+		clusters = append(clusters, group)
+	}
+	// Un-embedded candidates still get a chance to consolidate via the lexical
+	// path rather than being silently excluded.
+	if len(withoutVec) > 0 {
+		clusters = append(clusters, p.clusterMemories(withoutVec, overlap)...)
+	}
+	return clusters
+}
+
 func (p *ConsolidationPhase) clusterMemories(memories []model.Memory, overlapThreshold float64) [][]model.Memory {
 	if len(memories) == 0 {
 		return nil

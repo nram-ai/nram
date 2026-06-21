@@ -94,7 +94,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		return res
 	}
 
-	embedResp, err := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
+	embedResp, err := ep.Embed(provider.WithOperation(ctx, provider.OperationIngestionEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
 	if err != nil || embedResp == nil || len(embedResp.Embeddings) == 0 {
 		slog.Error("enrichment: ingestion_decision embed", "job", job.ID, "err", err)
 		res.decision = IngestionOpAddFallback

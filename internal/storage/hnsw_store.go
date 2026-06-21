@@ -116,7 +116,10 @@ type HNSWStore struct {
 }
 
 // Compile-time interface check.
-var _ VectorStore = (*HNSWStore)(nil)
+var (
+	_ VectorStore      = (*HNSWStore)(nil)
+	_ FacetVectorStore = (*HNSWStore)(nil)
+)
 
 // NewHNSWStore creates a new HNSWStore backed by the given SQLite database.
 // readDB is used for loading vectors; writeDB is used for upserts, deletes,
@@ -161,11 +164,39 @@ type hnswTableSpec struct {
 	vectorTable   string
 	snapshotTable string
 	idColumn      string
+	// faceted is true for the memory table, which carries facet_id: facet 0 is
+	// the pooled whole-memory vector (indexed in the graph) and facets 1..N are
+	// topic facets (stored in SQLite, brute-forced at search time).
+	faceted bool
 }
 
 var hnswSpecs = map[VectorKind]hnswTableSpec{
-	VectorKindMemory: {cacheKind: hnsw.KindMemory, vectorTable: "memory_vectors", snapshotTable: "hnsw_snapshots", idColumn: "memory_id"},
+	VectorKindMemory: {cacheKind: hnsw.KindMemory, vectorTable: "memory_vectors", snapshotTable: "hnsw_snapshots", idColumn: "memory_id", faceted: true},
 	VectorKindEntity: {cacheKind: hnsw.KindEntity, vectorTable: "entity_vectors", snapshotTable: "entity_hnsw_snapshots", idColumn: "entity_id"},
+}
+
+// hnswUpsertSQL builds the single-vector upsert. For the faceted memory table it
+// targets facet 0 with the composite-key conflict so it never clobbers topic
+// facets; entity rows conflict on the bare id column.
+func hnswUpsertSQL(spec hnswTableSpec) string {
+	if spec.faceted {
+		return fmt.Sprintf(`
+			INSERT INTO %s (%s, facet_id, namespace_id, dimension, embedding, created_at, updated_at)
+			VALUES (?, 0, ?, ?, ?, ?, ?)
+			ON CONFLICT(%s, facet_id) DO UPDATE SET
+			  namespace_id = excluded.namespace_id,
+			  dimension = excluded.dimension,
+			  embedding = excluded.embedding,
+			  updated_at = excluded.updated_at`, spec.vectorTable, spec.idColumn, spec.idColumn)
+	}
+	return fmt.Sprintf(`
+		INSERT INTO %s (%s, namespace_id, dimension, embedding, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(%s) DO UPDATE SET
+		  namespace_id = excluded.namespace_id,
+		  dimension = excluded.dimension,
+		  embedding = excluded.embedding,
+		  updated_at = excluded.updated_at`, spec.vectorTable, spec.idColumn, spec.idColumn)
 }
 
 func hnswSpecForKind(k VectorKind) (hnswTableSpec, error) {
@@ -192,14 +223,7 @@ func (s *HNSWStore) Upsert(ctx context.Context, kind VectorKind, id uuid.UUID, n
 	encoded := hnsw.EncodeVector(embedding)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
-	_, err = s.writeDB.ExecContext(ctx, fmt.Sprintf(`
-		INSERT INTO %s (%s, namespace_id, dimension, embedding, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(%s) DO UPDATE SET
-		  namespace_id = excluded.namespace_id,
-		  dimension = excluded.dimension,
-		  embedding = excluded.embedding,
-		  updated_at = excluded.updated_at`, spec.vectorTable, spec.idColumn, spec.idColumn),
+	_, err = s.writeDB.ExecContext(ctx, hnswUpsertSQL(spec),
 		id.String(), namespaceID.String(), dimension, encoded, now, now,
 	)
 	if err != nil {
@@ -259,14 +283,7 @@ func (s *HNSWStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) e
 		}
 
 		now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`
-			INSERT INTO %s (%s, namespace_id, dimension, embedding, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(%s) DO UPDATE SET
-			  namespace_id = excluded.namespace_id,
-			  dimension = excluded.dimension,
-			  embedding = excluded.embedding,
-			  updated_at = excluded.updated_at`, spec.vectorTable, spec.idColumn, spec.idColumn))
+		stmt, err := tx.PrepareContext(ctx, hnswUpsertSQL(spec))
 		if err != nil {
 			tx.Rollback() //nolint:errcheck
 			return fmt.Errorf("hnsw: prepare batch insert: %w", err)
@@ -339,7 +356,68 @@ func (s *HNSWStore) UpsertBatch(ctx context.Context, items []VectorUpsertItem) e
 	return nil
 }
 
-// Search finds the nearest neighbor vectors within a namespace, returning up to topK results.
+// UpsertFacets atomically replaces a memory's facet set at the given dimension.
+// facets[0] is facet 0 (the pooled whole-memory vector) and is the only facet
+// indexed in the in-memory graph; facets[1:] are topic facets stored in SQLite
+// and brute-forced at search time. An empty slice removes all facets and the
+// graph node.
+func (s *HNSWStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error {
+	if !SupportedVectorDimensions[dimension] {
+		return fmt.Errorf("hnsw: unsupported dimension %d", dimension)
+	}
+	spec := hnswSpecs[VectorKindMemory]
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("hnsw: upsert-facets begin: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND dimension = ?", spec.vectorTable, spec.idColumn),
+		memoryID.String(), dimension); err != nil {
+		tx.Rollback() //nolint:errcheck
+		return fmt.Errorf("hnsw: upsert-facets clear: %w", err)
+	}
+	insertSQL := fmt.Sprintf(
+		"INSERT INTO %s (%s, facet_id, namespace_id, dimension, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		spec.vectorTable, spec.idColumn)
+	for i, vec := range facets {
+		if _, err := tx.ExecContext(ctx, insertSQL,
+			memoryID.String(), i, namespaceID.String(), dimension, hnsw.EncodeVector(vec), now, now); err != nil {
+			tx.Rollback() //nolint:errcheck
+			if isForeignKeyViolation(err) {
+				// Parent memory deleted concurrently (lifecycle race); the
+				// cascade leaves the intended no-parent/no-vector steady state.
+				return nil
+			}
+			return fmt.Errorf("hnsw: upsert-facets insert facet %d: %w", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("hnsw: upsert-facets commit: %w", err)
+	}
+
+	// Reflect facet 0 in the in-memory graph (topic facets are SQLite-only).
+	graph, err := s.cache.GetOrCreate(ctx, spec.cacheKind, namespaceID, dimension)
+	if err != nil {
+		// Persisted in SQLite; the graph will be correct on next rebuild.
+		return nil //nolint:nilerr
+	}
+	graph.Delete(memoryID)
+	if len(facets) > 0 {
+		if err := graph.Add(hnsw.Node{ID: memoryID, Vector: facets[0]}); err != nil {
+			return fmt.Errorf("hnsw: upsert-facets add facet-0 node: %w", err)
+		}
+	}
+	s.cache.MarkDirty(spec.cacheKind, namespaceID, dimension)
+	return nil
+}
+
+// Search finds the nearest neighbor vectors within a namespace, returning up to
+// topK results. For the faceted memory kind it merges the graph (facet 0) hits
+// with a brute-force scan of the topic facets (facet_id > 0) and collapses to
+// the best facet per memory, so a query matching a memory's sub-topic surfaces
+// it at that facet's strength.
 func (s *HNSWStore) Search(ctx context.Context, kind VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]VectorSearchResult, error) {
 	if !SupportedVectorDimensions[dimension] {
 		return nil, fmt.Errorf("hnsw: unsupported dimension %d", dimension)
@@ -354,24 +432,71 @@ func (s *HNSWStore) Search(ctx context.Context, kind VectorKind, embedding []flo
 		return nil, fmt.Errorf("hnsw: get or create index for search: %w", err)
 	}
 
-	if graph.Len() == 0 {
-		return []VectorSearchResult{}, nil
+	// Best score per id across facet 0 (graph) and topic facets (brute force).
+	best := make(map[uuid.UUID]float64)
+	graphTopK := topK
+	if spec.faceted {
+		graphTopK = topK * facetSearchOverFetch
 	}
-
-	results, err := graph.Search(embedding, topK)
-	if err != nil {
-		return nil, fmt.Errorf("hnsw: search: %w", err)
-	}
-
-	out := make([]VectorSearchResult, len(results))
-	for i, r := range results {
-		out[i] = VectorSearchResult{
-			ID:          r.ID,
-			Score:       r.Score,
-			NamespaceID: namespaceID,
+	if graph.Len() > 0 {
+		results, err := graph.Search(embedding, graphTopK)
+		if err != nil {
+			return nil, fmt.Errorf("hnsw: search: %w", err)
+		}
+		for _, r := range results {
+			if cur, ok := best[r.ID]; !ok || r.Score > cur {
+				best[r.ID] = r.Score
+			}
 		}
 	}
-	return out, nil
+
+	if spec.faceted {
+		if err := s.scanFacetCandidates(ctx, spec, embedding, namespaceID, dimension, best); err != nil {
+			return nil, err
+		}
+	}
+
+	return collapseFacets(best, namespaceID, topK), nil
+}
+
+// scanFacetCandidates brute-forces the topic facets (facet_id > 0) for a
+// namespace/dimension, folding the best cosine per memory into best. This is the
+// SQLite brute-force backend's multi-vector path; topic facets are not in the
+// HNSW graph.
+func (s *HNSWStore) scanFacetCandidates(ctx context.Context, spec hnswTableSpec, embedding []float32, namespaceID uuid.UUID, dimension int, best map[uuid.UUID]float64) error {
+	rows, err := s.readDB.QueryContext(ctx,
+		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ? AND facet_id > 0", spec.idColumn, spec.vectorTable),
+		namespaceID.String(), dimension)
+	if err != nil {
+		return fmt.Errorf("hnsw: scan facets: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	// The query vector's norm is constant across the scan; compute it once and
+	// use CosineSimilarityWithNorms so each row only pays its own Norm.
+	queryNorm := hnsw.Norm(embedding)
+	for rows.Next() {
+		var idStr string
+		var blob []byte
+		if err := rows.Scan(&idStr, &blob); err != nil {
+			return fmt.Errorf("hnsw: scan facet row: %w", err)
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return fmt.Errorf("hnsw: parse facet memory_id %q: %w", idStr, err)
+		}
+		vec, err := hnsw.DecodeVector(blob)
+		if err != nil {
+			return fmt.Errorf("hnsw: decode facet vector for %s: %w", id, err)
+		}
+		score := hnsw.CosineSimilarityWithNorms(embedding, vec, queryNorm, hnsw.Norm(vec))
+		if cur, ok := best[id]; !ok || score > cur {
+			best[id] = score
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("hnsw: iterate facets: %w", err)
+	}
+	return nil
 }
 
 // GetByIDs resolves namespace_id from the kind's vector table first, then
@@ -403,8 +528,14 @@ func (s *HNSWStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UU
 		args = append(args, id.String())
 	}
 
-	query := fmt.Sprintf("SELECT %s, namespace_id FROM %s WHERE dimension = ? AND %s IN (",
-		spec.idColumn, spec.vectorTable, spec.idColumn) + string(placeholders) + ")"
+	// Faceted (memory) rows: callers want the pooled whole-memory vector (facet
+	// 0), and the graph only holds facet 0 anyway.
+	facetFilter := ""
+	if spec.faceted {
+		facetFilter = " AND facet_id = 0"
+	}
+	query := fmt.Sprintf("SELECT %s, namespace_id FROM %s WHERE dimension = ?%s AND %s IN (",
+		spec.idColumn, spec.vectorTable, facetFilter, spec.idColumn) + string(placeholders) + ")"
 	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("hnsw: get-by-ids lookup: %w", err)

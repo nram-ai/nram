@@ -616,3 +616,129 @@ func TestQdrantStore_GetByIDs_WrongDimension(t *testing.T) {
 		t.Errorf("expected 0 hits at wrong dim, got %d", len(got))
 	}
 }
+
+// TestQdrantStore_UpsertFacets_CollapsesToBestFacet runs against a live Qdrant
+// (QDRANT_TEST_ADDR). It is deliberately self-contained: it uses a unique random
+// namespace and deletes only the points it creates, so it never wipes shared
+// collections or touches unrelated data.
+func TestQdrantStore_UpsertFacets_CollapsesToBestFacet(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	ns := uuid.New()
+	dim := 384
+	multi := uuid.New()  // facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // axis 5 (facet 0 only)
+	axis := func(a int) []float32 {
+		v := make([]float32, dim)
+		v[a] = 1
+		return v
+	}
+	// Cleanup runs LIFO: register Close first so it runs LAST, after the point
+	// deletes. Deleting on a closed client would empty the pool and panic.
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		_ = store.Delete(ctx, VectorKindMemory, multi)
+		_ = store.Delete(ctx, VectorKindMemory, single)
+	})
+
+	if err := store.UpsertFacets(ctx, multi, ns, dim, [][]float32{axis(0), axis(5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	if err := store.Upsert(ctx, VectorKindMemory, single, ns, axis(5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+
+	results, err := store.Search(ctx, VectorKindMemory, axis(5), ns, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	seen := map[uuid.UUID]int{}
+	score := map[uuid.UUID]float64{}
+	for _, r := range results {
+		seen[r.ID]++
+		score[r.ID] = r.Score
+	}
+	if seen[multi] != 1 {
+		t.Fatalf("multi appeared %d times, want exactly 1 (collapsed)", seen[multi])
+	}
+	if score[multi] < 0.99 {
+		t.Errorf("multi score %f on axis-5 facet, want ~1.0 (best facet, not pooled)", score[multi])
+	}
+	if _, ok := score[single]; !ok {
+		t.Error("single-topic memory missing from results")
+	}
+
+	// Delete removes facet 0 and all topic facets; the memory must vanish.
+	if err := store.Delete(ctx, VectorKindMemory, multi); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	after, err := store.Search(ctx, VectorKindMemory, axis(5), ns, dim, 10)
+	if err != nil {
+		t.Fatalf("Search after delete: %v", err)
+	}
+	for _, r := range after {
+		if r.ID == multi {
+			t.Errorf("multi still present after delete")
+		}
+	}
+}
+
+// TestQdrantStore_IterateVectors_SkipsTopicFacets guards the reverse-migration
+// fix: IterateVectors (the Qdrant->SQL migration source) must yield only facet 0,
+// keyed by memory_id. Without the facet_id filter it would yield topic-facet
+// points by their derived UUIDv5 ids, which the migrator would write back as
+// phantom facet-0 rows keyed on a non-existent memory (FK violation on pgvector,
+// silent loss on SQLite). Self-contained: unique namespace, deletes only its own
+// points.
+func TestQdrantStore_IterateVectors_SkipsTopicFacets(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	ns := uuid.New()
+	dim := 384
+	mem := uuid.New()
+	axis := func(a int) []float32 {
+		v := make([]float32, dim)
+		v[a] = 1
+		return v
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Delete(ctx, VectorKindMemory, mem) })
+
+	// facet 0 + two topic facets => three Qdrant points for one memory.
+	if err := store.UpsertFacets(ctx, mem, ns, dim, [][]float32{axis(0), axis(5), axis(9)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+
+	var yielded []uuid.UUID
+	err = store.IterateVectors(ctx, VectorKindMemory, dim, 100, func(id, gotNS uuid.UUID, _ []float32) error {
+		if gotNS == ns {
+			yielded = append(yielded, id)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("IterateVectors: %v", err)
+	}
+	if len(yielded) != 1 {
+		t.Fatalf("IterateVectors yielded %d points for a 3-facet memory, want 1 (facet 0 only): %v", len(yielded), yielded)
+	}
+	if yielded[0] != mem {
+		t.Errorf("IterateVectors yielded id %v, want the memory_id %v (facet-0 keying)", yielded[0], mem)
+	}
+}

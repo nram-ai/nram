@@ -39,6 +39,7 @@ import {
   type TestProviderResult,
   type ExtractionTestResult,
   type AugmentationBackfillResponse,
+  type MultiVectorBackfillResponse,
   type VectorMigrationResult,
   type VectorMigrationDirection,
   type MigrationStartAck,
@@ -1346,6 +1347,22 @@ export function useBackfillAugmentation() {
       // Only invalidate the queue view when we actually enqueued; a dry-run
       // does not change queue state and forcing a refetch would just be
       // wasted bandwidth.
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function useBackfillMultiVector() {
+  const qc = useQueryClient();
+  return useMutation<
+    MultiVectorBackfillResponse,
+    Error,
+    { project_id?: string; dry_run?: boolean; limit?: number }
+  >({
+    mutationFn: (req) => adminAPI.backfillMultiVector(req),
+    onSuccess: (_, variables) => {
       if (!variables.dry_run) {
         qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
       }

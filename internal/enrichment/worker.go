@@ -344,6 +344,15 @@ type WorkerPool struct {
 
 	idleWorkers atomic.Int32
 
+	// facetEmbedSem bounds how many workers may run facet sentence-embedding
+	// concurrently across the whole pool, so a bulk multi-vector backfill (every
+	// worker calling ExtractFacets at once, each embedding many sentences) cannot
+	// overwhelm a modest embedder. Sized once from
+	// enrichment.multi_vector.embed_concurrency on first use; changing the
+	// setting takes effect on restart.
+	facetEmbedSem     chan struct{}
+	facetEmbedSemOnce sync.Once
+
 	bus      events.EventBus
 	progress *progressTracker
 
@@ -1245,7 +1254,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			ep := wp.embedProvider()
 			var candEmbed []float32
 			if ep != nil {
-				er, embedErr := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{fact.Content}})
+				er, embedErr := ep.Embed(provider.WithOperation(ctx, provider.OperationFactGuardEmbedding), &provider.EmbeddingRequest{Input: []string{fact.Content}})
 				switch {
 				case embedErr != nil:
 					slog.Warn("enrichment: extracted-fact guard candidate embed",
@@ -1258,7 +1267,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 				}
 				if candEmbed != nil && len(parentEmbed) == 0 && !parentEmbedTried {
 					parentEmbedTried = true
-					pe, perr := ep.Embed(provider.WithOperation(ctx, provider.OperationEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
+					pe, perr := ep.Embed(provider.WithOperation(ctx, provider.OperationFactGuardEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
 					switch {
 					case perr != nil:
 						slog.Warn("enrichment: extracted-fact guard parent embed",
@@ -1786,6 +1795,90 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		"items", len(items),
 		"duration_ms", time.Since(upsertStarted).Milliseconds(),
 	)
+
+	// Multi-vector facets are an additive enhancement on top of the facet-0
+	// vector just written; gated, best-effort, and never fail the job.
+	wp.writeMemoryFacets(ctx, pendings, embeddings)
+}
+
+// writeMemoryFacets, when enrichment.multi_vector.enabled is set and the vector
+// store supports facets, splits each just-embedded memory into topic facets and
+// writes the full facet set. Facet 0 (the pooled whole-memory vector) was
+// already written by the batch upsert, so a single-topic memory is skipped here.
+// Failures are logged and never propagated: the memory remains correctly indexed
+// by its facet-0 vector.
+// facetEmbedSemaphore returns the pool-wide limiter for concurrent facet
+// sentence-embedding, sizing it once from enrichment.multi_vector.embed_concurrency
+// (minimum 1). Lazy init keeps the constructor signature stable and reads the
+// setting after boot-time seeding; a setting change takes effect on restart.
+func (wp *WorkerPool) facetEmbedSemaphore(ctx context.Context) chan struct{} {
+	wp.facetEmbedSemOnce.Do(func() {
+		n := max(1, wp.settings.ResolveIntWithDefault(ctx, service.SettingMultiVectorEmbedConcurrency, "global"))
+		wp.facetEmbedSem = make(chan struct{}, n)
+	})
+	return wp.facetEmbedSem
+}
+
+func (wp *WorkerPool) writeMemoryFacets(ctx context.Context, pendings []*pendingJob, embeddings [][]float32) {
+	if !wp.settings.ResolveBoolWithDefault(ctx, service.SettingMultiVectorEnabled, "global") {
+		return
+	}
+	fs, ok := wp.vectorStore.(storage.FacetVectorStore)
+	if !ok || wp.embedProvider == nil {
+		return
+	}
+	embedder := wp.embedProvider()
+	if embedder == nil {
+		return
+	}
+	threshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingMultiVectorFacetThreshold, "global")
+	maxFacets := wp.settings.ResolveIntWithDefault(ctx, service.SettingMultiVectorMaxFacets, "global")
+	sem := wp.facetEmbedSemaphore(ctx)
+
+	for _, p := range pendings {
+		if p.shortCircuitDelete() {
+			continue
+		}
+		var parentVec []float32
+		if p.parentEmbedFromPhase() {
+			parentVec = p.parentEmbedding
+		} else if p.embedStart < len(embeddings) {
+			parentVec = embeddings[p.embedStart]
+		}
+		if len(parentVec) == 0 {
+			continue
+		}
+		dim := len(parentVec)
+		// Stamp namespace + memory so the facet sentence-embed's token_usage row
+		// attributes to this memory, matching the parent embed (writeMemoryVectors
+		// stamps the same per pending); the bare batch ctx would record the cost
+		// with null ownership. ExtractFacets adds the embedding operation itself.
+		facetCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, p.mem.NamespaceID), p.mem.ID)
+		// Bound concurrent facet sentence-embedding across the pool so a bulk
+		// backfill cannot stampede the embedder. The acquire/release is wrapped so
+		// the slot is freed even if ExtractFacets panics; the slot covers only the
+		// embed, not the subsequent UpsertFacets (which hits the DB, not the
+		// embedder).
+		facets, err := func() ([][]float32, error) {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			return ExtractFacets(facetCtx, embedder, p.mem.Content, parentVec, dim, threshold, maxFacets)
+		}()
+		if err != nil {
+			slog.Warn("enrichment: facet extraction failed", "memory", p.mem.ID, "err", err)
+			continue
+		}
+		if len(facets) <= 1 {
+			continue // single coherent topic; facet 0 already covers it
+		}
+		if err := fs.UpsertFacets(ctx, p.mem.ID, p.mem.NamespaceID, dim, facets); err != nil {
+			slog.Warn("enrichment: upsert facets failed", "memory", p.mem.ID, "err", err)
+			continue
+		}
+		// Structured line so the multi-vector pass is visible in the logs
+		// alongside the other enrichment phases (facets = facet 0 + topic facets).
+		slog.Info("enrichment: facets written", "memory", p.mem.ID, "facets", len(facets))
+	}
 }
 
 // embedChunked makes one or more Embed calls so each request respects

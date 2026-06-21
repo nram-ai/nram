@@ -433,6 +433,13 @@ func main() {
 	var vectorStore storage.VectorStore
 	var hnswStore *storage.HNSWStore
 	var qdrantStore *storage.QdrantStore
+	// Faceted SQL backends size their Search over-fetch to the configured
+	// max_facets; HNSW needs no resolver (its graph yields one node per memory
+	// and it brute-forces every topic facet). Shared so the two wirings cannot
+	// drift.
+	maxFacetsResolver := func() int {
+		return settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingMultiVectorMaxFacets, "global")
+	}
 	if qdrantCfg.Addr != "" {
 		// Only adopt Qdrant on a successful construction; assigning the
 		// (nil, err) return straight into the interface would leave a non-nil
@@ -444,6 +451,7 @@ func main() {
 		} else {
 			vectorStore = qs
 			qdrantStore = qs
+			qs.SetMaxFacetsResolver(maxFacetsResolver)
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
@@ -452,6 +460,7 @@ func main() {
 			slog.Warn("boot: pgvector connection failed, vector search disabled", "err", pgvErr)
 		} else {
 			vectorStore = pgvStore
+			pgvStore.SetMaxFacetsResolver(maxFacetsResolver)
 			slog.Info("boot: pgvector store initialized")
 		}
 	}
@@ -558,6 +567,7 @@ func main() {
 	)
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)
+	enrichSvc.AttachMultiVectorLister(memoryRepo)
 	// Procedural tier: verbatim standing instructions. Holds no enrichment,
 	// embedder, or dream dependency by design; that absence keeps it verbatim.
 	proceduralSvc := service.NewProceduralService(proceduralRepo)
@@ -1147,6 +1157,17 @@ func main() {
 			},
 			BackfillExtractedFactParaphrase: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillExtractedFactParaphrase(ctx, &service.BackfillExtractedFactParaphraseRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return 0, 0, err
+				}
+				return resp.CandidateCount, resp.Enqueued, nil
+			},
+			BackfillMultiVector: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
+				resp, err := enrichSvc.BackfillMultiVector(ctx, &service.BackfillMultiVectorRequest{
 					ProjectID: projectID,
 					DryRun:    dryRun,
 					Limit:     limit,

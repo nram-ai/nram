@@ -244,6 +244,16 @@ const (
 	SettingQueryAugmentMaxInputChars = "enrichment.query_augment.max_input_chars"
 	SettingQueryAugmentMaxTokens     = "enrichment.query_augment.max_tokens"
 
+	// Multi-vector facets: split a memory into sentence-clustered topic facets
+	// (plus the pooled whole-memory facet 0) so a query about one sub-topic of a
+	// multi-topic memory retrieves it at that sub-topic's strength. Off by
+	// default; enabling it adds per-memory sentence-embedding cost and a backfill
+	// re-vectorizes existing memories.
+	SettingMultiVectorEnabled          = "enrichment.multi_vector.enabled"
+	SettingMultiVectorFacetThreshold   = "enrichment.multi_vector.facet_threshold"
+	SettingMultiVectorMaxFacets        = "enrichment.multi_vector.max_facets"
+	SettingMultiVectorEmbedConcurrency = "enrichment.multi_vector.embed_concurrency"
+
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
 	SettingQdrantUseTLS           = "qdrant.use_tls"
@@ -553,6 +563,13 @@ const (
 	// cluster (drives which memories get bundled into a synthesis prompt).
 	SettingDreamConsolidationAlignmentSampleSize     = "dreaming.consolidation.alignment_sample_size"
 	SettingDreamConsolidationClusterOverlapThreshold = "dreaming.consolidation.cluster_overlap_threshold"
+	// cluster_mode selects how consolidation groups candidate memories:
+	// "cosine" (default) groups by embedding similarity (semantically coherent
+	// clusters); "lexical" uses the legacy word-overlap heuristic. Cosine falls
+	// back to lexical for any candidate that has no stored vector.
+	// cluster_cosine_threshold is the minimum cosine-to-anchor for cosine mode.
+	SettingDreamConsolidationClusterMode            = "dreaming.consolidation.cluster_mode"
+	SettingDreamConsolidationClusterCosineThreshold = "dreaming.consolidation.cluster_cosine_threshold"
 
 	// LLM call temperatures. All four point at the OpenAI-compatible
 	// completion temperature parameter for their respective phases. Default
@@ -877,6 +894,10 @@ var settingDefaults = map[string]string{
 
 	SettingQueryAugmentEnabled:           "true",
 	SettingQueryAugmentCount:             "4",
+	SettingMultiVectorEnabled:            "false",
+	SettingMultiVectorFacetThreshold:     "0.65",
+	SettingMultiVectorMaxFacets:          "8",
+	SettingMultiVectorEmbedConcurrency:   "4",
 	SettingQueryAugmentMaxInputChars:     "0",
 	SettingQueryAugmentMaxTokens:         "2048",
 	SettingQueryAugmentSystemPrompt:      queryAugmentSystemPromptText,
@@ -1031,6 +1052,8 @@ var settingDefaults = map[string]string{
 
 	SettingDreamConsolidationAlignmentSampleSize:     "5",
 	SettingDreamConsolidationClusterOverlapThreshold: "0.3",
+	SettingDreamConsolidationClusterMode:             "cosine",
+	SettingDreamConsolidationClusterCosineThreshold:  "0.65",
 
 	SettingDreamSynthesisTemperature:              "0.3",
 	SettingDreamAlignmentTemperature:              "0.1",

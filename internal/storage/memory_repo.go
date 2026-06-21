@@ -1151,15 +1151,20 @@ func scanBackfillCandidates(rows *sql.Rows) ([]BackfillCandidate, error) {
 // and a later content edit re-enqueues enrichment via the write path. Transient
 // skip reasons (provider_unavailable, llm_error, parse_error) intentionally stay
 // eligible so a later cycle retries them.
-func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+// listBackfillCandidates is the shared query builder for the backfill candidate
+// listers. It selects live, non-superseded memories with non-empty content,
+// scoped to namespaceIDs (empty = whole deployment) and bounded by limit, plus
+// any caller-supplied static extra predicates (no bound params, so they do not
+// shift placeholder numbering). Returns id+namespace pairs so callers enqueue
+// without a per-id read on the whole-deployment sweep.
+func (r *MemoryRepo) listBackfillCandidates(ctx context.Context, extraWhere []string, namespaceIDs []uuid.UUID, limit int, label, orderBy string) ([]BackfillCandidate, error) {
 	pg := r.db.Backend() == BackendPostgres
 	args := []any{}
-	where := []string{
-		"augmented_embedding_at IS NULL",
+	where := append([]string{
 		"deleted_at IS NULL",
 		"superseded_by IS NULL",
 		"content IS NOT NULL AND trim(content) <> ''",
-	}
+	}, extraWhere...)
 	if len(namespaceIDs) > 0 {
 		placeholders := make([]string, len(namespaceIDs))
 		for i, ns := range namespaceIDs {
@@ -1172,7 +1177,7 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 		}
 		where = append(where, "namespace_id IN ("+strings.Join(placeholders, ", ")+")")
 	}
-	query := "SELECT id, namespace_id FROM memories WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at ASC"
+	query := "SELECT id, namespace_id FROM memories WHERE " + strings.Join(where, " AND ") + " ORDER BY " + orderBy
 	if limit > 0 {
 		if pg {
 			query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
@@ -1184,11 +1189,31 @@ func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, nam
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list augmentation backfill candidates: %w", err)
+		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	return scanBackfillCandidates(rows)
+}
+
+// ListMultiVectorBackfillCandidates lists every live in-scope memory for the
+// multi-vector (facet) backfill. Unlike the augmentation lister it has no
+// per-feature predicate: facet state lives in the vector store (and for Qdrant
+// cannot be cheaply joined here), so the backfill re-facets every in-scope
+// memory, which is idempotent (UpsertFacets replaces the set). Dream syntheses
+// are enqueued first because they are the population most prone to multi-topic
+// dilution (lexical consolidation fused unrelated sources) and many have already
+// purged their sources on supersession, so faceting is the only recall recovery
+// left for them; ordering them ahead of plain memories means a limited or
+// interrupted backfill repairs the highest-value memories first.
+func (r *MemoryRepo) ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+	return r.listBackfillCandidates(ctx, nil, namespaceIDs, limit, "list multi-vector backfill candidates", "(origin = 'dream') DESC, created_at ASC")
+}
+
+// ListAugmentationBackfillCandidates lists in-scope memories whose vector
+// pre-dates query augmentation (augmented_embedding_at IS NULL).
+func (r *MemoryRepo) ListAugmentationBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+	return r.listBackfillCandidates(ctx, []string{"augmented_embedding_at IS NULL"}, namespaceIDs, limit, "list augmentation backfill candidates", "created_at ASC")
 }
 
 // ListEnrichedParentsWithExtractedChildren returns the IDs of enriched,

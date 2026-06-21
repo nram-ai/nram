@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,3 +61,20 @@ func (s *instrumentedVectorStore) TruncateAllVectors(ctx context.Context) error 
 func (s *instrumentedVectorStore) Ping(ctx context.Context) error {
 	return s.inner.Ping(ctx)
 }
+
+// UpsertFacets forwards the multi-vector facet write to the wrapped store so the
+// FacetVectorStore capability survives the metrics decorator. Without this
+// method the worker's storage.FacetVectorStore type assertion against the
+// wrapped store fails and facets are silently never written on any backend.
+// Every concrete backend (pgvector, HNSW, Qdrant) implements FacetVectorStore;
+// if a wrapped store does not, surface it rather than dropping facets silently.
+func (s *instrumentedVectorStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error {
+	fs, ok := s.inner.(storage.FacetVectorStore)
+	if !ok {
+		return fmt.Errorf("metrics: wrapped vector store %T does not support facets", s.inner)
+	}
+	return fs.UpsertFacets(ctx, memoryID, namespaceID, dimension, facets)
+}
+
+// compile-time guarantee that the wrapper preserves the facet capability.
+var _ storage.FacetVectorStore = (*instrumentedVectorStore)(nil)

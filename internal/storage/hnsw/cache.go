@@ -54,6 +54,12 @@ type tableSpec struct {
 	vectorTable   string
 	snapshotTable string
 	idColumn      string
+	// rebuildFilter is appended to the graph-rebuild WHERE clause. For memory
+	// vectors it restricts the graph to facet 0 (the pooled whole-memory
+	// vector); topic facets live only in SQLite and are brute-forced at search
+	// time, so loading them as graph nodes (all sharing one memory_id) would
+	// otherwise clobber the facet-0 node.
+	rebuildFilter string
 }
 
 func specForKind(k Kind) tableSpec {
@@ -69,6 +75,7 @@ func specForKind(k Kind) tableSpec {
 			vectorTable:   "memory_vectors",
 			snapshotTable: "hnsw_snapshots",
 			idColumn:      "memory_id",
+			rebuildFilter: " AND facet_id = 0",
 		}
 	}
 }
@@ -281,7 +288,7 @@ func (c *IndexCache) loadGraph(ctx context.Context, key indexKey) (*Graph, Repai
 
 	// Rebuild from the vector table.
 	rows, err := c.readDB.QueryContext(ctx,
-		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ?", spec.idColumn, spec.vectorTable),
+		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ?%s", spec.idColumn, spec.vectorTable, spec.rebuildFilter),
 		key.NamespaceID.String(), key.Dimension,
 	)
 	if err != nil {

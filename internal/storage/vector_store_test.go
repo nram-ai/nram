@@ -4,6 +4,31 @@ import (
 	"testing"
 )
 
+// TestOverFetchFor pins the faceted-search candidate multiplier: it must be at
+// least the floor, and must grow to the configured max_facets so the candidate
+// window (max_facets * topK rows) always yields topK distinct memories after the
+// max-over-facets collapse, even when max_facets is raised above the floor.
+func TestOverFetchFor(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func() int
+		want int
+	}{
+		{"nil resolver falls back to floor", nil, facetSearchOverFetch},
+		{"below floor clamps to floor", func() int { return 2 }, facetSearchOverFetch},
+		{"equal to floor", func() int { return facetSearchOverFetch }, facetSearchOverFetch},
+		{"above floor tracks max_facets", func() int { return 16 }, 16},
+		{"schema max", func() int { return 32 }, 32},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := overFetchFor(tc.fn); got != tc.want {
+				t.Errorf("overFetchFor = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestVectorUpsertItem_EffectiveKind covers the back-compat default: an item
 // constructed without setting Kind must route as a memory vector so legacy
 // call sites (and any deserialized JSON missing the field) keep working.

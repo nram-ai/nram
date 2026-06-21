@@ -77,6 +77,40 @@ func TestMemoryRepo_ListAugmentationBackfillCandidates_ExcludesEmptyContent(t *t
 	})
 }
 
+func TestMemoryRepo_ListMultiVectorBackfillCandidates_PrioritizesSyntheses(t *testing.T) {
+	// Dream syntheses are the population most prone to multi-topic dilution and
+	// many have purged their sources, so the multi-vector backfill must enqueue
+	// them ahead of plain memories. The plain memory is created first (older) to
+	// prove ordering is by origin, not just created_at.
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		plain := newTestMemory(nsID)
+		plain.Origin = model.OriginUser
+		if err := repo.Create(ctx, plain); err != nil {
+			t.Fatalf("create plain: %v", err)
+		}
+		synth := newTestMemory(nsID)
+		synth.Origin = model.OriginDream
+		if err := repo.Create(ctx, synth); err != nil {
+			t.Fatalf("create synthesis: %v", err)
+		}
+
+		cands, err := repo.ListMultiVectorBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
+		if err != nil {
+			t.Fatalf("list candidates: %v", err)
+		}
+		if len(cands) != 2 {
+			t.Fatalf("expected 2 candidates, got %d", len(cands))
+		}
+		if cands[0].ID != synth.ID {
+			t.Errorf("dream synthesis should be enqueued first; got %v first (synth=%v plain=%v)", cands[0].ID, synth.ID, plain.ID)
+		}
+	})
+}
+
 func TestMemoryRepo_Create(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
