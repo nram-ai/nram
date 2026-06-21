@@ -173,6 +173,12 @@ type MemoryUpdater interface {
 	Update(ctx context.Context, mem *model.Memory) error
 	MutateInLock(ctx context.Context, id, namespaceID uuid.UUID, mutate func(*model.Memory) (write bool, err error)) (*model.Memory, error)
 	UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim int) error
+	// UpdateFacetState stamps faceted_at and facet_count after the multi-vector
+	// facet pass processes a memory (facetCount counts facet 0 plus any topic
+	// facets, so the minimum for a processed memory is 1). Used to drop the
+	// memory from the facet backfill candidate set and to surface the count on
+	// the enrichment monitor.
+	UpdateFacetState(ctx context.Context, id, namespaceID uuid.UUID, facetCount int) error
 	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 }
@@ -1046,6 +1052,27 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		return nil, nil
 	}
 
+	// Multi-vector facet backfill jobs carry their own sentinel. Like the
+	// paraphrase guard, the sweep makes no LLM calls (it reuses the stored
+	// facet-0 vector and only sentence-embeds for facets), so it runs ahead
+	// of the cascade gate and cannot leak LLM spend. A completed sweep
+	// (StepMultiVectorFacets present) short-circuits to Complete on retry.
+	if earlySteps[model.JobMarkerOnlyMultiVector] {
+		if !earlySteps[model.StepMultiVectorFacets] {
+			if err := wp.runMultiVectorFacetSweep(ctx, job, mem); err != nil {
+				wp.requeueOrFail(ctx, workerID, job.ID, err, fmt.Sprintf("multi-vector facet backfill: %v", err))
+				return nil, fmt.Errorf("multi-vector facet backfill: %w", err)
+			}
+			if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepMultiVectorFacets); err != nil {
+				slog.Warn("enrichment: mark step completed (multi-vector facets)", "job", job.ID, "err", err)
+			}
+		}
+		if err := wp.queue.Complete(ctx, job.ID, workerID); err != nil {
+			logClaimLostOr(err, "enrichment: complete multi-vector backfill", "job", job.ID, "worker", workerID)
+		}
+		return nil, nil
+	}
+
 	// Per-namespace enrichment_enabled cascade. A project or user may opt
 	// their namespace out of enrichment even while the system-level toggle
 	// is on. Mark the job complete (not failed) so the queue does not
@@ -1845,40 +1872,114 @@ func (wp *WorkerPool) writeMemoryFacets(ctx context.Context, pendings []*pending
 		} else if p.embedStart < len(embeddings) {
 			parentVec = embeddings[p.embedStart]
 		}
-		if len(parentVec) == 0 {
-			continue
-		}
-		dim := len(parentVec)
-		// Stamp namespace + memory so the facet sentence-embed's token_usage row
-		// attributes to this memory, matching the parent embed (writeMemoryVectors
-		// stamps the same per pending); the bare batch ctx would record the cost
-		// with null ownership. ExtractFacets adds the embedding operation itself.
-		facetCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, p.mem.NamespaceID), p.mem.ID)
-		// Bound concurrent facet sentence-embedding across the pool so a bulk
-		// backfill cannot stampede the embedder. The acquire/release is wrapped so
-		// the slot is freed even if ExtractFacets panics; the slot covers only the
-		// embed, not the subsequent UpsertFacets (which hits the DB, not the
-		// embedder).
-		facets, err := func() ([][]float32, error) {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			return ExtractFacets(facetCtx, embedder, p.mem.Content, parentVec, dim, threshold, maxFacets)
-		}()
-		if err != nil {
-			slog.Warn("enrichment: facet extraction failed", "memory", p.mem.ID, "err", err)
-			continue
-		}
-		if len(facets) <= 1 {
-			continue // single coherent topic; facet 0 already covers it
-		}
-		if err := fs.UpsertFacets(ctx, p.mem.ID, p.mem.NamespaceID, dim, facets); err != nil {
-			slog.Warn("enrichment: upsert facets failed", "memory", p.mem.ID, "err", err)
-			continue
+		wp.extractAndWriteFacets(ctx, fs, embedder, p.mem, parentVec, threshold, maxFacets, sem)
+	}
+}
+
+// extractAndWriteFacets clusters a memory's content into topic facets around its
+// stored facet-0 vector (parentVec), upserts any topic facets, and stamps the
+// memory's facet state. It is the per-memory body shared by the inline post-embed
+// path (writeMemoryFacets) and the facet-only backfill sweep
+// (runMultiVectorFacetSweep). The caller resolves and passes the gate values
+// (fs/embedder/threshold/maxFacets/sem) once so the batch path does not re-read
+// settings per memory. A memory with no stored vector, or a soft per-memory
+// error, is skipped (logged) WITHOUT stamping facet state so it remains a
+// backfill candidate and is retried. A single-topic memory writes no topic
+// facets (facet 0 already covers it) but IS stamped (facet_count = 1) so it
+// drops out of the candidate set instead of being re-faceted forever.
+func (wp *WorkerPool) extractAndWriteFacets(ctx context.Context, fs storage.FacetVectorStore, embedder provider.EmbeddingProvider, mem *model.Memory, parentVec []float32, threshold float64, maxFacets int, sem chan struct{}) {
+	if len(parentVec) == 0 {
+		return
+	}
+	dim := len(parentVec)
+	// Stamp namespace + memory so the facet sentence-embed's token_usage row
+	// attributes to this memory, matching the parent embed (writeMemoryVectors
+	// stamps the same per pending); the bare batch ctx would record the cost
+	// with null ownership. ExtractFacets adds the embedding operation itself.
+	facetCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, mem.NamespaceID), mem.ID)
+	// Bound concurrent facet sentence-embedding across the pool so a bulk
+	// backfill cannot stampede the embedder. The acquire/release is wrapped so
+	// the slot is freed even if ExtractFacets panics; the slot covers only the
+	// embed, not the subsequent UpsertFacets (which hits the DB, not the
+	// embedder).
+	facets, err := func() ([][]float32, error) {
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		return ExtractFacets(facetCtx, embedder, mem.Content, parentVec, dim, threshold, maxFacets)
+	}()
+	if err != nil {
+		slog.Warn("enrichment: facet extraction failed", "memory", mem.ID, "err", err)
+		return
+	}
+	// Topic facets are upserted only when the content split into more than one
+	// cluster; a single coherent topic is already covered by facet 0. Either
+	// way the memory is stamped at the end so it leaves the backfill candidate
+	// set and the monitor shows it was processed (facet_count = 1 for a single
+	// topic). An upsert failure returns early without stamping so the job retries.
+	if len(facets) > 1 {
+		if err := fs.UpsertFacets(ctx, mem.ID, mem.NamespaceID, dim, facets); err != nil {
+			slog.Warn("enrichment: upsert facets failed", "memory", mem.ID, "err", err)
+			return
 		}
 		// Structured line so the multi-vector pass is visible in the logs
 		// alongside the other enrichment phases (facets = facet 0 + topic facets).
-		slog.Info("enrichment: facets written", "memory", p.mem.ID, "facets", len(facets))
+		slog.Info("enrichment: facets written", "memory", mem.ID, "facets", len(facets))
 	}
+	wp.stampFacetState(ctx, mem, len(facets))
+}
+
+// stampFacetState records the facet pass's outcome on the memory row
+// (faceted_at + facet_count). Best-effort: a stamp failure is logged but never
+// fails the enclosing job, matching the rest of the additive facet path. A nil
+// memUpdater (some unit-test pools) is a no-op.
+func (wp *WorkerPool) stampFacetState(ctx context.Context, mem *model.Memory, facetCount int) {
+	if wp.memUpdater == nil {
+		return
+	}
+	if err := wp.memUpdater.UpdateFacetState(ctx, mem.ID, mem.NamespaceID, facetCount); err != nil {
+		slog.Warn("enrichment: stamp facet state", "memory", mem.ID, "err", err)
+	}
+}
+
+// runMultiVectorFacetSweep is the worker-side handler for a multi-vector facet
+// backfill job (JobMarkerOnlyMultiVector). It reuses the memory's stored
+// facet-0 vector and runs only the per-topic sentence embeds: no
+// ingestion-decision, no query-augmentation LLM call, and no whole-memory
+// re-embed. Gated by enrichment.multi_vector.enabled and the FacetVectorStore
+// capability plus an embedder; any miss is a clean no-op so a job enqueued
+// before the feature flag flipped, or against a store without facet support,
+// completes without error. A memory whose stored vector is absent (its dim was
+// never recorded, or its embed write failed) is skipped: such rows belong to
+// the embedding/augmentation backfill, not this one. Idempotent on retry:
+// UpsertFacets replaces the existing facet set. Returns a wrapped error only on
+// the stored-vector fetch so the queue's retry/fail path applies; per-memory
+// extract/upsert failures are logged inside extractAndWriteFacets.
+func (wp *WorkerPool) runMultiVectorFacetSweep(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory) error {
+	if !wp.settings.ResolveBoolWithDefault(ctx, service.SettingMultiVectorEnabled, "global") {
+		return nil
+	}
+	fs, ok := wp.vectorStore.(storage.FacetVectorStore)
+	if !ok || wp.embedProvider == nil {
+		return nil
+	}
+	embedder := wp.embedProvider()
+	if embedder == nil {
+		return nil
+	}
+	parentVec, err := wp.fetchSingleVector(ctx, mem.ID, mem.EmbeddingDim)
+	if err != nil {
+		return fmt.Errorf("fetch stored vector: %w", err)
+	}
+	if len(parentVec) == 0 {
+		slog.Info("enrichment: multi-vector backfill skip (no stored vector)",
+			"job", job.ID, "memory", mem.ID)
+		return nil
+	}
+	threshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingMultiVectorFacetThreshold, "global")
+	maxFacets := wp.settings.ResolveIntWithDefault(ctx, service.SettingMultiVectorMaxFacets, "global")
+	sem := wp.facetEmbedSemaphore(ctx)
+	wp.extractAndWriteFacets(ctx, fs, embedder, mem, parentVec, threshold, maxFacets, sem)
+	return nil
 }
 
 // embedChunked makes one or more Embed calls so each request respects

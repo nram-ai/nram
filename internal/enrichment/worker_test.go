@@ -63,12 +63,13 @@ func (m *mockMemoryReader) GetBatch(_ context.Context, ids []uuid.UUID, _ []uuid
 }
 
 type mockMemoryUpdater struct {
-	mu             sync.Mutex
-	updated        []*model.Memory
-	dimUpdates     []dimUpdate
-	enrichedMarks  []enrichedMark
-	supersedeMarks []supersedeMark
-	err            error
+	mu              sync.Mutex
+	updated         []*model.Memory
+	dimUpdates      []dimUpdate
+	enrichedMarks   []enrichedMark
+	supersedeMarks  []supersedeMark
+	facetStateMarks []facetStateMark
+	err             error
 	// reader, when wired, lets MutateInLock re-read the freshest stored
 	// memory before invoking the mutator. Tests that exercise the merge
 	// paths (paraphrase guard, ingestion stamp) need this; tests that
@@ -85,6 +86,12 @@ type supersedeMark struct {
 type dimUpdate struct {
 	id  uuid.UUID
 	dim int
+}
+
+type facetStateMark struct {
+	id          uuid.UUID
+	namespaceID uuid.UUID
+	facetCount  int
 }
 
 type enrichedMark struct {
@@ -114,6 +121,16 @@ func (m *mockMemoryUpdater) UpdateEmbeddingDim(_ context.Context, id uuid.UUID, 
 		return m.err
 	}
 	m.dimUpdates = append(m.dimUpdates, dimUpdate{id: id, dim: dim})
+	return nil
+}
+
+func (m *mockMemoryUpdater) UpdateFacetState(_ context.Context, id, namespaceID uuid.UUID, facetCount int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.facetStateMarks = append(m.facetStateMarks, facetStateMark{id: id, namespaceID: namespaceID, facetCount: facetCount})
 	return nil
 }
 
@@ -1956,6 +1973,10 @@ func (s *statefulMemoryStore) Update(_ context.Context, mem *model.Memory) error
 }
 
 func (s *statefulMemoryStore) UpdateEmbeddingDim(_ context.Context, _ uuid.UUID, _ int) error {
+	return nil
+}
+
+func (s *statefulMemoryStore) UpdateFacetState(_ context.Context, _, _ uuid.UUID, _ int) error {
 	return nil
 }
 

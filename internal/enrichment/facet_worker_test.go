@@ -2,6 +2,8 @@ package enrichment
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,8 +16,13 @@ import (
 
 // recordingFacetStore satisfies VectorWriter and storage.FacetVectorStore,
 // recording UpsertFacets calls so writeMemoryFacets can be asserted directly.
+// stored backs GetByIDs so the facet-only sweep (runMultiVectorFacetSweep),
+// which reuses the stored facet-0 vector instead of re-embedding, can be tested
+// against a known vector. A nil stored map means GetByIDs returns nothing,
+// matching the "no stored vector" path.
 type recordingFacetStore struct {
 	facetCalls map[uuid.UUID][][]float32
+	stored     map[uuid.UUID][]float32
 }
 
 func newRecordingFacetStore() *recordingFacetStore {
@@ -31,8 +38,14 @@ func (s *recordingFacetStore) UpsertBatch(context.Context, []storage.VectorUpser
 func (s *recordingFacetStore) Delete(context.Context, storage.VectorKind, uuid.UUID) error {
 	return nil
 }
-func (s *recordingFacetStore) GetByIDs(context.Context, storage.VectorKind, []uuid.UUID, int) (map[uuid.UUID][]float32, error) {
-	return map[uuid.UUID][]float32{}, nil
+func (s *recordingFacetStore) GetByIDs(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, _ int) (map[uuid.UUID][]float32, error) {
+	out := map[uuid.UUID][]float32{}
+	for _, id := range ids {
+		if v, ok := s.stored[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, nil
 }
 func (s *recordingFacetStore) UpsertFacets(_ context.Context, memoryID, _ uuid.UUID, _ int, facets [][]float32) error {
 	s.facetCalls[memoryID] = facets
@@ -42,10 +55,15 @@ func (s *recordingFacetStore) UpsertFacets(_ context.Context, memoryID, _ uuid.U
 func newMultiVectorTestPool(t *testing.T, store *recordingFacetStore, enabled bool) *WorkerPool {
 	t.Helper()
 	svc := service.NewSettingsService(newTestSettingsRepo())
+	// Set the flag explicitly (not relying on the registered default, which is
+	// now true) so the disabled-path tests stay meaningful regardless of the
+	// default.
+	val := "false"
 	if enabled {
-		if err := svc.Set(context.Background(), service.SettingMultiVectorEnabled, "true", "global", nil); err != nil {
-			t.Fatalf("set multi_vector.enabled: %v", err)
-		}
+		val = "true"
+	}
+	if err := svc.Set(context.Background(), service.SettingMultiVectorEnabled, val, "global", nil); err != nil {
+		t.Fatalf("set multi_vector.enabled: %v", err)
 	}
 	emb := &fakeFacetEmbedder{dim: 8, axisFor: func(s string) int {
 		if strings.Contains(s, "PRICE") {
@@ -57,7 +75,19 @@ func newMultiVectorTestPool(t *testing.T, store *recordingFacetStore, enabled bo
 		settings:      svc,
 		vectorStore:   store,
 		embedProvider: func() provider.EmbeddingProvider { return emb },
+		memUpdater:    &mockMemoryUpdater{},
 	}
+}
+
+// facetStateMarksOf returns the facet-state stamps recorded by a pool built via
+// newMultiVectorTestPool (whose memUpdater is a *mockMemoryUpdater).
+func facetStateMarksOf(t *testing.T, pool *WorkerPool) []facetStateMark {
+	t.Helper()
+	mu, ok := pool.memUpdater.(*mockMemoryUpdater)
+	if !ok {
+		t.Fatalf("pool.memUpdater is %T, want *mockMemoryUpdater", pool.memUpdater)
+	}
+	return mu.facetStateMarks
 }
 
 func TestWriteMemoryFacets_WritesFacetsForMultiTopicMemory(t *testing.T) {
@@ -169,7 +199,7 @@ func TestFacetEmbedSemaphore_SizesFromSetting(t *testing.T) {
 	}
 }
 
-func TestWriteMemoryFacets_DisabledByDefault(t *testing.T) {
+func TestWriteMemoryFacets_DisabledIsNoOp(t *testing.T) {
 	store := newRecordingFacetStore()
 	pool := newMultiVectorTestPool(t, store, false)
 
@@ -206,5 +236,273 @@ func TestWriteMemoryFacets_SingleTopicWritesNoFacets(t *testing.T) {
 
 	if _, ok := store.facetCalls[memID]; ok {
 		t.Fatal("UpsertFacets should be skipped for a single-topic memory")
+	}
+}
+
+// failIfCalledLLM is a provider.LLMProvider that fails the test if Complete is
+// invoked. Wired into the pool's fact/entity slots so the facet-only sweep can
+// prove it makes no LLM (SGLang) calls, only facet sentence-embeds.
+type failIfCalledLLM struct{ t *testing.T }
+
+func (l *failIfCalledLLM) Complete(context.Context, *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+	l.t.Helper()
+	l.t.Fatal("facet-only backfill must not call any LLM provider")
+	return nil, nil
+}
+func (l *failIfCalledLLM) Name() string     { return "fail-if-called" }
+func (l *failIfCalledLLM) Models() []string { return nil }
+
+// newSweepTestPool builds a pool for runMultiVectorFacetSweep with LLM slots
+// that fail the test if touched, so any SGLang call surfaces as a failure.
+func newSweepTestPool(t *testing.T, store *recordingFacetStore, enabled bool) *WorkerPool {
+	t.Helper()
+	pool := newMultiVectorTestPool(t, store, enabled)
+	llm := &failIfCalledLLM{t: t}
+	pool.factProvider = func() provider.LLMProvider { return llm }
+	pool.entityProvider = func() provider.LLMProvider { return llm }
+	return pool
+}
+
+func TestRunMultiVectorFacetSweep_WritesFacetsFromStoredVector(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newSweepTestPool(t, store, true)
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	whole := make([]float32, dim)
+	whole[0] = 1
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, EmbeddingDim: &dim,
+		Content: "PRICE one. PRICE two. DEPLOY one."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	facets, ok := store.facetCalls[memID]
+	if !ok {
+		t.Fatal("UpsertFacets was not called for a multi-topic memory with a stored vector")
+	}
+	if len(facets) < 3 {
+		t.Fatalf("expected facet 0 + 2 topic facets, got %d", len(facets))
+	}
+	// Facet 0 must be the reused stored whole-memory vector, proving the sweep
+	// did not re-embed the whole memory.
+	if len(facets[0]) != dim || facets[0][0] != 1 {
+		t.Errorf("facet 0 = %v, want the stored whole-memory vector", facets[0])
+	}
+	// Facet state stamped so the memory drops out of the candidate set.
+	marks := facetStateMarksOf(t, pool)
+	if len(marks) != 1 || marks[0].id != memID || marks[0].facetCount != len(facets) {
+		t.Errorf("facet-state marks = %+v, want one mark for %s with count %d", marks, memID, len(facets))
+	}
+}
+
+func TestRunMultiVectorFacetSweep_SkipsWhenNoStoredVector(t *testing.T) {
+	store := newRecordingFacetStore() // stored is nil -> GetByIDs returns nothing
+	pool := newSweepTestPool(t, store, true)
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, EmbeddingDim: &dim,
+		Content: "PRICE one. DEPLOY two. AUDIT three."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("sweep should not error when the stored vector is absent: %v", err)
+	}
+	if len(store.facetCalls) != 0 {
+		t.Fatalf("expected no facet writes when the stored vector is absent, got %d", len(store.facetCalls))
+	}
+	// Not stamped: a vector-less memory stays a candidate (it belongs to the
+	// embedding/augmentation backfill, not this one).
+	if marks := facetStateMarksOf(t, pool); len(marks) != 0 {
+		t.Errorf("expected no facet-state stamp when the stored vector is absent, got %+v", marks)
+	}
+}
+
+func TestRunMultiVectorFacetSweep_SingleTopicStampsCountOne(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newSweepTestPool(t, store, true)
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	whole := make([]float32, dim)
+	whole[0] = 1
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+	// All sentences share the PRICE topic -> one cluster -> facet 0 only, so no
+	// topic facets are upserted but the memory is still stamped (count 1) so it
+	// drops out of the candidate set.
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, EmbeddingDim: &dim,
+		Content: "PRICE one. PRICE two. PRICE three."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, ok := store.facetCalls[memID]; ok {
+		t.Fatal("single-topic memory must not upsert topic facets")
+	}
+	marks := facetStateMarksOf(t, pool)
+	if len(marks) != 1 || marks[0].facetCount != 1 {
+		t.Errorf("facet-state marks = %+v, want one mark with count 1", marks)
+	}
+}
+
+func TestRunMultiVectorFacetSweep_SkipsWhenDimUnknown(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newSweepTestPool(t, store, true)
+
+	memID, nsID := uuid.New(), uuid.New()
+	whole := make([]float32, 8)
+	whole[0] = 1
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+	// EmbeddingDim nil: fetchSingleVector returns (nil, nil) rather than
+	// forwarding dim=0 to the store, so the sweep is a clean skip.
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, Content: "PRICE one. DEPLOY two."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(store.facetCalls) != 0 {
+		t.Fatalf("expected no facet writes when EmbeddingDim is unknown, got %d", len(store.facetCalls))
+	}
+}
+
+func TestRunMultiVectorFacetSweep_Idempotent(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newSweepTestPool(t, store, true)
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	whole := make([]float32, dim)
+	whole[0] = 1
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, EmbeddingDim: &dim,
+		Content: "PRICE one. PRICE two. DEPLOY one."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("first sweep: %v", err)
+	}
+	first := len(store.facetCalls[memID])
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	// UpsertFacets replaces (the recording store overwrites the entry), so the
+	// facet set is the same shape, never doubled.
+	if got := len(store.facetCalls[memID]); got != first {
+		t.Fatalf("re-run facet count = %d, want stable %d (UpsertFacets must replace)", got, first)
+	}
+}
+
+// TestProcessJob_MultiVectorMarkerRoutesToSweepNoLLM is the integration-level
+// guard for the 0.7.1 behavior change: a backfill job carrying the
+// JobMarkerOnlyMultiVector sentinel must route through runPreEmbed straight to
+// the lean facet sweep, completing the job and writing facets WITHOUT running
+// the SGLang pipeline (ingestion-decision, fact/entity extraction, query
+// augmentation) and WITHOUT re-embedding the whole memory.
+func TestProcessJob_MultiVectorMarkerRoutesToSweepNoLLM(t *testing.T) {
+	// Fact and entity providers fail the test if the worker calls them, so any
+	// SGLang call on the marker path surfaces as a failure.
+	failLLM := &mockLLMProvider{name: "fail", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		t.Error("multi-vector marker job must not call any LLM provider")
+		return &provider.CompletionResponse{Content: "[]", Model: "fail"}, nil
+	}}
+	h := newTestHarness(failLLM, failLLM, constEmbedder())
+	if err := h.settings.Set(context.Background(), service.SettingMultiVectorEnabled, "true", "global", nil); err != nil {
+		t.Fatalf("enable multi_vector: %v", err)
+	}
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	whole := make([]float32, dim)
+	whole[0] = 1
+	store := newRecordingFacetStore()
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+	// Inject a facet-capable store + multi-topic embedder so the routed sweep
+	// can actually write facets.
+	h.pool.vectorStore = store
+	h.pool.embedProvider = func() provider.EmbeddingProvider {
+		return &fakeFacetEmbedder{dim: dim, axisFor: func(s string) int {
+			if strings.Contains(s, "PRICE") {
+				return 1
+			}
+			return 5
+		}}
+	}
+
+	mem := testMemory()
+	mem.ID = memID
+	mem.NamespaceID = nsID
+	mem.Enriched = true
+	mem.EmbeddingDim = &dim
+	mem.Content = "PRICE one. PRICE two. DEPLOY one."
+	h.reader.byID[mem.ID] = mem
+
+	job := testJob(mem.ID, mem.NamespaceID)
+	marker, err := json.Marshal([]string{model.JobMarkerOnlyMultiVector})
+	if err != nil {
+		t.Fatalf("marshal marker: %v", err)
+	}
+	job.StepsCompleted = marker
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+
+	// Job completed via the sweep path.
+	if len(h.queue.completed) != 1 || h.queue.completed[0] != job.ID {
+		t.Fatalf("expected marker job completed, got %v", h.queue.completed)
+	}
+	// StepMultiVectorFacets marked so a retry is a no-op.
+	steps := h.queue.stepsCompleted[job.ID]
+	if !slices.Contains(steps, model.StepMultiVectorFacets) {
+		t.Errorf("expected %q step marked, got %v", model.StepMultiVectorFacets, steps)
+	}
+	// Facets written, reusing the stored facet-0 vector.
+	facets, ok := store.facetCalls[memID]
+	if !ok || len(facets) < 3 {
+		t.Fatalf("expected facets written from the stored vector, got %v (ok=%v)", facets, ok)
+	}
+	if len(facets[0]) != dim || facets[0][0] != 1 {
+		t.Errorf("facet 0 = %v, want the reused stored whole-memory vector", facets[0])
+	}
+	// The SGLang pipeline never ran: finalizeJob (and thus MarkEnriched) is
+	// unreached, and none of the full-pipeline steps are marked.
+	if len(h.updater.enrichedMarks) != 0 {
+		t.Errorf("marker job must not run finalizeJob/MarkEnriched, got %d", len(h.updater.enrichedMarks))
+	}
+	if slices.Contains(steps, model.StepQueryAugmentation) || slices.Contains(steps, model.StepEmbedding) ||
+		slices.Contains(steps, model.StepFactExtraction) || slices.Contains(steps, model.StepEntityExtraction) {
+		t.Errorf("marker job must not run any full-pipeline step, got %v", steps)
+	}
+	// Facet state stamped through the routed sweep so the memory leaves the
+	// backfill candidate set.
+	if len(h.updater.facetStateMarks) != 1 || h.updater.facetStateMarks[0].id != memID {
+		t.Errorf("expected one facet-state stamp for %s, got %+v", memID, h.updater.facetStateMarks)
+	}
+}
+
+func TestRunMultiVectorFacetSweep_DisabledIsNoOp(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newSweepTestPool(t, store, false)
+
+	memID, nsID := uuid.New(), uuid.New()
+	dim := 8
+	whole := make([]float32, dim)
+	whole[0] = 1
+	store.stored = map[uuid.UUID][]float32{memID: whole}
+	mem := &model.Memory{ID: memID, NamespaceID: nsID, EmbeddingDim: &dim,
+		Content: "PRICE one. PRICE two. DEPLOY one."}
+	job := &model.EnrichmentJob{ID: uuid.New(), MemoryID: memID, NamespaceID: nsID}
+
+	if err := pool.runMultiVectorFacetSweep(context.Background(), job, mem); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(store.facetCalls) != 0 {
+		t.Fatalf("expected no facet writes when multi_vector is disabled, got %d", len(store.facetCalls))
 	}
 }

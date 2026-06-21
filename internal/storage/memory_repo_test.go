@@ -111,6 +111,61 @@ func TestMemoryRepo_ListMultiVectorBackfillCandidates_PrioritizesSyntheses(t *te
 	})
 }
 
+func TestMemoryRepo_ListMultiVectorBackfillCandidates_ExcludesFaceted(t *testing.T) {
+	// Once the facet pass stamps a memory (via UpdateFacetState), it must drop
+	// out of the candidate set so the count reaches zero after a backfill and a
+	// re-run does not re-facet the whole corpus. Single-topic memories (count 1)
+	// are stamped too and must also be excluded.
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewMemoryRepo(db)
+		nsID := createTestMemoryNamespace(t, ctx, db)
+
+		faceted := newTestMemory(nsID)
+		if err := repo.Create(ctx, faceted); err != nil {
+			t.Fatalf("create faceted: %v", err)
+		}
+		pending := newTestMemory(nsID)
+		if err := repo.Create(ctx, pending); err != nil {
+			t.Fatalf("create pending: %v", err)
+		}
+
+		// Both are candidates before any facet stamp.
+		cands, err := repo.ListMultiVectorBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
+		if err != nil {
+			t.Fatalf("list before stamp: %v", err)
+		}
+		if len(cands) != 2 {
+			t.Fatalf("expected 2 candidates before stamping, got %d", len(cands))
+		}
+
+		// Stamp one as faceted (single topic, count 1).
+		if err := repo.UpdateFacetState(ctx, faceted.ID, nsID, 1); err != nil {
+			t.Fatalf("update facet state: %v", err)
+		}
+
+		cands, err = repo.ListMultiVectorBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
+		if err != nil {
+			t.Fatalf("list after stamp: %v", err)
+		}
+		if len(cands) != 1 || cands[0].ID != pending.ID {
+			t.Fatalf("expected only the un-faceted memory %v as candidate, got %+v", pending.ID, cands)
+		}
+
+		// The stamp persisted both columns on the memory row.
+		got, err := repo.GetByID(ctx, faceted.ID, nsID)
+		if err != nil {
+			t.Fatalf("get faceted: %v", err)
+		}
+		if got.FacetCount == nil || *got.FacetCount != 1 {
+			t.Errorf("facet_count = %v, want 1", got.FacetCount)
+		}
+		if got.FacetedAt == nil {
+			t.Error("faceted_at should be stamped, got nil")
+		}
+	})
+}
+
 func TestMemoryRepo_Create(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

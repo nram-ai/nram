@@ -140,59 +140,16 @@ func (s *EnrichService) BackfillExtractedFactParaphrase(ctx context.Context, req
 	if s.paraphraseLister == nil {
 		return nil, fmt.Errorf("paraphrase candidate lister not configured (call AttachParaphraseCandidateLister)")
 	}
-
-	var namespaceIDs []uuid.UUID
-	if req.ProjectID != uuid.Nil {
-		project, err := s.projects.GetByID(ctx, req.ProjectID)
-		if err != nil {
-			return nil, fmt.Errorf("project not found: %w", err)
-		}
-		namespaceIDs = []uuid.UUID{project.NamespaceID}
-	}
-
-	candidates, err := s.paraphraseLister.ListEnrichedParentsWithExtractedChildren(ctx, namespaceIDs, req.Limit)
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, model.JobMarkerOnlyParaphraseGuard, s.paraphraseLister.ListEnrichedParentsWithExtractedChildren)
 	if err != nil {
-		return nil, fmt.Errorf("list paraphrase backfill candidates: %w", err)
+		return nil, err
 	}
-
-	resp := &BackfillExtractedFactParaphraseResponse{
-		CandidateCount: len(candidates),
+	return &BackfillExtractedFactParaphraseResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
 		DryRun:         req.DryRun,
-	}
-	if req.DryRun || len(candidates) == 0 {
-		resp.LatencyMs = time.Since(start).Milliseconds()
-		return resp, nil
-	}
-
-	markerBytes, err := json.Marshal([]string{model.JobMarkerOnlyParaphraseGuard})
-	if err != nil {
-		return nil, fmt.Errorf("marshal job marker: %w", err)
-	}
-
-	now := time.Now()
-	for _, cand := range candidates {
-		job := &model.EnrichmentJob{
-			ID:             uuid.New(),
-			MemoryID:       cand.ID,
-			NamespaceID:    cand.NamespaceID,
-			Status:         model.EnrichmentStatusPending,
-			Priority:       0,
-			Attempts:       0,
-			MaxAttempts:    3,
-			StepsCompleted: markerBytes,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-		}
-		inserted, err := s.enrichmentQueue.Enqueue(ctx, job)
-		if err != nil {
-			return nil, fmt.Errorf("enqueue paraphrase backfill for memory %s: %w", cand.ID, err)
-		}
-		if inserted {
-			resp.Enqueued++
-		}
-	}
-	resp.LatencyMs = time.Since(start).Milliseconds()
-	return resp, nil
+		LatencyMs:      time.Since(start).Milliseconds(),
+	}, nil
 }
 
 // BackfillAugmentationRequest scopes a query-augmentation backfill. ProjectID
@@ -240,21 +197,27 @@ type BackfillMultiVectorResponse struct {
 	LatencyMs      int64 `json:"latency_ms"`
 }
 
-// BackfillMultiVector enqueues live memories for re-enrichment so the worker's
-// facet pass (gated by enrichment.multi_vector.enabled) re-vectorizes them with
-// topic facets. This is the path that recovers facets for memories stored before
-// the feature was enabled, including high-confidence syntheses that already
-// superseded their sources. Idempotent: re-faceting replaces the facet set.
+// BackfillMultiVector enqueues live memories for a lean facet-only sweep: each
+// job carries the JobMarkerOnlyMultiVector sentinel, so the worker reuses the
+// memory's stored facet-0 vector and runs only the per-topic sentence embeds
+// (gated by enrichment.multi_vector.enabled). No ingestion-decision, no
+// query-augmentation LLM call, and no whole-memory re-embed. This is the path
+// that recovers facets for memories stored before the feature was enabled,
+// including high-confidence syntheses that already superseded their sources.
+// Idempotent: re-faceting replaces the facet set.
 // candidateLister lists backfill candidates (id+namespace) for a project scope.
 type candidateLister func(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 
 // runBackfill resolves the optional project scope to a namespace filter, lists
-// candidates, and (unless dryRun) enqueues a plain re-enrichment job per
-// candidate. Shared by BackfillMultiVector and BackfillAugmentation, which are
-// identical apart from their lister and typed response. (BackfillExtractedFact-
-// Paraphrase stays separate: it stamps a job marker.) The candidate's namespace
-// rides along so the enqueue needs no per-id read on the whole-deployment sweep.
-func (s *EnrichService) runBackfill(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int, list candidateLister) (candidateCount, enqueued int, err error) {
+// candidates, and (unless dryRun) enqueues a re-enrichment job per candidate.
+// Shared by all three backfills (augmentation, multi-vector, extracted-fact
+// paraphrase). When marker is non-empty it is stamped as the job's sole
+// StepsCompleted entry so the worker routes to a lean no-LLM handler (the
+// multi-vector facet sweep or the paraphrase-guard sweep); an empty marker
+// enqueues a plain full-pipeline job (the augmentation path, which wants the
+// re-embed). The candidate's namespace rides along so the enqueue needs no
+// per-id read on the whole-deployment sweep.
+func (s *EnrichService) runBackfill(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int, marker string, list candidateLister) (candidateCount, enqueued int, err error) {
 	var namespaceIDs []uuid.UUID
 	if projectID != uuid.Nil {
 		project, perr := s.projects.GetByID(ctx, projectID)
@@ -272,18 +235,27 @@ func (s *EnrichService) runBackfill(ctx context.Context, projectID uuid.UUID, dr
 		return len(candidates), 0, nil
 	}
 
+	var markerBytes json.RawMessage
+	if marker != "" {
+		markerBytes, err = json.Marshal([]string{marker})
+		if err != nil {
+			return 0, 0, fmt.Errorf("marshal job marker: %w", err)
+		}
+	}
+
 	now := time.Now()
 	for _, cand := range candidates {
 		job := &model.EnrichmentJob{
-			ID:          uuid.New(),
-			MemoryID:    cand.ID,
-			NamespaceID: cand.NamespaceID,
-			Status:      "pending",
-			Priority:    0,
-			Attempts:    0,
-			MaxAttempts: 3,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:             uuid.New(),
+			MemoryID:       cand.ID,
+			NamespaceID:    cand.NamespaceID,
+			Status:         "pending",
+			Priority:       0,
+			Attempts:       0,
+			MaxAttempts:    3,
+			StepsCompleted: markerBytes,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 		inserted, ierr := s.enrichmentQueue.Enqueue(ctx, job)
 		if ierr != nil {
@@ -301,7 +273,7 @@ func (s *EnrichService) BackfillMultiVector(ctx context.Context, req *BackfillMu
 	if s.mvLister == nil {
 		return nil, fmt.Errorf("multi-vector candidate lister not configured (call AttachMultiVectorLister)")
 	}
-	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, s.mvLister.ListMultiVectorBackfillCandidates)
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, model.JobMarkerOnlyMultiVector, s.mvLister.ListMultiVectorBackfillCandidates)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +290,7 @@ func (s *EnrichService) BackfillAugmentation(ctx context.Context, req *BackfillA
 	if s.augLister == nil {
 		return nil, fmt.Errorf("augmentation candidate lister not configured (call AttachAugmentationLister)")
 	}
-	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, s.augLister.ListAugmentationBackfillCandidates)
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, "", s.augLister.ListAugmentationBackfillCandidates)
 	if err != nil {
 		return nil, err
 	}

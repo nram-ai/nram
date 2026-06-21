@@ -562,6 +562,17 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
         </div>
       )}
 
+      <div>
+        <h4 className="mb-1.5 font-medium text-muted-foreground">Facets</h4>
+        <p className="text-muted-foreground">
+          {item.facet_count == null
+            ? "not faceted"
+            : item.facet_count <= 1
+              ? "single topic (whole-memory vector only)"
+              : `${item.facet_count} facets (whole-memory vector + ${item.facet_count - 1} topic ${item.facet_count - 1 === 1 ? "facet" : "facets"})`}
+        </p>
+      </div>
+
       {(item.claimed_by || item.claimed_at || item.last_requeue_reason) && (
         <div className="grid grid-cols-1 gap-x-6 gap-y-1 text-muted-foreground md:grid-cols-3">
           {item.claimed_by && (

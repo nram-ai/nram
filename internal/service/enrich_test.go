@@ -538,6 +538,51 @@ func TestBackfillMultiVector_Enqueues(t *testing.T) {
 	if !gotIDs[id1] || !gotIDs[id2] {
 		t.Fatalf("enqueued job memory IDs %v don't cover both candidates", gotIDs)
 	}
+
+	// Each enqueued job must carry the multi-vector sentinel in StepsCompleted
+	// so the worker routes ONLY to the lean facet sweep (no SGLang, no
+	// whole-memory re-embed).
+	for i, job := range queue.jobs {
+		var steps []string
+		if err := json.Unmarshal(job.StepsCompleted, &steps); err != nil {
+			t.Fatalf("job[%d] StepsCompleted is not a JSON array: %v (%s)", i, err, string(job.StepsCompleted))
+		}
+		found := false
+		for _, s := range steps {
+			if s == model.JobMarkerOnlyMultiVector {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("job[%d] missing sentinel %q in steps_completed %v",
+				i, model.JobMarkerOnlyMultiVector, steps)
+		}
+	}
+}
+
+// TestBackfillAugmentation_EnqueuesNoMarker pins that the augmentation backfill
+// shares runBackfill but enqueues plain full-pipeline jobs: the marker param is
+// empty, so StepsCompleted stays nil and the worker runs the re-embed path.
+func TestBackfillAugmentation_EnqueuesNoMarker(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1 := uuid.New()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		id1: makeEnrichMemory(id1, nsID, true),
+	}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachAugmentationLister(&stubAugLister{ids: []uuid.UUID{id1}})
+
+	if _, err := svc.BackfillAugmentation(context.Background(), &BackfillAugmentationRequest{}); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if len(queue.jobs) != 1 {
+		t.Fatalf("expected 1 job; got %d", len(queue.jobs))
+	}
+	if queue.jobs[0].StepsCompleted != nil {
+		t.Errorf("augmentation job should carry no marker; got StepsCompleted %s",
+			string(queue.jobs[0].StepsCompleted))
+	}
 }
 
 func TestBackfillMultiVector_NoListerReturnsError(t *testing.T) {

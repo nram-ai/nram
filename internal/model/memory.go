@@ -43,6 +43,14 @@ type Memory struct {
 	AugmentedQueries     []string   `json:"augmented_queries,omitempty"`
 	AugmentedEmbeddingAt *time.Time `json:"augmented_embedding_at,omitempty"`
 
+	// Multi-vector facet state. FacetedAt records when the facet pass last
+	// processed this memory; FacetCount is how many facets it produced (1 =
+	// single topic, i.e. facet 0 only; N = facet 0 plus N-1 topic facets).
+	// Both NULL means the memory has never been faceted; the facet backfill
+	// candidate query uses FacetedAt IS NULL to skip already-faceted memories.
+	FacetedAt  *time.Time `json:"faceted_at,omitempty"`
+	FacetCount *int       `json:"facet_count,omitempty"`
+
 	// Derived from lineage table at read time; not persisted in memories table.
 	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 

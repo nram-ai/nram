@@ -1451,6 +1451,11 @@ export interface EnrichmentQueueItem {
   // not augmented") or when the memory has been deleted.
   augmented_queries?: string[];
   augmented_embedding_at?: string;
+  // Number of multi-vector facets the facet pass produced for this memory
+  // (1 = single topic / facet 0 only, N = facet 0 plus N-1 topic facets).
+  // Omitted when the memory has not been faceted yet (or the row predates the
+  // feature); the monitor renders "not faceted" in that case.
+  facet_count?: number;
   // Per-phase LLM/embedding latency and token usage for this job's most recent
   // run, read from the recorded token_usage rows. Omitted when no usage rows
   // match the memory (pending job, skipped phase, or a row predating the

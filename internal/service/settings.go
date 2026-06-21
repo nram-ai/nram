@@ -246,9 +246,9 @@ const (
 
 	// Multi-vector facets: split a memory into sentence-clustered topic facets
 	// (plus the pooled whole-memory facet 0) so a query about one sub-topic of a
-	// multi-topic memory retrieves it at that sub-topic's strength. Off by
-	// default; enabling it adds per-memory sentence-embedding cost and a backfill
-	// re-vectorizes existing memories.
+	// multi-topic memory retrieves it at that sub-topic's strength. On by
+	// default; it adds per-memory sentence-embedding cost during enrichment, and
+	// the facet-only backfill recovers facets for memories stored beforehand.
 	SettingMultiVectorEnabled          = "enrichment.multi_vector.enabled"
 	SettingMultiVectorFacetThreshold   = "enrichment.multi_vector.facet_threshold"
 	SettingMultiVectorMaxFacets        = "enrichment.multi_vector.max_facets"
@@ -894,7 +894,7 @@ var settingDefaults = map[string]string{
 
 	SettingQueryAugmentEnabled:           "true",
 	SettingQueryAugmentCount:             "4",
-	SettingMultiVectorEnabled:            "false",
+	SettingMultiVectorEnabled:            "true",
 	SettingMultiVectorFacetThreshold:     "0.65",
 	SettingMultiVectorMaxFacets:          "8",
 	SettingMultiVectorEmbedConcurrency:   "4",

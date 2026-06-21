@@ -221,6 +221,11 @@ type EnrichmentQueueItem struct {
 	// memory has been soft-deleted still hydrates with both fields nil.
 	AugmentedQueries     []string   `json:"augmented_queries,omitempty"`
 	AugmentedEmbeddingAt *time.Time `json:"augmented_embedding_at,omitempty"`
+	// FacetCount is the number of multi-vector facets the facet pass produced
+	// for this memory (1 = single topic / facet 0 only, N = facet 0 plus N-1
+	// topic facets). nil means the memory has not been faceted yet (or the row
+	// predates the feature); the monitor renders "not faceted" in that case.
+	FacetCount *int `json:"facet_count,omitempty"`
 	// PhaseMetrics carries per-LLM-call latency and token usage for this job's
 	// enrichment phases (fact_extraction, entity_extraction, query_augment,
 	// ingestion_decision, embedding), read from the token_usage rows the

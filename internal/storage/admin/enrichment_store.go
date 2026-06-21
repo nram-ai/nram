@@ -175,7 +175,7 @@ func (s *EnrichmentAdminStore) scanQueueItems(ctx context.Context, rows *sql.Row
 // to project_id. augmentedQueries / augmentedEmbeddingAt are joined from
 // the memories row so the enrichment-monitor "Augmentation" panel renders
 // the persisted state without a second fetch.
-func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projectID *uuid.UUID, projectName string, augmentedQueries []string, augmentedEmbeddingAt *time.Time, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
+func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projectID *uuid.UUID, projectName string, augmentedQueries []string, augmentedEmbeddingAt *time.Time, facetCount *int, staleThresholdMs int64, now time.Time) api.EnrichmentQueueItem {
 	lastErr := ""
 	if item.LastError != nil {
 		lastErr = string(item.LastError)
@@ -184,11 +184,11 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 	if len(item.StepsCompleted) > 0 {
 		var parsed []string
 		if err := json.Unmarshal(item.StepsCompleted, &parsed); err == nil && parsed != nil {
-			// Filter internal sentinels (e.g. paraphrase-guard backfill
-			// marker) so the UI shows only real model.Step* constants.
+			// Filter internal sentinels (the paraphrase-guard and multi-vector
+			// backfill markers) so the UI shows only real model.Step* constants.
 			steps = make([]string, 0, len(parsed))
 			for _, s := range parsed {
-				if s == model.JobMarkerOnlyParaphraseGuard {
+				if s == model.JobMarkerOnlyParaphraseGuard || s == model.JobMarkerOnlyMultiVector {
 					continue
 				}
 				steps = append(steps, s)
@@ -211,6 +211,7 @@ func (s *EnrichmentAdminStore) hydrateQueueItem(item model.EnrichmentJob, projec
 		QueryAugmentSkipReason: item.QueryAugmentSkipReason,
 		AugmentedQueries:       augmentedQueries,
 		AugmentedEmbeddingAt:   augmentedEmbeddingAt,
+		FacetCount:             facetCount,
 	}
 	if item.Status == model.EnrichmentStatusProcessing && item.ClaimedAt != nil {
 		out.ClaimedAt = item.ClaimedAt
@@ -245,16 +246,16 @@ func (s *EnrichmentAdminStore) staleThresholdMs(ctx context.Context) int64 {
 // project names; org and system paths leave it off and surface project_id
 // only; org-tier views must not leak other users' project names to an
 // org_owner, matching the system-tier privacy posture. The trailing
-// m.augmented_queries and m.augmented_embedding_at columns are always
-// included so the enrichment-monitor "Augmentation" panel can render the
-// persisted badge straight from the queue payload.
+// m.augmented_queries, m.augmented_embedding_at, and m.facet_count columns are
+// always included so the enrichment-monitor "Augmentation" panel and "Facets"
+// line render the persisted state straight from the queue payload.
 func queueItemSelectColumns(withName bool) string {
 	cols := `eq.id, eq.memory_id, eq.status, eq.attempts, eq.max_attempts, eq.last_error, eq.created_at,
 		eq.claimed_by, eq.claimed_at, eq.last_requeue_reason, eq.steps_completed, eq.query_augment_skip_reason, p.id`
 	if withName {
 		cols += `, p.name`
 	}
-	cols += `, m.augmented_queries, m.augmented_embedding_at`
+	cols += `, m.augmented_queries, m.augmented_embedding_at, m.facet_count`
 	return cols
 }
 
@@ -276,13 +277,14 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		projectName                               *string
 		augmentedQueriesStr                       sql.NullString
 		augmentedEmbeddingAtStr                   sql.NullString
+		facetCountVal                             sql.NullInt64
 	)
 	dest := []any{&idStr, &memIDStr, &status, &attempts, &maxAttempts, &lastErr, &createdAtStr,
 		&claimedBy, &claimedAtStr, &requeue, &stepsCompletedStr, &queryAugmentSkipReason, &projectIDStr}
 	if withName {
 		dest = append(dest, &projectName)
 	}
-	dest = append(dest, &augmentedQueriesStr, &augmentedEmbeddingAtStr)
+	dest = append(dest, &augmentedQueriesStr, &augmentedEmbeddingAtStr, &facetCountVal)
 	if err := rows.Scan(dest...); err != nil {
 		return api.EnrichmentQueueItem{}, err
 	}
@@ -329,6 +331,11 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 			augmentedEmbeddingAt = &t
 		}
 	}
+	var facetCount *int
+	if facetCountVal.Valid {
+		n := int(facetCountVal.Int64)
+		facetCount = &n
+	}
 
 	return s.hydrateQueueItem(model.EnrichmentJob{
 		ID:                     id,
@@ -343,7 +350,7 @@ func (s *EnrichmentAdminStore) scanQueueItem(rows *sql.Rows, withName bool, thre
 		LastRequeueReason:      requeue,
 		StepsCompleted:         stepsCompletedRaw,
 		QueryAugmentSkipReason: queryAugmentSkipReason,
-	}, pid, pname, augmentedQueries, augmentedEmbeddingAt, threshold, now), nil
+	}, pid, pname, augmentedQueries, augmentedEmbeddingAt, facetCount, threshold, now), nil
 }
 
 // placeholderFn returns a generator that emits successive SQL bind

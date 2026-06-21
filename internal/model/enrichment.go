@@ -16,6 +16,11 @@ const (
 	StepQueryAugmentation            = "query_augmentation"
 	StepEmbedding                    = "embedding"
 	StepExtractedFactParaphraseGuard = "extracted_fact_paraphrase_guard"
+	// StepMultiVectorFacets marks a multi-vector facet backfill sweep as
+	// finished on the job so a re-claim after a partial failure is a no-op,
+	// mirroring StepExtractedFactParaphraseGuard's role for the paraphrase
+	// sweep.
+	StepMultiVectorFacets = "multi_vector_facets"
 )
 
 // JobMarkerOnlyParaphraseGuard is a sentinel value placed in
@@ -26,6 +31,15 @@ const (
 // Storing the marker in StepsCompleted avoids a schema change while
 // preserving the existing per-step idempotency contract.
 const JobMarkerOnlyParaphraseGuard = "__only_paraphrase_guard__"
+
+// JobMarkerOnlyMultiVector is a sentinel placed in EnrichmentJob.StepsCompleted
+// by BackfillMultiVector when it enqueues a per-memory facet backfill job. The
+// worker recognizes it and routes ONLY to the lean facet sweep handler, which
+// reuses the memory's stored facet-0 vector and runs only the per-topic
+// sentence embeds: no ingestion-decision, no query-augmentation LLM call, and
+// no whole-memory re-embed. Same StepsCompleted-as-marker mechanism as
+// JobMarkerOnlyParaphraseGuard, so it needs no schema change.
+const JobMarkerOnlyMultiVector = "__only_multi_vector__"
 
 // Reasons the query-augmentation phase did not land in the persisted vector.
 // Written into enrichment_queue.query_augment_skip_reason when the step is
