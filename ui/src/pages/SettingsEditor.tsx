@@ -769,12 +769,11 @@ function InlineSettingEditor({
 // ---------------------------------------------------------------------------
 
 // Some categories carry an operator action block beneath their setting rows.
-// This is rendered in both ParentGroupCard render paths (flat and sectioned) so
-// the block never depends on whether the group happened to flatten; a group
+// CategoryTrailingBlock returns null for every other category, so both
+// ParentGroupCard render paths (flat and sectioned) render it unconditionally;
+// the block never depends on whether the group happened to flatten. (A group
 // with a single unlabeled subsection takes the flat path, and omitting the
-// block there is what hid GraphMaintenanceBlock under Lifecycle Sweep.
-const TRAILING_BLOCK_CATEGORIES = new Set(["enrichment_query_augment", "enrichment_multi_vector", "lifecycle", "qdrant"]);
-
+// block there is what once hid GraphMaintenanceBlock under Lifecycle Sweep.)
 function CategoryTrailingBlock({ category }: { category: string }) {
   if (category === "enrichment_query_augment") return <QueryAugmentBackfillBlock />;
   if (category === "enrichment_multi_vector") return <MultiVectorBackfillBlock />;
@@ -825,8 +824,8 @@ function ParentGroupCard({
         )}
       </div>
       {flatten ? (
-        <>
-          <div className="divide-y divide-border px-5">
+        <section className="px-5 py-4">
+          <div className="divide-y divide-border">
             {populated[0].items.map((item) => (
               <InlineSettingEditor
                 key={item.schema.key}
@@ -838,21 +837,17 @@ function ParentGroupCard({
               />
             ))}
           </div>
-          {TRAILING_BLOCK_CATEGORIES.has(populated[0].sub.category) && (
-            <div className="px-5 pb-4">
-              <CategoryTrailingBlock category={populated[0].sub.category} />
-            </div>
-          )}
-        </>
+          <CategoryTrailingBlock category={populated[0].sub.category} />
+        </section>
       ) : (
-        <div className="divide-y divide-border">
+        <div className="divide-y divide-border px-5">
           {populated.map(({ sub, items }) => {
             const order = BUDGET_BAR_ORDERS[sub.category];
             const segments = order ? fractionSegments(items, order) : [];
             const showBar = segments.length > 0;
 
             return (
-              <section key={sub.category} className="px-5 py-4">
+              <section key={sub.category} className="py-4">
                 {sub.label && (
                   <h3 className="text-sm font-semibold text-foreground">{sub.label}</h3>
                 )}
