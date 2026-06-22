@@ -658,7 +658,7 @@ func main() {
 	}
 	askSvc := service.NewAskService(
 		recallSvc, memoryRepo, projectRepo, relationshipRepo, askProvider, settingsSvc,
-	).WithMetrics(promMetrics)
+	).WithMetrics(promMetrics).WithVectorHydrator(vectorStore)
 
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{

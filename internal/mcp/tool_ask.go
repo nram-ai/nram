@@ -15,9 +15,12 @@ import (
 
 // mcpAskSource is one cited/seed memory in the ask response (lean provenance).
 type mcpAskSource struct {
-	MemoryID    string  `json:"memory_id"`
-	ProjectSlug string  `json:"project_slug"`
-	Score       float64 `json:"score"`
+	MemoryID    string `json:"memory_id"`
+	ProjectSlug string `json:"project_slug"`
+	// Score is the source's absolute vector cosine to the query. Omitted for
+	// sources that entered via graph/sibling expansion (no direct query match),
+	// rather than the misleading 0 the old fixed-float field reported.
+	Score *float64 `json:"score,omitempty"`
 	// Citation is the footnote number ([1], [2], …) this source carries inline
 	// in the answer. Omitted (0) on the uncited fallback.
 	Citation int `json:"citation,omitempty"`

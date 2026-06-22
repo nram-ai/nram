@@ -388,7 +388,9 @@ export interface AskRequest {
 export interface AskSource {
   memory_id: string;
   project_slug: string;
-  score: number;
+  /** Absolute vector cosine to the query. Absent for sources that entered via
+   * graph or sibling expansion (no direct query match). */
+  score?: number;
   /** Footnote number ([1], [2], …) carried inline in the answer; absent on the
    * uncited fallback. */
   citation?: number;

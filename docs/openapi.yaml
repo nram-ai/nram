@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.8.1
+  version: 0.9.0
   license:
     name: MIT
 
@@ -5082,7 +5082,7 @@ components:
             retrieved candidates with `citation` omitted.
           items:
             type: object
-            required: [memory_id, project_slug, score]
+            required: [memory_id, project_slug]
             properties:
               memory_id:
                 type: string
@@ -5092,6 +5092,10 @@ components:
               score:
                 type: number
                 format: double
+                description: >-
+                  The source's absolute vector cosine to the query. Omitted for
+                  sources that entered via graph or sibling expansion (no direct
+                  query match) rather than reporting a misleading 0.
               citation:
                 type: integer
                 description: >-
@@ -5103,9 +5107,11 @@ components:
           minimum: 0
           maximum: 1
           description: >-
-            Derived from the source count and score distribution (not the
-            model's self-assessment). Zero when the answer is not grounded in
-            the neighborhood or synthesis failed.
+            Derived from the calibrated vector cosines of the recall sources the
+            answer actually cited, scaled by how many it corroborated against
+            (not the model's self-assessment). Zero when the answer cited no
+            recall source — i.e. it was ungrounded, said "Not in neighborhood.",
+            or synthesis failed.
         synthesis_meta:
           type: object
           required: [latency_ms, neighborhood_size]
@@ -5963,9 +5969,13 @@ components:
         - "api.rate_limit.stale_after_seconds"
         - "api.rate_limit_burst"
         - "api.rate_limit_rps"
+        - "ask.confidence.cosine_ceiling"
+        - "ask.confidence.cosine_floor"
         - "ask.enabled"
+        - "ask.expansion.cosine_floor"
         - "ask.graph.depth"
         - "ask.neighborhood.max_memories"
+        - "ask.neighborhood.min_score_ratio"
         - "ask.recall.candidates"
         - "ask.siblings.per_candidate"
         - "ask.synthesis.max_tokens"

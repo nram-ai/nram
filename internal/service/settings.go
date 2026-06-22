@@ -668,6 +668,27 @@ const (
 	SettingAskGraphDepth              = "ask.graph.depth"
 	SettingAskSiblingsPerCandidate    = "ask.siblings.per_candidate"
 	SettingAskNeighborhoodMaxMemories = "ask.neighborhood.max_memories"
+	// Confidence calibration maps a cited source's absolute vector cosine onto
+	// [0, 1]: a cosine at or below the floor reads as no confidence, at or above
+	// the ceiling as full confidence, linear between. Defaults are tuned to the
+	// observed qwen3-embedding band (strong matches cluster ~0.55-0.71), so a
+	// genuine top hit reads high rather than lukewarm. Tunable per embedder.
+	SettingAskConfidenceCosineFloor   = "ask.confidence.cosine_floor"
+	SettingAskConfidenceCosineCeiling = "ask.confidence.cosine_ceiling"
+	// Neighborhood relevance floor: a recall candidate joins the synthesis
+	// neighborhood only if its fused recall score is at least this fraction of
+	// the top candidate's. Recall returns up to its limit even when the tail is
+	// weak (and its fused ranking can float a high-importance but off-topic
+	// memory up), so this drops that tail and makes the neighborhood adaptive to
+	// how many memories genuinely match. 0 disables the floor.
+	SettingAskNeighborhoodMinScoreRatio = "ask.neighborhood.min_score_ratio"
+	// Expansion relevance floor: a graph- or sibling-connected memory joins the
+	// neighborhood only if its cosine to the query embedding is at least this.
+	// Tag overlap and entity connectivity are not relevance, so the expansion is
+	// gated on the actual query match; this keeps connected-but-off-topic
+	// memories out while still pulling in genuinely related context recall
+	// missed. Tuned to the embedder band (qwen3-embedding strong matches ~0.55+).
+	SettingAskExpansionCosineFloor = "ask.expansion.cosine_floor"
 )
 
 // Provider prompt-delivery and Ollama keep-warm runtime settings.
@@ -798,15 +819,15 @@ Combine the following pieces of information into a single concise paragraph that
 
 Output ONLY the synthesized text:`
 
-	askSynthesisSystemPromptText = `You answer the user's question using ONLY the memory neighborhood provided below. You do not use outside knowledge.
+	askSynthesisSystemPromptText = `You answer the user's question using only the memory neighborhood provided in the user message; no outside knowledge.
 
-Each memory in the neighborhood is tagged with its id. Rules:
-- Answer the question directly and concisely from the neighborhood. Preserve technical terms, names, and numbers verbatim.
-- Cite the memory ids you used inline, in square brackets, e.g. [a1b2c3d4]. Cite only ids that appear in the neighborhood.
-- If the neighborhood does not contain the answer, say exactly: "Not in neighborhood." Do not guess or fill gaps.
-- Do not add commentary, greetings, or prefaces. Do not hedge.
+Combine facts across multiple memories when the question calls for it: a list, comparison, or classification usually spans several memories. Summarize in your own words and keep it concise (a few sentences); give specific terms, names, and numbers exactly, but do not copy a memory's full text or reproduce long passages.
 
-Output only the answer text (with inline id citations).`
+Lead with the fact itself, not a restatement of the question. Cite the memory ids you draw on inline, in square brackets right after the claim they support, e.g. [a1b2c3d4]; never start a line or sentence with a bracketed id, and never gather ids at the end.
+
+If the neighborhood genuinely does not contain the answer, reply exactly: Not in neighborhood.
+
+Answer directly, with no preamble.`
 
 	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
 
@@ -925,14 +946,18 @@ var settingDefaults = map[string]string{
 	SettingFactSystemPrompt:   factSystemPromptText,
 	SettingEntitySystemPrompt: entitySystemPromptText,
 
-	SettingAskEnabled:                 "false",
-	SettingAskSynthesisSystemPrompt:   askSynthesisSystemPromptText,
-	SettingAskSynthesisTemperature:    "0.1",
-	SettingAskSynthesisMaxTokens:      "4096",
-	SettingAskRecallCandidates:        "8",
-	SettingAskGraphDepth:              "1",
-	SettingAskSiblingsPerCandidate:    "3",
-	SettingAskNeighborhoodMaxMemories: "40",
+	SettingAskEnabled:                   "false",
+	SettingAskSynthesisSystemPrompt:     askSynthesisSystemPromptText,
+	SettingAskSynthesisTemperature:      "0.1",
+	SettingAskSynthesisMaxTokens:        "4096",
+	SettingAskRecallCandidates:          "12",
+	SettingAskGraphDepth:                "1",
+	SettingAskSiblingsPerCandidate:      "3",
+	SettingAskNeighborhoodMaxMemories:   "20",
+	SettingAskConfidenceCosineFloor:     "0.35",
+	SettingAskConfidenceCosineCeiling:   "0.75",
+	SettingAskNeighborhoodMinScoreRatio: "0.5",
+	SettingAskExpansionCosineFloor:      "0.5",
 
 	SettingIngestionDecisionEnabled:      "true",
 	SettingIngestionDecisionShadow:       "false",

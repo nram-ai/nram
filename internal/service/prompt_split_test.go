@@ -92,10 +92,14 @@ func TestJSONSystemPromptsRequestMinified(t *testing.T) {
 	}
 }
 
-// TestRenderExtractionUser verifies the hardcoded fact/entity data wrapper.
+// TestRenderExtractionUser verifies the fact/entity data wrapper nonce-fences
+// the content as untrusted data. The nonce is random, so assert structure.
 func TestRenderExtractionUser(t *testing.T) {
 	got := RenderExtractionUser("hello world")
-	if got != "Text:\nhello world" {
-		t.Errorf("unexpected extraction user message: %q", got)
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("content missing from extraction user message: %q", got)
+	}
+	if !strings.HasPrefix(got, "<text-") || !strings.Contains(got, "</text-") {
+		t.Errorf("expected content fenced in <text-NONCE> tags: %q", got)
 	}
 }

@@ -51,7 +51,11 @@ function renderAnswer(
         <Link
           to={memoryHref(src, projectIdBySlug)}
           className="text-primary no-underline hover:underline"
-          title={`${src.project_slug} · score ${src.score.toFixed(3)}`}
+          title={
+            src.score != null
+              ? `${src.project_slug} · score ${src.score.toFixed(3)}`
+              : `${src.project_slug} · linked via graph/siblings`
+          }
         >
           [{n}]
         </Link>
@@ -192,7 +196,10 @@ export default function Ask() {
                       </Link>
                     </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
-                      {s.project_slug} · score {s.score.toFixed(3)}
+                      {s.project_slug} ·{" "}
+                      {s.score != null
+                        ? `score ${s.score.toFixed(3)}`
+                        : "linked via graph/siblings"}
                     </span>
                   </li>
                 ))}
