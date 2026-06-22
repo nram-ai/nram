@@ -51,6 +51,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Cache embedded-postgres binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-
       - name: go build
         run: go build ./...
       - name: go test
@@ -146,6 +153,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Cache embedded-postgres binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-
       - name: Wait for Qdrant
         run: |
           for _ in $(seq 1 60); do
