@@ -195,6 +195,59 @@ func TestHNSWStore_UpsertFacets_BruteForceCollapse(t *testing.T) {
 	}
 }
 
+func TestHNSWStore_BestFacetCosines(t *testing.T) {
+	db := setupHNSWTestDB(t)
+	cfg := storage.DefaultHNSWConfig()
+	cfg.SnapshotInterval = 1<<63 - 1
+	store := storage.NewHNSWStore(db, db, cfg)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	nsID := uuid.New()
+	dim := 384
+	axis := func(a int) []float32 { v := make([]float32, dim); v[a] = 1; return v }
+
+	multi := uuid.New()  // facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // axis 5 (facet 0 only)
+	if err := store.UpsertFacets(ctx, multi, nsID, dim, [][]float32{axis(0), axis(5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	if err := store.Upsert(ctx, storage.VectorKindMemory, single, nsID, axis(5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+	missing := uuid.New()
+
+	// Query on axis 5: multi's topic facet (facet 1) is aligned (~1.0) while its
+	// pooled facet 0 (axis 0) is orthogonal (~0). BestFacetCosines must return the
+	// max over facets (~1.0), proving it does not stop at facet 0.
+	got, err := store.BestFacetCosines(ctx, storage.VectorKindMemory, []uuid.UUID{multi, single, missing}, axis(5), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis5: %v", err)
+	}
+	if got[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 5 = %f, want ~1.0 (topic facet, not facet 0)", got[multi])
+	}
+	if got[single] < 0.99 {
+		t.Errorf("single on axis 5 = %f, want ~1.0", got[single])
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("missing id must be absent, got %v", got[missing])
+	}
+
+	// Query on axis 0: multi's facet 0 is aligned (~1.0); single (axis 5) is
+	// orthogonal (~0).
+	got0, err := store.BestFacetCosines(ctx, storage.VectorKindMemory, []uuid.UUID{multi, single}, axis(0), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis0: %v", err)
+	}
+	if got0[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 0 = %f, want ~1.0", got0[multi])
+	}
+	if got0[single] > 0.01 {
+		t.Errorf("single on axis 0 = %f, want ~0", got0[single])
+	}
+}
+
 func TestHNSWStore_UpsertFacets_ReplaceAndDelete(t *testing.T) {
 	db := setupHNSWTestDB(t)
 	cfg := storage.DefaultHNSWConfig()

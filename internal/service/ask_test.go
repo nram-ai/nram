@@ -423,6 +423,27 @@ func (f askFakeVectors) GetByIDs(_ context.Context, _ storage.VectorKind, ids []
 	return out, nil
 }
 
+// askFakeFacetVectors adds the optional bestFacetScorer capability on top of
+// askFakeVectors (whose embs + GetByIDs it embeds), so a test can drive
+// citedQueryCosines down the best-facet branch. The embedded embs feed the pooled
+// expansion gate (relevantEmbedded); best feeds the by-id best-facet score the
+// answer's confidence is built from. Keeping them distinct lets a test prove the
+// cited cosine comes from BestFacetCosines, not the pooled GetByIDs path.
+type askFakeFacetVectors struct {
+	askFakeVectors
+	best map[uuid.UUID]float64
+}
+
+func (f askFakeFacetVectors) BestFacetCosines(_ context.Context, _ storage.VectorKind, ids []uuid.UUID, _ []float32, _ int) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64)
+	for _, id := range ids {
+		if c, ok := f.best[id]; ok {
+			out[id] = c
+		}
+	}
+	return out, nil
+}
+
 func TestAsk_SiblingsRelevanceGated(t *testing.T) {
 	repo := newMockSettingsRepo()
 	repo.put(SettingAskSiblingsPerCandidate, "global", "3")

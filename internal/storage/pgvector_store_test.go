@@ -653,6 +653,62 @@ func TestPgVectorStore_UpsertFacets_SearchCollapsesToBestFacet(t *testing.T) {
 	}
 }
 
+func TestPgVectorStore_BestFacetCosines(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+
+	nsID := uuid.New()
+	multi := uuid.New()  // facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // axis 5 only
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "bestfacet-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	for _, id := range []uuid.UUID{multi, single} {
+		if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", id, nsID, "m"); err != nil {
+			t.Fatalf("insert memory: %v", err)
+		}
+	}
+
+	dim := 384
+	if err := store.UpsertFacets(ctx, multi, nsID, dim, [][]float32{orthEmbedding(dim, 0), orthEmbedding(dim, 5)}); err != nil {
+		t.Fatalf("UpsertFacets multi: %v", err)
+	}
+	if err := store.Upsert(ctx, VectorKindMemory, single, nsID, orthEmbedding(dim, 5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+	missing := uuid.New()
+
+	// Query on axis 5: multi's topic facet (axis 5) is aligned while its pooled
+	// facet 0 (axis 0) is orthogonal; MAX over facets must return ~1.0, proving it
+	// does not stop at facet 0. A missing id is absent.
+	got, err := store.BestFacetCosines(ctx, VectorKindMemory, []uuid.UUID{multi, single, missing}, orthEmbedding(dim, 5), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis5: %v", err)
+	}
+	if got[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 5 = %f, want ~1.0 (topic facet, not facet 0)", got[multi])
+	}
+	if got[single] < 0.99 {
+		t.Errorf("single on axis 5 = %f, want ~1.0", got[single])
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("missing id must be absent, got %v", got[missing])
+	}
+
+	// Query on axis 0: multi's facet 0 is aligned (~1.0); single (axis 5) is ~0.
+	got0, err := store.BestFacetCosines(ctx, VectorKindMemory, []uuid.UUID{multi, single}, orthEmbedding(dim, 0), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis0: %v", err)
+	}
+	if got0[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 0 = %f, want ~1.0", got0[multi])
+	}
+	if got0[single] > 0.01 {
+		t.Errorf("single on axis 0 = %f, want ~0", got0[single])
+	}
+}
+
 func TestPgVectorStore_UpsertFacets_ReplacesSetAndGetByIDsReturnsFacet0(t *testing.T) {
 	store := setupPgVectorTestWithSchema(t)
 	ctx := context.Background()

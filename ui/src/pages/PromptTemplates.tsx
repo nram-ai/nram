@@ -39,6 +39,7 @@ const DREAMING_PROMPTS: SimplePromptSpec[] = [
 
 const ASK_PROMPTS: SimplePromptSpec[] = [
   { systemKey: "ask.synthesis.system_prompt", title: "Answer Synthesis" },
+  { systemKey: "ask.decomposition.system_prompt", title: "Query Decomposition" },
 ];
 
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:

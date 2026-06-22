@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
+
+	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
 
 // qdrantFacetNamespace seeds the deterministic UUIDv5 point IDs for topic facets
@@ -74,8 +76,9 @@ func (s *QdrantStore) SetMaxFacetsResolver(fn func() int) { s.maxFacetsFn = fn }
 
 // Compile-time interface check.
 var (
-	_ VectorStore      = (*QdrantStore)(nil)
-	_ FacetVectorStore = (*QdrantStore)(nil)
+	_ VectorStore       = (*QdrantStore)(nil)
+	_ FacetVectorStore  = (*QdrantStore)(nil)
+	_ FacetCosineReader = (*QdrantStore)(nil)
 )
 
 // NewQdrantStore creates a new QdrantStore connected using the given configuration.
@@ -557,6 +560,81 @@ func (s *QdrantStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.
 		cp := make([]float32, len(vec))
 		copy(cp, vec)
 		out[id] = cp
+	}
+	return out, nil
+}
+
+// BestFacetCosines folds each id's facets to its single best cosine against the
+// query. Facets live as separate points (facet 0 keyed by memory_id, topic facets
+// at deterministic facetPointID UUIDs), so it enumerates every candidate point id
+// per memory up to the configured max_facets, fetches their vectors in one Get,
+// maps each returned point back to its memory via the locally-built point->memory
+// table (no payload dependency), and keeps the max cosine. Non-faceted kinds
+// (entities) resolve to the single id-keyed point.
+func (s *QdrantStore) BestFacetCosines(ctx context.Context, kind VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(ids))
+	if len(ids) == 0 || len(query) == 0 {
+		return out, nil
+	}
+	collection, err := qdrantCollectionName(kind, dimension)
+	if err != nil {
+		return nil, err
+	}
+
+	// Enumerate up to overFetchFor facets per memory: the same configured
+	// max_facets (floored at facetSearchOverFetch) that sizes Search's candidate
+	// window. Flooring rather than taking the raw config is deliberately
+	// over-inclusive — a facet written when the cap was higher is still found, and
+	// non-existent candidate points are simply absent from the Get.
+	maxF := overFetchFor(s.maxFacetsFn)
+	faceted := isFacetedKind(kind)
+
+	// Candidate point ids per memory, with a reverse map so a returned point is
+	// attributed without trusting payload (facet 0's point id IS the memory id;
+	// topic facets are deterministic UUIDv5s we generate here).
+	owner := make(map[uuid.UUID]uuid.UUID, len(ids)*maxF)
+	pointIDs := make([]*qdrant.PointId, 0, len(ids)*maxF)
+	for _, id := range ids {
+		owner[id] = id
+		pointIDs = append(pointIDs, qdrant.NewID(id.String()))
+		if !faceted {
+			continue
+		}
+		for f := 1; f <= maxF; f++ {
+			pid := facetPointID(id, f)
+			owner[pid] = id
+			pointIDs = append(pointIDs, qdrant.NewID(pid.String()))
+		}
+	}
+
+	points, err := s.client.Get(ctx, &qdrant.GetPoints{
+		CollectionName: collection,
+		Ids:            pointIDs,
+		WithVectors:    qdrant.NewWithVectorsEnable(true),
+		WithPayload:    qdrant.NewWithPayloadEnable(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("qdrant: best-facet-cosines get failed for collection %s: %w", collection, err)
+	}
+
+	for _, pt := range points {
+		pid, err := pointIDToUUID(pt.GetId())
+		if err != nil {
+			return nil, fmt.Errorf("qdrant: invalid point ID in best-facet-cosines result: %w", err)
+		}
+		mid, ok := owner[pid]
+		if !ok {
+			continue
+		}
+		v := pt.GetVectors().GetVector()
+		vec := v.GetDenseVector().GetData()
+		if len(vec) == 0 {
+			continue
+		}
+		score := hnsw.CosineSimilarity(query, vec)
+		if cur, ok := out[mid]; !ok || score > cur {
+			out[mid] = score
+		}
 	}
 	return out, nil
 }

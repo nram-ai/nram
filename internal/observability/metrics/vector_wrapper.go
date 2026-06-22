@@ -76,5 +76,20 @@ func (s *instrumentedVectorStore) UpsertFacets(ctx context.Context, memoryID uui
 	return fs.UpsertFacets(ctx, memoryID, namespaceID, dimension, facets)
 }
 
-// compile-time guarantee that the wrapper preserves the facet capability.
-var _ storage.FacetVectorStore = (*instrumentedVectorStore)(nil)
+// BestFacetCosines forwards the by-id best-facet scoring to the wrapped store so
+// the FacetCosineReader capability survives the metrics decorator, mirroring
+// UpsertFacets. Every concrete backend implements it; surface a wrapped store
+// that does not rather than silently degrading.
+func (s *instrumentedVectorStore) BestFacetCosines(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error) {
+	fr, ok := s.inner.(storage.FacetCosineReader)
+	if !ok {
+		return nil, fmt.Errorf("metrics: wrapped vector store %T does not support best-facet scoring", s.inner)
+	}
+	return fr.BestFacetCosines(ctx, kind, ids, query, dimension)
+}
+
+// compile-time guarantee that the wrapper preserves both facet capabilities.
+var (
+	_ storage.FacetVectorStore  = (*instrumentedVectorStore)(nil)
+	_ storage.FacetCosineReader = (*instrumentedVectorStore)(nil)
+)

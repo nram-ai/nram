@@ -121,6 +121,24 @@ type FacetVectorStore interface {
 	UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error
 }
 
+// FacetCosineReader is the read-side counterpart of FacetVectorStore: the
+// optional capability to score known ids against a query on the best-facet scale.
+// It is split from FacetVectorStore (the write capability) on purpose — a backend
+// or test double may implement one without the other, and bundling them would
+// make a fake that only writes facets silently fail the write-path type assertion.
+type FacetCosineReader interface {
+	// BestFacetCosines returns, per requested id, the maximum cosine similarity
+	// between query and any of that id's stored facets (facet 0, the pooled
+	// whole-memory vector, plus the topic facets). It is the by-id analogue of the
+	// max-over-facets collapse that Search performs while ranking: a caller that
+	// already knows the ids it cares about (rather than searching for them) gets a
+	// cosine on the same best-facet scale a Search hit would carry. Missing ids
+	// are absent from the map, like GetByIDs; this is not an error. Non-faceted
+	// kinds (entities) collapse to their single vector. A nil/empty query returns
+	// an empty map.
+	BestFacetCosines(ctx context.Context, kind VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error)
+}
+
 // collapseFacets turns a best-score-per-memory map (the result of folding a
 // faceted Search's over-fetched candidates) into a deterministically ordered
 // VectorSearchResult slice truncated to topK: score descending, ID ascending as

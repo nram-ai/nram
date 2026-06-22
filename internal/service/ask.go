@@ -114,6 +114,9 @@ type AskSynthesisMeta struct {
 	LatencyMs        int64 `json:"latency_ms"`
 	NeighborhoodSize int   `json:"neighborhood_size"`
 	SynthesisFailed  bool  `json:"synthesis_failed,omitempty"`
+	// SubqueryCount is how many decomposition sub-queries were recalled and
+	// unioned into the neighborhood (0 when the question was not decomposed).
+	SubqueryCount int `json:"subquery_count,omitempty"`
 }
 
 // AskResponse is the lean-provenance result of a single-shot synthesis.
@@ -266,6 +269,25 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 		return nil, fmt.Errorf("ask: recall: %w", err)
 	}
 
+	// Query decomposition: an aggregation/compare/classify question is broken
+	// into one focused retrieval sub-query per class, each recalled separately,
+	// so a dominant class cannot bury a minority one in the single broad recall
+	// (the broad-aggregation defect). decomposeQuery returns nil for an ordinary
+	// question, leaving the single recall untouched; a failed sub-query recall is
+	// skipped, so decomposition is strictly additive and fail-soft.
+	recallResponses := []*RecallResponse{recallResp}
+	subqueryCount := 0
+	for _, sub := range s.decomposeQuery(ctx, llm, req, primaryProjectID, primaryNS) {
+		subRR := *rr
+		subRR.Query = sub
+		subResp, serr := s.recall.Recall(ctx, &subRR)
+		if serr != nil {
+			continue
+		}
+		recallResponses = append(recallResponses, subResp)
+		subqueryCount++
+	}
+
 	// The full namespace set recall searched, reused for graph traversal.
 	searchNS := []uuid.UUID{primaryNS}
 	seenNS := map[uuid.UUID]bool{primaryNS: true}
@@ -308,22 +330,52 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	//    neighborhood adaptive: a narrow query with one strong answer collapses to
 	//    it; a broad query keeps its cluster of comparable hits; the off-topic
 	//    tail that diluted synthesis is dropped.
+	//
+	//    Each recall response (the original plus any decomposition sub-queries) is
+	//    floored against its OWN top score, never a shared global top: a minority
+	//    sub-query's candidates carry lower absolute scores than the majority
+	//    query's, so flooring them against the global top would drop the whole
+	//    minority class — the exact failure decomposition exists to fix. Survivors
+	//    are then merged round-robin (rank-1 of each response, then rank-2, ...)
+	//    so every sub-query contributes before the neighborhood cap fills, deduped
+	//    by the shared addMem/seenMem. With no decomposition this is exactly the
+	//    single floored recall as before.
 	minRatio := s.settings.ResolveFloatWithDefault(ctx, SettingAskNeighborhoodMinScoreRatio, "global")
-	var topScore float64
-	for i := range recallResp.Memories {
-		if recallResp.Memories[i].Score > topScore {
-			topScore = recallResp.Memories[i].Score
+	floored := make([][]*RecallResult, 0, len(recallResponses))
+	for _, resp := range recallResponses {
+		var top float64
+		for i := range resp.Memories {
+			if resp.Memories[i].Score > top {
+				top = resp.Memories[i].Score
+			}
 		}
+		floor := minRatio * top
+		survivors := make([]*RecallResult, 0, len(resp.Memories))
+		for i := range resp.Memories {
+			if resp.Memories[i].Score >= floor {
+				survivors = append(survivors, &resp.Memories[i])
+			}
+		}
+		floored = append(floored, survivors)
 	}
-	scoreFloor := minRatio * topScore
 	sources := make([]AskSource, 0, len(recallResp.Memories))
-	for i := range recallResp.Memories {
-		m := &recallResp.Memories[i]
-		if m.Score < scoreFloor {
-			continue
+	for rank := 0; ; rank++ {
+		progressed := false
+		for _, survivors := range floored {
+			if rank >= len(survivors) {
+				continue
+			}
+			progressed = true
+			m := survivors[rank]
+			before := len(neighborhood)
+			addMem(m.ID, m.Content, m.ProjectSlug)
+			if len(neighborhood) > before {
+				sources = append(sources, AskSource{MemoryID: m.ID, ProjectSlug: m.ProjectSlug, Score: m.VectorCosine})
+			}
 		}
-		addMem(m.ID, m.Content, m.ProjectSlug)
-		sources = append(sources, AskSource{MemoryID: m.ID, ProjectSlug: m.ProjectSlug, Score: m.VectorCosine})
+		if !progressed || len(neighborhood) >= maxMemories {
+			break
+		}
 	}
 
 	// Graph and sibling expansion add memories connected to the query topic that
@@ -398,6 +450,7 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	meta := AskSynthesisMeta{
 		LatencyMs:        time.Since(start).Milliseconds(),
 		NeighborhoodSize: len(neighborhood),
+		SubqueryCount:    subqueryCount,
 	}
 
 	// --- Synthesize -----------------------------------------------------------
@@ -408,27 +461,25 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 		return &AskResponse{Answer: "", Sources: sources, Confidence: 0, SynthesisMeta: meta}, nil
 	}
 
-	// Renumber the model's raw-id citations into footnote markers ([1], [2], …)
+	// Renumber the model's raw-id citations into footnote markers ([1], [2], ...)
 	// and collect the cited memories in citation order. Hallucinated citations
 	// (ids not in the neighborhood) are stripped. When the synthesis actually
 	// cited sources, those become the response's sources (what the answer drew
 	// on, footnote-numbered); otherwise we fall back to the retrieved candidates.
-	// cosineByID maps each recall candidate to its absolute query cosine (nil for
-	// non-vector candidates). Cited sources draw their score from it, and the
-	// cited recall cosines drive confidence — so a cited graph/sibling source
-	// carries no score and cannot inflate confidence.
-	cosineByID := make(map[uuid.UUID]*float64, len(recallResp.Memories))
-	for i := range recallResp.Memories {
-		cosineByID[recallResp.Memories[i].ID] = recallResp.Memories[i].VectorCosine
-	}
+	// Each cited source is scored by its cosine to the ORIGINAL question via
+	// citedQueryCosines, so a citation that entered through a decomposition
+	// sub-query, graph traversal, or sibling expansion contributes the same kind
+	// of query-relative evidence as a direct recall hit rather than nothing. The
+	// scores feed both the response sources and confidence.
 	answer, cited := renumberCitations(answer, neighborhood)
-	var citedRecallCosines []float64
+	var citedCosines []float64
 	if len(cited) > 0 {
+		scoreByID := s.citedQueryCosines(ctx, cited, recallResp)
 		sources = make([]AskSource, 0, len(cited))
 		for i, nm := range cited {
-			score := cosineByID[nm.memoryID]
+			score := scoreByID[nm.memoryID]
 			if score != nil {
-				citedRecallCosines = append(citedRecallCosines, *score)
+				citedCosines = append(citedCosines, *score)
 			}
 			sources = append(sources, AskSource{
 				MemoryID:    nm.memoryID,
@@ -455,7 +506,7 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	return &AskResponse{
 		Answer:        answer,
 		Sources:       sources,
-		Confidence:    askConfidence(citedRecallCosines, answer, floor, ceiling),
+		Confidence:    askConfidence(citedCosines, answer, floor, ceiling),
 		SynthesisMeta: meta,
 	}, nil
 }
@@ -649,6 +700,70 @@ func (s *AskService) appendByIDs(
 // it is not admitted. This is what makes graph/sibling expansion safe to keep
 // on: a connected memory joins the neighborhood only when it actually matches
 // the question, not merely because it shares an entity or tag.
+// citedQueryCosines returns, per cited memory, its absolute cosine to the
+// ORIGINAL question embedding, so confidence reflects the evidence the answer
+// actually drew on regardless of which channel surfaced each citation.
+//
+// An original recall hit keeps its stored VectorCosine: that is already the
+// best-facet cosine to the question and already sits on the confidence
+// calibration band, so recall-cited answers score exactly as before. Every other
+// cited source (a decomposition sub-query candidate, whose own VectorCosine is
+// relative to the sub-query rather than the question; or a graph/sibling
+// expansion memory, which was never a recall candidate) is scored against the
+// question on the best-facet scale — the max cosine over the memory's facets,
+// the same scale recall ranks by — when the hydrator implements bestFacetScorer.
+// Scoring these on the pooled facet-0 vector instead would put them 0.1-0.25
+// below recall hits for the same relevance, dragging confidence down on exactly
+// the decomposed answers this path exists to serve; best-facet keeps both kinds
+// of cited cosine on one scale so the calibration band stays valid untouched. A
+// hydrator without the best-facet capability falls back to the pooled facet-0
+// GetByIDs + cosineSim path. Nil-safe: with no hydrator, no query embedding, or a
+// missing stored vector, the source simply carries no score (the prior behavior
+// for non-recall citations), so lexical-only deployments do not regress.
+func (s *AskService) citedQueryCosines(ctx context.Context, cited []neighborMemory, recallResp *RecallResponse) map[uuid.UUID]*float64 {
+	out := make(map[uuid.UUID]*float64, len(cited))
+	orig := make(map[uuid.UUID]*float64, len(recallResp.Memories))
+	for i := range recallResp.Memories {
+		orig[recallResp.Memories[i].ID] = recallResp.Memories[i].VectorCosine
+	}
+	var needHydrate []uuid.UUID
+	for _, nm := range cited {
+		if vc, ok := orig[nm.memoryID]; ok && vc != nil {
+			out[nm.memoryID] = vc
+			continue
+		}
+		needHydrate = append(needHydrate, nm.memoryID)
+	}
+	if len(needHydrate) == 0 || s.vectors == nil || len(recallResp.QueryEmbedding) == 0 {
+		return out
+	}
+	if bf, ok := s.vectors.(bestFacetScorer); ok {
+		cosines, err := bf.BestFacetCosines(ctx, storage.VectorKindMemory, needHydrate, recallResp.QueryEmbedding, recallResp.QueryEmbeddingDim)
+		if err != nil {
+			return out
+		}
+		for _, id := range needHydrate {
+			if c, ok := cosines[id]; ok {
+				cc := c
+				out[id] = &cc
+			}
+		}
+		return out
+	}
+	// Fallback: hydrate the pooled facet-0 vector and score it directly.
+	embs, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, needHydrate, recallResp.QueryEmbeddingDim)
+	if err != nil {
+		return out
+	}
+	for _, id := range needHydrate {
+		if e, ok := embs[id]; ok {
+			c := cosineSim(recallResp.QueryEmbedding, e)
+			out[id] = &c
+		}
+	}
+	return out
+}
+
 func (s *AskService) relevantEmbedded(ctx context.Context, ids []uuid.UUID, queryEmb []float32, dim int, floor float64) map[uuid.UUID]bool {
 	keep := make(map[uuid.UUID]bool)
 	if s.vectors == nil || len(queryEmb) == 0 || len(ids) == 0 {

@@ -50,8 +50,9 @@ func (s *PgVectorStore) SetMaxFacetsResolver(fn func() int) { s.maxFacetsFn = fn
 
 // Compile-time interface checks.
 var (
-	_ VectorStore      = (*PgVectorStore)(nil)
-	_ FacetVectorStore = (*PgVectorStore)(nil)
+	_ VectorStore       = (*PgVectorStore)(nil)
+	_ FacetVectorStore  = (*PgVectorStore)(nil)
+	_ FacetCosineReader = (*PgVectorStore)(nil)
 )
 
 // NewPgVectorStore creates a new PgVectorStore from the given DSN.
@@ -377,6 +378,42 @@ func (s *PgVectorStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uui
 		return nil, fmt.Errorf("pgvector: get-by-ids rows error: %w", err)
 	}
 
+	return out, nil
+}
+
+// BestFacetCosines folds a memory's facets to its single best cosine against the
+// query in SQL: <=> is the cosine-distance operator (always, independent of the
+// column's index opclass), so 1 - (embedding <=> query) is cosine similarity, and
+// MAX(...) GROUP BY id keeps the strongest facet. The faceted memory table holds
+// facet 0 plus topic facets, so every facet participates; entity tables hold one
+// row per id and collapse to it.
+func (s *PgVectorStore) BestFacetCosines(ctx context.Context, kind VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(ids))
+	if len(ids) == 0 || len(query) == 0 {
+		return out, nil
+	}
+	spec, err := resolveTableSpec(kind, dimension)
+	if err != nil {
+		return nil, err
+	}
+	q := fmt.Sprintf(`SELECT %s, MAX(1 - (embedding <=> $1)) FROM %s WHERE %s = ANY($2) GROUP BY %s`,
+		spec.idColumn, spec.table, spec.idColumn, spec.idColumn)
+	rows, err := s.pool.Query(ctx, q, pgvector.NewVector(query), ids)
+	if err != nil {
+		return nil, fmt.Errorf("pgvector: best-facet-cosines query failed for table %s: %w", spec.table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var sim float64
+		if err := rows.Scan(&id, &sim); err != nil {
+			return nil, fmt.Errorf("pgvector: best-facet-cosines scan failed: %w", err)
+		}
+		out[id] = sim
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgvector: best-facet-cosines rows error: %w", err)
+	}
 	return out, nil
 }
 

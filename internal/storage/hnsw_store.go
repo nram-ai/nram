@@ -117,8 +117,9 @@ type HNSWStore struct {
 
 // Compile-time interface check.
 var (
-	_ VectorStore      = (*HNSWStore)(nil)
-	_ FacetVectorStore = (*HNSWStore)(nil)
+	_ VectorStore       = (*HNSWStore)(nil)
+	_ FacetVectorStore  = (*HNSWStore)(nil)
+	_ FacetCosineReader = (*HNSWStore)(nil)
 )
 
 // NewHNSWStore creates a new HNSWStore backed by the given SQLite database.
@@ -459,21 +460,13 @@ func (s *HNSWStore) Search(ctx context.Context, kind VectorKind, embedding []flo
 	return collapseFacets(best, namespaceID, topK), nil
 }
 
-// scanFacetCandidates brute-forces the topic facets (facet_id > 0) for a
-// namespace/dimension, folding the best cosine per memory into best. This is the
-// SQLite brute-force backend's multi-vector path; topic facets are not in the
-// HNSW graph.
-func (s *HNSWStore) scanFacetCandidates(ctx context.Context, spec hnswTableSpec, embedding []float32, namespaceID uuid.UUID, dimension int, best map[uuid.UUID]float64) error {
-	rows, err := s.readDB.QueryContext(ctx,
-		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ? AND facet_id > 0", spec.idColumn, spec.vectorTable),
-		namespaceID.String(), dimension)
-	if err != nil {
-		return fmt.Errorf("hnsw: scan facets: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	// The query vector's norm is constant across the scan; compute it once and
-	// use CosineSimilarityWithNorms so each row only pays its own Norm.
-	queryNorm := hnsw.Norm(embedding)
+// foldBestFacetCosine scans (id, embedding-blob) rows, decodes each vector, scores
+// it against query, and folds the maximum cosine per id into out. queryNorm is
+// passed in (the query is constant across the scan, so its norm is computed once)
+// and CosineSimilarityWithNorms makes each row pay only its own Norm. Shared by
+// the two SQLite facet readers — scanFacetCandidates (topic facets, for Search)
+// and BestFacetCosines (all facets, by id) — which differ only in their SQL.
+func foldBestFacetCosine(rows *sql.Rows, query []float32, queryNorm float32, out map[uuid.UUID]float64) error {
 	for rows.Next() {
 		var idStr string
 		var blob []byte
@@ -488,15 +481,75 @@ func (s *HNSWStore) scanFacetCandidates(ctx context.Context, spec hnswTableSpec,
 		if err != nil {
 			return fmt.Errorf("hnsw: decode facet vector for %s: %w", id, err)
 		}
-		score := hnsw.CosineSimilarityWithNorms(embedding, vec, queryNorm, hnsw.Norm(vec))
-		if cur, ok := best[id]; !ok || score > cur {
-			best[id] = score
+		score := hnsw.CosineSimilarityWithNorms(query, vec, queryNorm, hnsw.Norm(vec))
+		if cur, ok := out[id]; !ok || score > cur {
+			out[id] = score
 		}
 	}
-	if err := rows.Err(); err != nil {
+	return rows.Err()
+}
+
+// scanFacetCandidates brute-forces the topic facets (facet_id > 0) for a
+// namespace/dimension, folding the best cosine per memory into best. This is the
+// SQLite brute-force backend's multi-vector path; topic facets are not in the
+// HNSW graph.
+func (s *HNSWStore) scanFacetCandidates(ctx context.Context, spec hnswTableSpec, embedding []float32, namespaceID uuid.UUID, dimension int, best map[uuid.UUID]float64) error {
+	rows, err := s.readDB.QueryContext(ctx,
+		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ? AND facet_id > 0", spec.idColumn, spec.vectorTable),
+		namespaceID.String(), dimension)
+	if err != nil {
+		return fmt.Errorf("hnsw: scan facets: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if err := foldBestFacetCosine(rows, embedding, hnsw.Norm(embedding), best); err != nil {
 		return fmt.Errorf("hnsw: iterate facets: %w", err)
 	}
 	return nil
+}
+
+// BestFacetCosines folds each id's facets to its single best cosine against the
+// query. Unlike GetByIDs (which returns facet 0 from the graph), this reads the
+// embedding blobs straight from the vector table with no facet filter, so the
+// pooled facet 0 and every topic facet are scored and the maximum kept — the
+// by-id analogue of scanFacetCandidates' max-over-facets fold. The query norm is
+// constant across the scan, so it is computed once.
+func (s *HNSWStore) BestFacetCosines(ctx context.Context, kind VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(ids))
+	if len(ids) == 0 || len(query) == 0 {
+		return out, nil
+	}
+	if !SupportedVectorDimensions[dimension] {
+		return nil, fmt.Errorf("hnsw: unsupported dimension %d", dimension)
+	}
+	spec, err := hnswSpecForKind(kind)
+	if err != nil {
+		return nil, err
+	}
+
+	placeholders := make([]byte, 0, 2*len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, dimension)
+	for i, id := range ids {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, id.String())
+	}
+	// No facet filter: every facet row (facet 0 + topic facets) is scored so the
+	// max reflects the best-matching facet, exactly as Search ranks.
+	q := fmt.Sprintf("SELECT %s, embedding FROM %s WHERE dimension = ? AND %s IN (",
+		spec.idColumn, spec.vectorTable, spec.idColumn) + string(placeholders) + ")"
+	rows, err := s.readDB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("hnsw: best-facet-cosines lookup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if err := foldBestFacetCosine(rows, query, hnsw.Norm(query), out); err != nil {
+		return nil, fmt.Errorf("hnsw: iterate best-facet-cosines: %w", err)
+	}
+	return out, nil
 }
 
 // GetByIDs resolves namespace_id from the kind's vector table first, then

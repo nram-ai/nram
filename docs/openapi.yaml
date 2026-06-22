@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.9.0
+  version: 0.10.0
   license:
     name: MIT
 
@@ -5971,6 +5971,11 @@ components:
         - "api.rate_limit_rps"
         - "ask.confidence.cosine_ceiling"
         - "ask.confidence.cosine_floor"
+        - "ask.decomposition.enabled"
+        - "ask.decomposition.max_subqueries"
+        - "ask.decomposition.max_tokens"
+        - "ask.decomposition.system_prompt"
+        - "ask.decomposition.temperature"
         - "ask.enabled"
         - "ask.expansion.cosine_floor"
         - "ask.graph.depth"

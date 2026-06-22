@@ -654,6 +654,7 @@ const (
 	SettingDreamAlignmentSystemPrompt     = "dreaming.alignment_system_prompt"
 	SettingDreamNoveltyJudgeSystemPrompt  = "dreaming.novelty.judge_system_prompt"
 	SettingAskSynthesisSystemPrompt       = "ask.synthesis.system_prompt"
+	SettingAskDecompositionSystemPrompt   = "ask.decomposition.system_prompt"
 )
 
 // Ask synthesis tool settings. The ask tool runs recall over a wide aperture,
@@ -689,6 +690,16 @@ const (
 	// memories out while still pulling in genuinely related context recall
 	// missed. Tuned to the embedder band (qwen3-embedding strong matches ~0.55+).
 	SettingAskExpansionCosineFloor = "ask.expansion.cosine_floor"
+	// Query decomposition: before recall, an aggregation/compare/classify question
+	// is broken into one focused retrieval sub-query per class so the minority
+	// class is not buried by the majority in a single broad recall. Each
+	// sub-query is recalled and floored against its own top, then the results are
+	// unioned. enabled gates it (under SettingAskEnabled); max_subqueries caps the
+	// fan-out; the decomposition completion reuses the ask synthesis provider.
+	SettingAskDecompositionEnabled       = "ask.decomposition.enabled"
+	SettingAskDecompositionMaxSubqueries = "ask.decomposition.max_subqueries"
+	SettingAskDecompositionMaxTokens     = "ask.decomposition.max_tokens"
+	SettingAskDecompositionTemperature   = "ask.decomposition.temperature"
 )
 
 // Provider prompt-delivery and Ollama keep-warm runtime settings.
@@ -829,6 +840,19 @@ If the neighborhood genuinely does not contain the answer, reply exactly: Not in
 
 Answer directly, with no preamble.`
 
+	askDecompositionSystemPromptText = `You rewrite a user's question into focused retrieval sub-queries for a memory search. You do NOT answer the question. You output JSON only.
+
+If answering the question requires enumerating, comparing, or classifying across a dimension (for example "which of my projects are written in C++ and which in TypeScript", "compare X and Y", "list each by category"), output one retrieval query per distinct class or value of that dimension. A single broad query lets a dominant class bury a minority one; a focused per-class query retrieves each class's own cluster.
+
+Make each sub-query keyword-rich, not a bare paraphrase of the question: name the class plus the specific technologies, tools, file types, and terms that distinguish it, so the query lands in that class's cluster of memories. For example, for a C++ class write "C++17 native library, CMake, gcc, header files, elliptic curve" rather than just "projects written in C++"; for a TypeScript class write "TypeScript, tsc, package.json, Node, npm, .ts files".
+
+If the question is a single-topic lookup that needs no breakdown, output an empty list.
+
+Output ONLY this JSON, nothing else:
+{"subqueries":["C++17 native library, CMake, gcc, header files","TypeScript, tsc, package.json, Node, npm"]}
+or, when no decomposition is warranted:
+{"subqueries":[]}` + "\n\n" + minifiedJSONInstruction
+
 	alignmentSystemPromptText = `You are an alignment scorer. You do NOT converse. You output JSON only.
 
 Score how strongly the evidence supports or contradicts the synthesis.
@@ -946,18 +970,23 @@ var settingDefaults = map[string]string{
 	SettingFactSystemPrompt:   factSystemPromptText,
 	SettingEntitySystemPrompt: entitySystemPromptText,
 
-	SettingAskEnabled:                   "false",
-	SettingAskSynthesisSystemPrompt:     askSynthesisSystemPromptText,
-	SettingAskSynthesisTemperature:      "0.1",
-	SettingAskSynthesisMaxTokens:        "4096",
-	SettingAskRecallCandidates:          "12",
-	SettingAskGraphDepth:                "1",
-	SettingAskSiblingsPerCandidate:      "3",
-	SettingAskNeighborhoodMaxMemories:   "20",
-	SettingAskConfidenceCosineFloor:     "0.35",
-	SettingAskConfidenceCosineCeiling:   "0.75",
-	SettingAskNeighborhoodMinScoreRatio: "0.5",
-	SettingAskExpansionCosineFloor:      "0.5",
+	SettingAskEnabled:                    "false",
+	SettingAskSynthesisSystemPrompt:      askSynthesisSystemPromptText,
+	SettingAskSynthesisTemperature:       "0.1",
+	SettingAskSynthesisMaxTokens:         "4096",
+	SettingAskRecallCandidates:           "12",
+	SettingAskGraphDepth:                 "1",
+	SettingAskSiblingsPerCandidate:       "3",
+	SettingAskNeighborhoodMaxMemories:    "20",
+	SettingAskConfidenceCosineFloor:      "0.35",
+	SettingAskConfidenceCosineCeiling:    "0.75",
+	SettingAskNeighborhoodMinScoreRatio:  "0.5",
+	SettingAskExpansionCosineFloor:       "0.5",
+	SettingAskDecompositionEnabled:       "true",
+	SettingAskDecompositionMaxSubqueries: "4",
+	SettingAskDecompositionMaxTokens:     "256",
+	SettingAskDecompositionTemperature:   "0",
+	SettingAskDecompositionSystemPrompt:  askDecompositionSystemPromptText,
 
 	SettingIngestionDecisionEnabled:      "true",
 	SettingIngestionDecisionShadow:       "false",

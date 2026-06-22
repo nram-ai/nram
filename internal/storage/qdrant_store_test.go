@@ -691,6 +691,73 @@ func TestQdrantStore_UpsertFacets_CollapsesToBestFacet(t *testing.T) {
 	}
 }
 
+// TestQdrantStore_BestFacetCosines runs against a live Qdrant (QDRANT_TEST_ADDR):
+// best-facet-by-id must fold over the separately-stored facet points (facet 0 at
+// memory_id, topic facets at derived UUIDv5s) and return the max cosine. Self-
+// contained: unique namespace, deletes only its own points.
+func TestQdrantStore_BestFacetCosines(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	ns := uuid.New()
+	dim := 384
+	multi := uuid.New()  // facet 0 = axis 0, facet 1 = axis 5
+	single := uuid.New() // axis 5 (facet 0 only)
+	axis := func(a int) []float32 {
+		v := make([]float32, dim)
+		v[a] = 1
+		return v
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		_ = store.Delete(ctx, VectorKindMemory, multi)
+		_ = store.Delete(ctx, VectorKindMemory, single)
+	})
+
+	if err := store.UpsertFacets(ctx, multi, ns, dim, [][]float32{axis(0), axis(5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	if err := store.Upsert(ctx, VectorKindMemory, single, ns, axis(5), dim); err != nil {
+		t.Fatalf("Upsert single: %v", err)
+	}
+	missing := uuid.New()
+
+	// Query on axis 5: multi's topic facet is aligned while its facet 0 (axis 0) is
+	// orthogonal; the max over the two facet points must be ~1.0. Missing id absent.
+	got, err := store.BestFacetCosines(ctx, VectorKindMemory, []uuid.UUID{multi, single, missing}, axis(5), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis5: %v", err)
+	}
+	if got[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 5 = %f, want ~1.0 (topic facet, not facet 0)", got[multi])
+	}
+	if got[single] < 0.99 {
+		t.Errorf("single on axis 5 = %f, want ~1.0", got[single])
+	}
+	if _, ok := got[missing]; ok {
+		t.Errorf("missing id must be absent, got %v", got[missing])
+	}
+
+	// Query on axis 0: multi's facet 0 is aligned (~1.0); single (axis 5) ~0.
+	got0, err := store.BestFacetCosines(ctx, VectorKindMemory, []uuid.UUID{multi, single}, axis(0), dim)
+	if err != nil {
+		t.Fatalf("BestFacetCosines axis0: %v", err)
+	}
+	if got0[multi] < 0.99 {
+		t.Errorf("multi best-facet on axis 0 = %f, want ~1.0", got0[multi])
+	}
+	if got0[single] > 0.01 {
+		t.Errorf("single on axis 0 = %f, want ~0", got0[single])
+	}
+}
+
 // TestQdrantStore_IterateVectors_SkipsTopicFacets guards the reverse-migration
 // fix: IterateVectors (the Qdrant->SQL migration source) must yield only facet 0,
 // keyed by memory_id. Without the facet_id filter it would yield topic-facet

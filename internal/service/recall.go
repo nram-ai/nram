@@ -55,6 +55,14 @@ type VectorHydrator interface {
 	GetByIDs(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
 }
 
+// bestFacetScorer is the optional best-facet read capability (storage's faceted
+// backends implement it). ask type-asserts its hydrator to it so a cited source
+// surfaced outside the original recall is scored on the same best-facet scale a
+// recall hit carries; a hydrator without it degrades to pooled facet-0 scoring.
+type bestFacetScorer interface {
+	BestFacetCosines(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, query []float32, dimension int) (map[uuid.UUID]float64, error)
+}
+
 // EntityReader provides entity lookup operations.
 type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
