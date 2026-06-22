@@ -21,7 +21,7 @@ const migrateToPostgresUsage = "usage: nram migrate-to-postgres --database-url <
 // (no flag package), so the usage is hand-maintained here. The bootstrap env
 // vars mirror internal/config/load.go applyEnv; the default port mirrors
 // internal/config DefaultConfig.
-const usageText = `nram ` + version.Version + ` — persistent memory server for AI agents
+const usageText = version.Name + ` (` + version.Short + `) ` + version.Version + `: persistent memory server for AI agents
 
 Usage:
   nram [flags]                 start the server (default when no command is given)
@@ -61,12 +61,16 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, usageText)
 }
 
-// printVersion writes the build identity (semantic version, short commit, dirty
-// flag, and Go runtime) using the embedded VCS stamps. Writes to the version
-// stream are best-effort, so the return values are deliberately ignored.
+// printVersion writes the product identity banner (full name, semantic version,
+// copyright, and license) followed by the build identity (short commit, dirty
+// flag, build time, and Go runtime) read from the embedded VCS stamps. Writes to
+// the version stream are best-effort, so the return values are deliberately
+// ignored.
 func printVersion(w io.Writer) {
 	b := version.Get()
-	_, _ = fmt.Fprintf(w, "nram %s\n", b.Version)
+	_, _ = fmt.Fprintf(w, "%s (%s) %s\n", version.Name, version.Short, b.Version)
+	_, _ = fmt.Fprintf(w, "%s\n", version.Copyright)
+	_, _ = fmt.Fprintf(w, "%s. %s\n\n", version.License, version.Homepage)
 	_, _ = fmt.Fprintf(w, "  commit: %s", b.Commit)
 	if b.Dirty {
 		_, _ = fmt.Fprint(w, " (dirty)")

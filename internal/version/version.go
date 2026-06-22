@@ -15,6 +15,23 @@ import (
 // Version is the semantic version of nram. Bump it by hand on release.
 const Version = "0.10.0"
 
+// Static product identity. These are the single source of truth for the
+// human-facing name, license, and ownership of the binary, kept verbatim in
+// step with LICENSE and packaging/appicon/versioninfo.json so the surfaces do
+// not drift.
+const (
+	// Name is the product's full display name.
+	Name = "Neural Ram"
+	// Short is the CLI/binary name.
+	Short = "nram"
+	// License is the short SPDX-style license name (full text lives in LICENSE).
+	License = "MIT License"
+	// Copyright is the legal copyright notice, identical to the LICENSE header.
+	Copyright = "Copyright (c) 2026 Brandon Lehmann"
+	// Homepage is the project's canonical home page.
+	Homepage = "https://nram.ai"
+)
+
 // BuildInfo describes the identity of a running binary.
 type BuildInfo struct {
 	// Version is the semantic version (see the Version constant).
