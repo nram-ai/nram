@@ -85,16 +85,13 @@ func (wp *WorkerPool) resolveQueryAugmentSettings(ctx context.Context) queryAugm
 // query-augmentation phase. It carries the requested query count and the memory
 // content; the tunable instruction (role, rules, output format) lives entirely
 // in SettingQueryAugmentSystemPrompt, sent as the system message. The count and
-// content are substituted via strings.Replace, not fmt.Sprintf, so a memory body
-// containing literal '%' is safe.
-const queryAugmentUserWrapper = "Generate {N} short, distinct retrieval queries for the memory below.\n\n<memory>\n{content}\n</memory>"
-
 // RenderQueryAugmentUser builds the user message for the query-augmentation
-// phase from the memory content and the requested query count.
+// phase from the memory content and the requested query count. The memory body
+// is nonce-fenced as untrusted data (Fence handles a body containing literal
+// delimiters by regenerating the nonce).
 func RenderQueryAugmentUser(content string, n int) string {
-	out := strings.ReplaceAll(queryAugmentUserWrapper, "{content}", content)
-	out = strings.ReplaceAll(out, "{N}", strconv.Itoa(n))
-	return out
+	return "Generate " + strconv.Itoa(n) + " short, distinct retrieval queries for the memory below.\n\n" +
+		provider.Fence("memory", content)
 }
 
 // ParseQueryAugmentResponse extracts a JSON array of strings from the LLM
@@ -381,7 +378,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// (falling back to the fact provider's model when no dedicated slot is set,
 	// per Registry.GetQueryAugment).
 	req := &provider.CompletionRequest{
-		Messages:  provider.BuildMessages(system, user),
+		Messages:  provider.BuildMessages(provider.GuardedSystem(system), user),
 		MaxTokens: cfg.maxTokens,
 	}
 

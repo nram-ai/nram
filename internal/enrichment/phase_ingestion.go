@@ -139,7 +139,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	system := cfg.systemPrompt
 	user := RenderIngestionUser(mem.Content, matches)
 	req := &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(system, user),
+		Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
 		MaxTokens:   wp.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentIngestionDecisionMaxTokens, "global"),
 		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
 		JSONMode:    true,
@@ -359,21 +359,21 @@ func validateIngestionDecision(d *rawDecision, matches []MemoryMatch) (string, *
 // ingestion-decision phase: the new memory content followed by the candidate
 // list. It is code, not a setting; the tunable instruction (role, rules, output
 // schema) lives entirely in SettingIngestionDecisionSystemPrompt, sent as the
-// system message. The two %s placeholders are the new memory and the candidate
-// block.
-const ingestionUserWrapper = "<new_memory>\n%s\n</new_memory>\n\n<candidates>\n%s\n</candidates>"
+// system message.
 
 // RenderIngestionUser formats the new memory content and candidate list into the
 // user message for the ingestion-decision phase. Each candidate is rendered as
 // `[N] id: <uuid>, created: <RFC3339>, content: <content>`. A nil/empty matches
-// slice yields an empty candidate block (used by the admin test surface).
+// slice yields an empty candidate block (used by the admin test surface). The
+// new memory and candidate block are nonce-fenced as untrusted data.
 func RenderIngestionUser(content string, matches []MemoryMatch) string {
 	var b strings.Builder
 	for i, m := range matches {
 		fmt.Fprintf(&b, "[%d] id: %s, created: %s, content: %s\n",
 			i+1, m.ID, m.CreatedAt.UTC().Format(time.RFC3339), m.Content)
 	}
-	return fmt.Sprintf(ingestionUserWrapper, content, b.String())
+	return provider.Fence("new_memory", content) + "\n\n" +
+		provider.Fence("candidates", strings.TrimRight(b.String(), "\n"))
 }
 
 // truncate caps a string at n bytes without splitting a UTF-8 rune. Walks

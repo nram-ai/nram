@@ -964,7 +964,7 @@ func (p *ContradictionPhase) checkContradiction(
 			ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
 			ctx = provider.WithMemoryID(ctx, a.ID)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(system, user),
+				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,

@@ -172,19 +172,15 @@ func buildExtractionRequest(messages []provider.Message, opts CallOptions) *prov
 // sent as the system message. Exported so the admin test surface renders the
 // exact user message the runtime phases send.
 func RenderExtractionUser(content string) string {
-	return "Text:\n" + content
+	return provider.Fence("text", content)
 }
 
-// contradictionUserWrapper is the dynamic-half template for the contradiction
-// check. It is shared by the dreaming contradiction phase and the enrichment
-// conflict detector, which also share SettingDreamContradictionSystemPrompt, so
-// the user-message shape lives in one place rather than being cloned per package.
-// The two %s slots are the statements being compared.
-const contradictionUserWrapper = "<statement_a>\n%s\n</statement_a>\n\n<statement_b>\n%s\n</statement_b>"
-
 // RenderContradictionUser builds the user message for the contradiction check.
+// Shared by the dreaming contradiction phase and the enrichment conflict
+// detector (which also share SettingDreamContradictionSystemPrompt). Each
+// statement is nonce-fenced so neither body can forge the other's delimiter.
 func RenderContradictionUser(statementA, statementB string) string {
-	return fmt.Sprintf(contradictionUserWrapper, statementA, statementB)
+	return provider.Fence("statement_a", statementA) + "\n\n" + provider.Fence("statement_b", statementB)
 }
 
 // ExtractFactsLLM runs the fact-extraction prompt and parses the response.
@@ -198,7 +194,7 @@ func ExtractFactsLLM(
 ) (*FactExtractionEnvelope, error) {
 	system := ResolveOrDefault(ctx, settings, SettingFactSystemPrompt, "global")
 	user := RenderExtractionUser(content)
-	messages := provider.BuildMessages(system, user)
+	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
 	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), req)
@@ -247,7 +243,7 @@ func ExtractEntitiesLLM(
 ) (*EntityExtractionEnvelope, error) {
 	system := ResolveOrDefault(ctx, settings, SettingEntitySystemPrompt, "global")
 	user := RenderExtractionUser(content)
-	messages := provider.BuildMessages(system, user)
+	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
 	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), req)

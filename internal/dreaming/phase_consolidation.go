@@ -513,7 +513,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(system, user),
+				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
@@ -1681,7 +1681,7 @@ func (p *ConsolidationPhase) synthesize(
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(system, user),
+				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 			})
@@ -1863,7 +1863,7 @@ func (p *ConsolidationPhase) auditNovelty(
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(systemTpl, user),
+				Messages:    provider.BuildMessages(provider.GuardedSystem(systemTpl), user),
 				MaxTokens:   maxTokens,
 				Temperature: noveltyTemperature,
 				JSONMode:    true,
