@@ -1538,6 +1538,70 @@ func makeTestMemoryWithConfidence(id uuid.UUID, nsID uuid.UUID, content string, 
 // importance, and recency; only their stored Confidence differs. The
 // higher-confidence row must rank first AND its score must be strictly
 // greater (so a future regression that drops the term is caught).
+// TestComputeScore_PriorsCannotRescueIrrelevance proves the ranking fix holds
+// for ANY operator's corpus, not just one. It exercises computeScore across the
+// full input space rather than corpus-specific fixtures: every nram deployment
+// runs this identical formula, so a property that holds for all (relevance,
+// prior) inputs holds for every corpus regardless of its content. The
+// multiplicative form (score = relevance * quality) guarantees three invariants.
+func TestComputeScore_PriorsCannotRescueIrrelevance(t *testing.T) {
+	w := DefaultRankingWeights
+	now := time.Now()
+	const maxAccess = 100
+	const decay = 0.01
+
+	// Relevance is carried by similarity (graphRelevance 0); relevance =
+	// w.Similarity * sim. worst/best priors bracket the query-independent terms.
+	worstPriors := func(sim float64) scoredMemory {
+		return scoredMemory{
+			memory:     model.Memory{Importance: 0, Confidence: 0, CreatedAt: now.Add(-100000 * time.Hour), AccessCount: 0},
+			similarity: sim,
+			isPrimary:  false,
+		}
+	}
+	bestPriors := func(sim float64) scoredMemory {
+		return scoredMemory{
+			memory:     model.Memory{Importance: 1, Confidence: 1, CreatedAt: now, AccessCount: maxAccess},
+			similarity: sim,
+			isPrimary:  true,
+		}
+	}
+
+	// Invariant 1: a zero-relevance memory scores 0 no matter how strong its
+	// priors. Priors cannot manufacture relevance on any corpus.
+	if s := computeScore(bestPriors(0), w, now, maxAccess, decay); s != 0 {
+		t.Fatalf("zero-relevance memory with best priors must score 0, got %v", s)
+	}
+
+	// Invariant 2: any positive relevance with the WORST priors outranks zero
+	// relevance with the BEST priors — the on-topic answer always beats the
+	// off-topic-but-important memory (the exact defect that was reported).
+	off := computeScore(bestPriors(0), w, now, maxAccess, decay)
+	for sim := 0.05; sim <= 1.0; sim += 0.05 {
+		on := computeScore(worstPriors(sim), w, now, maxAccess, decay)
+		if on <= off {
+			t.Errorf("relevance %.2f (worst priors)=%.4f must beat irrelevant (best priors)=%.4f", sim, on, off)
+		}
+	}
+
+	// Invariant 3 (bounded guarantee): priors form a bounded multiplier in
+	// [1, 1+W]; once one memory is more relevant than another by more than that
+	// bound, it wins regardless of either's priors. No prior tuning on any corpus
+	// can invert a clear relevance ordering.
+	maxQuality := 1.0 + w.Recency + w.Importance + w.Frequency + w.Confidence + w.Origin
+	for simB := 0.05; simB <= 0.6; simB += 0.05 {
+		simA := simB * maxQuality * 1.02
+		if simA > 1.0 {
+			continue
+		}
+		a := computeScore(worstPriors(simA), w, now, maxAccess, decay) // more relevant, worst priors
+		b := computeScore(bestPriors(simB), w, now, maxAccess, decay)  // less relevant, best priors
+		if a <= b {
+			t.Errorf("relevance %.3f (worst priors)=%.4f should beat relevance %.3f (best priors)=%.4f once the gap exceeds the prior bound %.2f", simA, a, simB, b, maxQuality)
+		}
+	}
+}
+
 func TestRecall_ConfidenceRanksHigher(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
 
@@ -1584,10 +1648,12 @@ func TestRecall_ConfidenceRanksHigher(t *testing.T) {
 	if resp.Memories[0].Score <= resp.Memories[1].Score {
 		t.Errorf("expected strict score gap; got %v vs %v", resp.Memories[0].Score, resp.Memories[1].Score)
 	}
-	// Score delta should be approximately Confidence_weight * (1.0 - 0.5) = 0.025.
+	// Priors modulate relevance multiplicatively, so the confidence gap scales by
+	// the shared relevance base (Similarity*sim = 0.50*0.80 = 0.40): the delta is
+	// relevance * Confidence_weight * (1.0 - 0.5) = 0.40 * 0.05 * 0.5 = 0.010.
 	delta := resp.Memories[0].Score - resp.Memories[1].Score
-	if delta < 0.020 || delta > 0.030 {
-		t.Errorf("expected delta ~= 0.025, got %v", delta)
+	if delta < 0.007 || delta > 0.013 {
+		t.Errorf("expected delta ~= 0.010 (relevance-scaled confidence gap), got %v", delta)
 	}
 }
 
@@ -1696,12 +1762,12 @@ func TestRecall_PerProjectOverrideMerges(t *testing.T) {
 	if resp.Memories[0].ID != highID {
 		t.Errorf("expected high-confidence memory to rank first, got %v", resp.Memories[0].ID)
 	}
-	// Override pumps Confidence weight to 0.50, so the delta should be
-	// ~0.50 * 0.5 = 0.25, much larger than the default-weight delta of
-	// ~0.025 from the previous test.
+	// Override pumps Confidence weight to 0.50; priors scale with the shared
+	// relevance base (0.40), so the delta is 0.40 * 0.50 * 0.5 = 0.10 — ~10x the
+	// default-weight delta of ~0.010 from the previous test.
 	delta := resp.Memories[0].Score - resp.Memories[1].Score
-	if delta < 0.20 || delta > 0.30 {
-		t.Errorf("expected delta ~= 0.25 with project override, got %v", delta)
+	if delta < 0.08 || delta > 0.12 {
+		t.Errorf("expected delta ~= 0.10 with project override, got %v", delta)
 	}
 }
 
@@ -1922,11 +1988,13 @@ func TestRecall_OriginWeightFlipsTie(t *testing.T) {
 	}
 
 	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
-	// Boost the project-affinity term. Default DefaultRankingWeights has
-	// Similarity 0.50, so a 0.05 cosine gap contributes 0.025 to the
-	// score. Origin 0.10 contributes 0.10, which flips the comparison.
+	// Origin is a query-independent prior, so under the multiplicative form it
+	// boosts the project memory's quality by Origin*1.0, lifting it over the
+	// marginally-higher-cosine global (a 0.05 cosine edge is a small relevance
+	// gap that a prior can still break). A prior cannot overcome a LARGE
+	// relevance gap — that is the fix — but it remains a tie-breaker.
 	w := DefaultRankingWeights
-	w.Origin = 0.10
+	w.Origin = 0.30
 	svc.SetWeights(w)
 
 	resp, err := svc.Recall(context.Background(), &RecallRequest{
@@ -1967,10 +2035,14 @@ func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
 			globalMemID:  makeTestMemory(globalMemID, globalNs, "global content", nil, 0.5, 0, now),
 		},
 	}
+	// Near-equal cosines: the primary's Origin override should break this
+	// marginal tie. A large global advantage would (correctly) NOT be overcome
+	// by a prior under the multiplicative form; this test isolates the no-leak
+	// property, so it uses a marginal gap where the override is decisive.
 	vectorSearcher := &mockVectorSearcher{
 		results: []storage.VectorSearchResult{
 			{ID: projectMemID, Score: 0.50, NamespaceID: primaryNs},
-			{ID: globalMemID, Score: 0.95, NamespaceID: globalNs},
+			{ID: globalMemID, Score: 0.52, NamespaceID: globalNs},
 		},
 	}
 	embProvider := &mockEmbeddingProvider{
@@ -1991,11 +2063,11 @@ func TestRecall_OriginWeightOverrideDoesNotLeakAcrossProjects(t *testing.T) {
 	if len(resp.Memories) != 2 {
 		t.Fatalf("expected 2 memories, got %d", len(resp.Memories))
 	}
-	// Verify the global memory is still attributed to "global": the
-	// per-project Origin override applies only to primary-stamped
-	// candidates. The primary candidate's score: 0.50*Sim(0.50) + Origin*1
-	// (0.30) = 0.55. Global's: 0.95*0.50 + Origin*0 = 0.475. Primary wins
-	// because of its own override, not because global was mis-scored.
+	// The per-project Origin=0.30 override applies only to primary-stamped
+	// candidates: it multiplies the primary's quality (1 + 0.30 + shared) over
+	// the global's (1 + shared), flipping the near-equal cosines (0.50 vs 0.52).
+	// Global keeps origin=0 and its 'global' attribution — the override does not
+	// leak across projects.
 	if resp.Memories[0].ID != projectMemID {
 		t.Errorf("primary's Origin=0.30 override should lift the primary memory; got %v first", resp.Memories[0].ID)
 	}

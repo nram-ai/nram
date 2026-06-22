@@ -42,10 +42,12 @@ func TestRecall_RankingWeightsLiveReload(t *testing.T) {
 		},
 	}
 
+	// Near-equal cosines: a prior can break this marginal gap (it cannot
+	// overcome a large one under the multiplicative form — that is the fix).
 	vectorSearcher := &mockVectorSearcher{
 		results: []storage.VectorSearchResult{
-			{ID: highSimLowImp, Score: 0.95, NamespaceID: nsID},
-			{ID: lowSimHighImp, Score: 0.10, NamespaceID: nsID},
+			{ID: highSimLowImp, Score: 0.52, NamespaceID: nsID},
+			{ID: lowSimHighImp, Score: 0.50, NamespaceID: nsID},
 		},
 	}
 
@@ -67,9 +69,10 @@ func TestRecall_RankingWeightsLiveReload(t *testing.T) {
 	settings := NewSettingsService(repo)
 	svc.SetSettings(settings)
 
-	// Phase 1: importance-dominant weights. With similarity=0 and
-	// importance=1, the low-similarity high-importance memory wins.
-	repo.put(SettingRankWeightSim, "global", "0")
+	// Phase 1: importance-dominant weights. Priors multiply relevance, so
+	// similarity stays a small non-zero base; with importance=1 the
+	// high-importance memory's quality multiplier flips the marginal cosine gap.
+	repo.put(SettingRankWeightSim, "global", "0.1")
 	repo.put(SettingRankWeightRec, "global", "0")
 	repo.put(SettingRankWeightImp, "global", "1")
 	repo.put(SettingRankWeightFreq, "global", "0")

@@ -144,6 +144,16 @@ type RecallRequest struct {
 	// owns, delivering a wide-aperture synthesis over the full curated corpus
 	// (§6). The ordinary recall paths leave it nil, so behavior is unchanged.
 	ApertureNamespaceIDs []uuid.UUID `json:"-"`
+	// DemotePrimaryOrigin suppresses the primary-tier origin boost for this
+	// recall. In a wide owner aperture there is no genuine focus tier: the
+	// primary namespace is just a structural seed (the reserved global tier),
+	// so origin-boosting it privileges world-knowledge over the caller's own
+	// project and persona memories and lets it crowd the neighborhood. Setting
+	// this true stamps the primary namespace IsPrimary=false, so no tier is
+	// origin-favored (the "broadcast primary": every tier competes on relevance
+	// alone). Scoped recalls leave it false so the chosen project keeps its
+	// boost.
+	DemotePrimaryOrigin bool `json:"-"`
 }
 
 // RecallResult holds a single recalled memory with its computed score.
@@ -158,12 +168,18 @@ type RecallResult struct {
 	Origin      model.MemoryOrigin `json:"origin"`
 	Score       float64            `json:"score"`
 	Similarity  *float64           `json:"similarity"`
-	Confidence  float64            `json:"confidence"`
-	AccessCount int                `json:"access_count"`
-	Enriched    bool               `json:"enriched"`
-	Metadata    json.RawMessage    `json:"metadata,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	// VectorCosine is the absolute vector cosine to the query (pre-RRF
+	// magnitude), set only for vector-channel candidates and nil otherwise.
+	// Distinct from Similarity, which under fusion is a rank-normalized score;
+	// evidence-magnitude consumers (ask confidence) must use this. Not projected
+	// onto the public recallview.Memory, so the recall API surface is unchanged.
+	VectorCosine *float64        `json:"vector_cosine,omitempty"`
+	Confidence   float64         `json:"confidence"`
+	AccessCount  int             `json:"access_count"`
+	Enriched     bool            `json:"enriched"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 
 	// embedding carries the candidate's hydrated embedding through to the
 	// MMR rerank stage. Unexported so JSON serialization drops it. Nil for
@@ -193,6 +209,13 @@ type RecallResponse struct {
 	// group's last surviving candidate died: "tag_filter", "threshold", or
 	// "limit".
 	CoverageGaps []CoverageGap `json:"coverage_gaps,omitempty"`
+
+	// QueryEmbedding and QueryEmbeddingDim expose the query's embedding for
+	// internal consumers (the ask service) that relevance-gate additional
+	// candidates against the query. Empty/zero when recall ran without the
+	// embedder (lexical or list-fallback path). Not serialized.
+	QueryEmbedding    []float32 `json:"-"`
+	QueryEmbeddingDim int       `json:"-"`
 }
 
 // CoverageGap describes a prefix-group observed in the candidate pool but
@@ -415,8 +438,14 @@ func (s *RecallService) SetFusion(cfg FusionConfig) {
 
 // scoredMemory is an internal type used during ranking.
 type scoredMemory struct {
-	memory         model.Memory
-	similarity     float64
+	memory     model.Memory
+	similarity float64
+	// vectorCosine is the candidate's absolute vector cosine to the query (the
+	// pre-RRF magnitude), distinct from similarity which under fusion holds the
+	// post-RRF max-normalized rank score. Zero unless the candidate surfaced via
+	// the vector channel. Surfaced as RecallResult.VectorCosine for consumers
+	// that need evidence strength, not rank position (e.g. ask confidence).
+	vectorCosine   float64
 	graphRelevance float64
 	projectID      uuid.UUID
 	projectSlug    string
@@ -560,7 +589,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// global namespaces. Falls back to the primary stamp when a namespace has
 	// no owning project.
 	projectByNamespace := map[uuid.UUID]projectAttribution{
-		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: true},
+		namespaceID: {ProjectID: projectID, ProjectSlug: projectSlug, IsPrimary: !req.DemotePrimaryOrigin},
 	}
 	seedAttribution := func(ns uuid.UUID) {
 		if ns == namespaceID {
@@ -702,13 +731,19 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				// lexical-only fusion hits do not falsely advertise vector
 				// evidence.
 				vecIDs := make(map[uuid.UUID]struct{})
+				// absCosine carries each vector candidate's absolute cosine
+				// (pre-RRF magnitude). The fusion branch fills it from
+				// runHybridSearch; the non-fusion branch mirrors the raw cosine
+				// it stores in simMap. Consumed when building
+				// scoredMemory.vectorCosine.
+				absCosine := make(map[uuid.UUID]float64)
 				if effFusion.Enabled && s.lexical != nil {
 					// Hybrid path: fan out vector + lexical per namespace,
 					// then fuse via RRF. The fused score (normalized to
 					// [0, 1] by max) replaces raw cosine similarity in the
 					// downstream computeScore. RankingWeights.Similarity
 					// semantics are unchanged from the caller's view.
-					simMap, vecIDs = s.runHybridSearch(ctx, runHybridArgs{
+					simMap, vecIDs, absCosine = s.runHybridSearch(ctx, runHybridArgs{
 						Query:          req.Query,
 						Embedding:      resp.Embeddings[0],
 						Dim:            actualDim,
@@ -735,9 +770,13 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							if rawCosineFloor > 0 && !(r.Score >= rawCosineFloor) {
 								continue
 							}
-							// Keep the best score if a memory appears in multiple searches.
+							// Keep the best score if a memory appears in multiple
+							// searches. In the non-fusion branch the raw cosine IS
+							// the simMap value, so absCosine mirrors it for the
+							// magnitude consumers (ask confidence).
 							if existing, ok := simMap[r.ID]; !ok || r.Score > existing {
 								simMap[r.ID] = r.Score
+								absCosine[r.ID] = r.Score
 							}
 							vecIDs[r.ID] = struct{}{}
 						}
@@ -781,6 +820,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 							candidates = append(candidates, scoredMemory{
 								memory:        mem,
 								similarity:    sim,
+								vectorCosine:  absCosine[mem.ID],
 								projectID:     attr.ProjectID,
 								projectSlug:   attr.ProjectSlug,
 								namespacePath: namespacePath,
@@ -1169,9 +1209,14 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		// indistinguishable from a vector row whose cosine genuinely was
 		// zero.
 		var sim *float64
+		var vecCos *float64
 		if c.viaVector {
 			sv := c.similarity
 			sim = &sv
+			if c.vectorCosine > 0 {
+				vc := c.vectorCosine
+				vecCos = &vc
+			}
 		}
 
 		tags := c.memory.Tags
@@ -1179,23 +1224,24 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			tags = []string{}
 		}
 		passing = append(passing, RecallResult{
-			ID:          c.memory.ID,
-			ProjectID:   c.projectID,
-			ProjectSlug: c.projectSlug,
-			Path:        c.namespacePath,
-			Content:     c.memory.Content,
-			Tags:        tags,
-			Source:      c.memory.Source,
-			Origin:      c.memory.Origin,
-			Score:       score,
-			Similarity:  sim,
-			Confidence:  c.memory.Confidence,
-			AccessCount: c.memory.AccessCount,
-			Enriched:    c.memory.Enriched,
-			Metadata:    c.memory.Metadata,
-			CreatedAt:   c.memory.CreatedAt,
-			UpdatedAt:   c.memory.UpdatedAt,
-			embedding:   c.embedding,
+			ID:           c.memory.ID,
+			ProjectID:    c.projectID,
+			ProjectSlug:  c.projectSlug,
+			Path:         c.namespacePath,
+			Content:      c.memory.Content,
+			Tags:         tags,
+			Source:       c.memory.Source,
+			Origin:       c.memory.Origin,
+			Score:        score,
+			Similarity:   sim,
+			VectorCosine: vecCos,
+			Confidence:   c.memory.Confidence,
+			AccessCount:  c.memory.AccessCount,
+			Enriched:     c.memory.Enriched,
+			Metadata:     c.memory.Metadata,
+			CreatedAt:    c.memory.CreatedAt,
+			UpdatedAt:    c.memory.UpdatedAt,
+			embedding:    c.embedding,
 		})
 	}
 
@@ -1271,9 +1317,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 			Entities:      graphEntities,
 			Relationships: graphRelationships,
 		},
-		TotalSearched: totalSearched,
-		LatencyMs:     latency,
-		CoverageGaps:  coverageGaps,
+		TotalSearched:     totalSearched,
+		LatencyMs:         latency,
+		CoverageGaps:      coverageGaps,
+		QueryEmbedding:    queryEmbedding,
+		QueryEmbeddingDim: queryEmbeddingDim,
 	}, nil
 }
 
@@ -1300,15 +1348,17 @@ type runHybridArgs struct {
 }
 
 // runHybridSearch returns a simMap normalized to [0, 1] (so the caller can
-// drop it into scoredMemory.similarity unchanged) plus the set of IDs that
-// surfaced via the vector channel. The vecIDs set lets the caller tell true
-// vector-evidence rows from lexical-only RRF entries when populating
-// scoredMemory.viaVector.
+// drop it into scoredMemory.similarity unchanged), the set of IDs that surfaced
+// via the vector channel, and an absCosine map of each vector hit's absolute
+// pre-RRF cosine. The vecIDs set lets the caller tell true vector-evidence rows
+// from lexical-only RRF entries when populating scoredMemory.viaVector.
+// absCosine preserves the evidence magnitude that RRF rank-normalization
+// discards, for consumers (ask confidence) that need strength, not position.
 //
 // Both channels' errors are swallowed by design: a vector hiccup or
 // unparseable lexical query must not strand a recall that the other
 // channel can still serve.
-func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs) (map[uuid.UUID]float64, map[uuid.UUID]struct{}) {
+func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs) (map[uuid.UUID]float64, map[uuid.UUID]struct{}, map[uuid.UUID]float64) {
 	// channelResult pairs the (possibly filtered) ranks with the channel's
 	// pre-filter length, so NormalizePerChannel can divide by the channel's
 	// natural depth rather than the post-RawCosineFloor survivor count.
@@ -1393,6 +1443,17 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 	})
 	vecRankings = []channelResult{pooledVec}
 
+	// absCosine preserves each vector hit's absolute cosine (pooledVec.ranks
+	// carry it in .Rank, before RRF), keyed by memory id and maxed when a memory
+	// matched in more than one namespace. RRF below collapses magnitude to rank
+	// position; this retains the true cosine for evidence-strength consumers.
+	absCosine := make(map[uuid.UUID]float64, len(pooledVec.ranks))
+	for _, r := range pooledVec.ranks {
+		if existing, ok := absCosine[r.ID]; !ok || r.Rank > existing {
+			absCosine[r.ID] = r.Rank
+		}
+	}
+
 	// Compose the ranking list and per-list weights for RRF. The vector channel
 	// is now a single pooled list; the lexical channel is still one list per
 	// namespace. The shared loops below apply each list's channel weight
@@ -1475,7 +1536,7 @@ func (s *RecallService) runHybridSearch(ctx context.Context, args runHybridArgs)
 		)
 	}
 
-	return simMap, vecIDs
+	return simMap, vecIDs, absCosine
 }
 
 // addNewEntities appends entities from src to dst, skipping any whose ID is
@@ -1537,13 +1598,28 @@ func computeScore(c scoredMemory, w RankingWeights, now time.Time, maxAccess int
 		originScore = 1.0
 	}
 
-	return w.Similarity*clampScore(c.similarity) +
+	// Relevance is the query-DEPENDENT base: how well this memory matches the
+	// query, by fused vector+lexical similarity and by graph connection to the
+	// query-activated entities.
+	relevance := w.Similarity*clampScore(c.similarity) + w.GraphRelevance*c.graphRelevance
+
+	// Quality priors are query-INDEPENDENT properties of the memory (recency,
+	// importance, access frequency, confidence, primary-tier origin). They
+	// MODULATE relevance rather than adding to it: a prior cannot rescue an
+	// off-topic memory, because an irrelevant candidate (relevance ~ 0) scores
+	// ~ 0 no matter how important, recent, or trusted it is, while a relevant
+	// candidate is boosted by good priors. This makes relevance a prerequisite
+	// instead of just one term in a sum — without it a high-importance,
+	// well-connected, or recently-touched memory can outrank the on-topic answer
+	// on any corpus (the additive form's core defect).
+	quality := 1.0 +
 		w.Recency*recencyScore +
 		w.Importance*c.memory.Importance +
 		w.Frequency*frequencyScore +
-		w.GraphRelevance*c.graphRelevance +
 		w.Confidence*clampScore(c.memory.Confidence) +
 		w.Origin*originScore
+
+	return relevance * quality
 }
 
 // recallDefaultLimit returns the default page size when the caller passes
