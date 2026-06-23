@@ -19,6 +19,10 @@ const (
 	ConflictDetected       = "conflict.detected"
 	EnrichmentFailed       = "enrichment.failed"
 	ProjectDeleted         = "project.deleted"
+	// ProjectUpdated fires when a project's description is created or changed.
+	// The dreaming DirtyTracker turns it into a MarkDirty so the
+	// project_description_sync phase runs and reconciles the backing memory.
+	ProjectUpdated = "project.updated"
 
 	// Dream lifecycle events.
 	DreamCycleStarted    = "dream.cycle.started"

@@ -127,6 +127,11 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		if m.DeletedAt != nil {
 			continue
 		}
+		// Shield: never let paraphrase-merge supersede a system-owned
+		// project-description backing row.
+		if isProjectDescription(&m) {
+			continue
+		}
 		if m.SupersededBy != nil {
 			stats["filtered_superseded"] = stats["filtered_superseded"].(int) + 1
 			continue

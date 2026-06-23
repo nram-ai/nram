@@ -524,6 +524,12 @@ func (p *ContradictionPhase) collectStale(memories []model.Memory) []staleMemory
 		if m.DeletedAt != nil {
 			continue
 		}
+		// Shield: never let contradiction-supersede touch a system-owned
+		// project-description backing row; the project_description_sync phase
+		// owns its lifecycle.
+		if isProjectDescription(&m) {
+			continue
+		}
 		meta := decodeMetadata(m.Metadata)
 		if !bytes.Contains(m.Metadata, stampMarker) {
 			stale = append(stale, staleMemory{Mem: m, Meta: meta})

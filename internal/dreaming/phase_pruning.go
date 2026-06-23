@@ -396,6 +396,13 @@ func (p *PruningPhase) writePhaseSummary(ctx context.Context, logger *DreamLogWr
 }
 
 func (p *PruningPhase) shouldPrune(mem *model.Memory, now time.Time, zeroFloor float64) (bool, string) {
+	// Project-description backing memories are system-owned, reconciled from the
+	// projects table by the project_description_sync phase. Dreaming must never
+	// prune them out from under that phase; it owns their lifecycle.
+	if isProjectDescription(mem) {
+		return false, ""
+	}
+
 	// Superseded memories with zero access since they were superseded. The
 	// supersede clock reads SupersededAt so unrelated row touches that bump
 	// UpdatedAt do not reset the 7d countdown. UpdatedAt is the fallback for

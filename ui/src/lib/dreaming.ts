@@ -2,6 +2,7 @@ import type { DreamLog } from "../api/client";
 import { formatLatencyMs } from "./formatters";
 
 export const PHASE_LABELS: Record<string, string> = {
+  project_description_sync: "Project Descriptions",
   entity_dedup: "Entity Dedup",
   embedding_backfill: "Embedding Backfill",
   augmentation_backfill: "Augmentation Backfill",
@@ -24,6 +25,7 @@ export const SUB_PHASE_LABELS: Record<string, string> = {
 // on dynamic-width segments is JIT-safe, Tailwind's purge can't see
 // runtime-composed class names.
 export const PHASE_COLORS: Record<string, string> = {
+  project_description_sync: "#8b5cf6",
   entity_dedup: "#94a3b8",
   embedding_backfill: "#3b82f6",
   augmentation_backfill: "#0ea5e9",
@@ -503,6 +505,7 @@ function formatMemoryDeleted(log: DreamLog): FormattedLog {
 // after_state are skipped; unknown keys land in a generic tail so we never
 // hide data.
 const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
+  project_description_sync: ["created", "deleted", "skipped", "errors"],
   embedding_backfill: ["candidates", "embedded", "errors"],
   augmentation_backfill: ["candidates", "enqueued", "errors"],
   multi_vector_backfill: ["candidates", "enqueued", "errors"],

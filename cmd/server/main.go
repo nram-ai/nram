@@ -807,6 +807,7 @@ func main() {
 
 	consolidationPhase := dreaming.NewConsolidationPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc, enrichmentQueueRepo)
 	contradictionPhase := dreaming.NewContradictionPhase(memoryRepo, memoryRepo, lineageRepo, factProvider, embedProvider, settingsSvc)
+	projectDescriptionPhase := dreaming.NewProjectDescriptionPhase(projectRepo, memoryRepo, memoryRepo, enrichmentQueueRepo, settingsSvc)
 	// Wire the active vector store into dream-side state transitions so that
 	// demotion and supersession purge vectors alongside the row-level update,
 	// and so the contradiction phase reads stored vectors instead of
@@ -816,6 +817,7 @@ func main() {
 		consolidationPhase.AttachVectorStore(vectorStore)
 		contradictionPhase.AttachVectorStore(vectorStore)
 		contradictionPhase.AttachVectorPurger(vectorStore)
+		projectDescriptionPhase.AttachVectorPurger(vectorStore)
 		memoryRepo.AttachVectorStore(vectorStore)
 	}
 
@@ -824,6 +826,11 @@ func main() {
 
 	dreamRunner := dreaming.NewRunner(
 		dreamCycleRepo, dreamLogRepo, workerPool, heartbeatInterval, eventBus, settingsSvc,
+		// Reconciles each project's description into a single embedded backing
+		// memory. Runs first so the freshly synced, marked row exists before the
+		// mutating phases (paraphrase/contradiction/consolidation/pruning), which
+		// the shield keeps off project-description rows anyway. SQL-only (frac 0).
+		projectDescriptionPhase,
 		dreaming.NewEntityDedupPhase(entityRepo, entityRepo, entityAliasRepo, relationshipRepo, relationshipRepo, vectorStore, settingsSvc),
 		// Embedding backfill repairs two divergences: rows whose embedding_dim is
 		// set but whose memory_vectors_<dim> row is missing (no_vector), and rows
@@ -1017,8 +1024,8 @@ func main() {
 		// User-scoped handlers
 		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
 		MeAsk:               api.NewMeAskHandler(askSvc, userRepo),
-		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo),
-		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo),
+		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo, eventBus),
+		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo, eventBus),
 		MeProjectDelete:     api.NewMeProjectDeleteHandler(projectDeleteSvc, projectRepo, userRepo),
 		MeProcedural:        api.NewMeProceduralHandler(proceduralSvc, userRepo),
 		MeProceduralItem:    api.NewMeProceduralItemHandler(proceduralSvc, userRepo),

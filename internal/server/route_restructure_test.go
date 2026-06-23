@@ -470,7 +470,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 
 		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
-		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 

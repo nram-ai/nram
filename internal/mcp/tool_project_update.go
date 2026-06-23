@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -104,6 +105,7 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 	}
 
 	changed := false
+	descChanged := false
 
 	if name, ok := args["name"].(string); ok && strings.TrimSpace(name) != "" {
 		project.Name = strings.TrimSpace(name)
@@ -111,6 +113,9 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 	}
 
 	if desc, ok := args["description"].(string); ok {
+		if strings.TrimSpace(desc) != strings.TrimSpace(project.Description) {
+			descChanged = true
+		}
 		project.Description = desc
 		changed = true
 	}
@@ -130,6 +135,12 @@ func handleProjectUpdate(ctx context.Context, s *Server, request mcp.CallToolReq
 
 	if err := deps.ProjectUpdater.Update(ctx, project); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
+	}
+
+	// A changed description must dirty the project so the
+	// project_description_sync dream phase reconciles its backing memory.
+	if descChanged {
+		events.EmitProjectUpdated(ctx, s.Deps().EventBus, project.ID)
 	}
 
 	return wrapToolResult(s.deps.Metrics, "update_project", mcpBudgetBytes(ctx, s.deps.Settings), &updateProjectResponse{

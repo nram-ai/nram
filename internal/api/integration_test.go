@@ -873,7 +873,7 @@ func TestHTTP_ListProjects_Success(t *testing.T) {
 	}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		meProjects: NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}),
+		meProjects: NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil),
 	})
 
 	w := integrationRequest(t, router, http.MethodGet, "/v1/me/projects", nil, token)
@@ -909,7 +909,7 @@ func TestHTTP_CreateProject_Success(t *testing.T) {
 	}
 
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		meProjects: NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}),
+		meProjects: NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil),
 	})
 
 	body := map[string]any{

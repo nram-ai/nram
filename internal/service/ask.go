@@ -127,6 +127,23 @@ type AskResponse struct {
 	SynthesisMeta AskSynthesisMeta `json:"synthesis_meta"`
 }
 
+// AskNeighbor is one neighborhood member exposed to a synthesis observer, in the
+// exact order it was presented to the synthesizer.
+type AskNeighbor struct {
+	MemoryID    uuid.UUID
+	ProjectSlug string
+}
+
+// AskSynthesisTrace is the read-only snapshot handed to a synthesis observer: the
+// ordered neighborhood the synthesizer saw, its raw (pre-grounding-guard) output,
+// and the memory ids it actually cited. This is a diagnostic seam for offline
+// measurement only; the observer is never set in production.
+type AskSynthesisTrace struct {
+	Neighborhood   []AskNeighbor
+	RawAnswer      string
+	CitedMemoryIDs []uuid.UUID
+}
+
 // AskService orchestrates the ask tool: it runs recall over the resolved
 // aperture, expands the top candidates with graph-connected and sibling
 // memories into a bounded neighborhood, and makes one LLM call to synthesize an
@@ -145,6 +162,10 @@ type AskService struct {
 	// cannot be vouched for, so none are admitted) rather than letting
 	// query-blind expansion dilute the synthesis.
 	vectors VectorHydrator
+	// observer, when non-nil, receives a read-only AskSynthesisTrace once per Ask
+	// on the synthesis path. Diagnostic seam for offline measurement; left nil in
+	// production (never set in cmd/server), so the hot path is unaffected.
+	observer func(AskSynthesisTrace)
 }
 
 // NewAskService constructs an AskService. llm re-reads the registry on every
@@ -179,6 +200,16 @@ func (s *AskService) WithMetrics(m *metrics.Metrics) *AskService {
 // skipped (only recall candidates form the neighborhood).
 func (s *AskService) WithVectorHydrator(v VectorHydrator) *AskService {
 	s.vectors = v
+	return s
+}
+
+// WithSynthesisObserver attaches a read-only diagnostic callback invoked once per
+// Ask on the synthesis path with the assembled neighborhood (in presentation
+// order), the raw pre-grounding-guard synthesizer output, and the cited memory ids.
+// Nil in production (never set in cmd/server); used only by offline measurement
+// harnesses. Returns the service for chaining.
+func (s *AskService) WithSynthesisObserver(fn func(AskSynthesisTrace)) *AskService {
+	s.observer = fn
 	return s
 }
 
@@ -471,7 +502,19 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	// sub-query, graph traversal, or sibling expansion contributes the same kind
 	// of query-relative evidence as a direct recall hit rather than nothing. The
 	// scores feed both the response sources and confidence.
+	rawAnswer := answer
 	answer, cited := renumberCitations(answer, neighborhood)
+	if s.observer != nil {
+		nb := make([]AskNeighbor, len(neighborhood))
+		for i := range neighborhood {
+			nb[i] = AskNeighbor{MemoryID: neighborhood[i].memoryID, ProjectSlug: neighborhood[i].projectSlug}
+		}
+		citedIDs := make([]uuid.UUID, len(cited))
+		for i := range cited {
+			citedIDs[i] = cited[i].memoryID
+		}
+		s.observer(AskSynthesisTrace{Neighborhood: nb, RawAnswer: rawAnswer, CitedMemoryIDs: citedIDs})
+	}
 	var citedCosines []float64
 	if len(cited) > 0 {
 		scoreByID := s.citedQueryCosines(ctx, cited, recallResp)

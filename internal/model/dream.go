@@ -37,6 +37,7 @@ const (
 	DreamPhaseConsolidation        = "consolidation"
 	DreamPhasePruning              = "pruning"
 	DreamPhaseWeightAdjust         = "weight_adjustment"
+	DreamPhaseProjectDescSync      = "project_description_sync"
 )
 
 // DreamSubPhase constants name the consolidation sub-phases. Mirrors the

@@ -275,6 +275,9 @@ func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.
 		if description != "" && project.Description == "" {
 			_ = deps.ProjectRepo.UpdateDescription(ctx, project.ID, description)
 			project.Description = description
+			// Dirty the project so the project_description_sync dream phase
+			// reconciles a backing memory for the newly-set description.
+			events.EmitProjectUpdated(ctx, deps.EventBus, project.ID)
 		}
 		return project, nil
 	}
@@ -310,6 +313,12 @@ func resolveOrCreateProject(ctx context.Context, deps Dependencies, userID uuid.
 	}
 	if err := deps.ProjectRepo.Create(ctx, project); err != nil {
 		return nil, fmt.Errorf("create project: %w", err)
+	}
+
+	if strings.TrimSpace(description) != "" {
+		// Dirty the new project so the project_description_sync dream phase
+		// backfills a backing memory for its description.
+		events.EmitProjectUpdated(ctx, deps.EventBus, project.ID)
 	}
 
 	return project, nil

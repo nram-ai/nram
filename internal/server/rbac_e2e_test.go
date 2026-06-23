@@ -639,7 +639,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 
 		// User-scoped handlers
 		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
-		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 
@@ -1608,7 +1608,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 
 		// User-scoped handlers
 		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
-		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup),
+		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
 

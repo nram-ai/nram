@@ -34,3 +34,7 @@ internal/ui/dist/*
 # Local-only live recall tuning harness: connects to a live backend and embeds
 # owner-specific identity probes; kept for our own re-runs, never committed.
 /internal/service/recall_tuning_livedata_test.go
+
+# Local-only live ask grounding harness: measures wide-aperture single-topic
+# bail/misground against a live backend; kept for our own re-runs, never committed.
+/internal/service/ask_grounding_livedata_test.go

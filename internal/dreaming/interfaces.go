@@ -25,6 +25,31 @@ type MemoryReader interface {
 	CountByNamespace(ctx context.Context, namespaceID uuid.UUID) (int, error)
 }
 
+// ProjectDescriptionReader resolves the project that owns a namespace so the
+// project-description phase can read its description column and skip reserved
+// tiers. Satisfied by *storage.ProjectRepo. (Distinct from the scheduler's
+// ProjectReader, which fetches by project ID.)
+type ProjectDescriptionReader interface {
+	GetByNamespaceID(ctx context.Context, namespaceID uuid.UUID) (*model.Project, error)
+}
+
+// DescriptionMemoryLister is the narrow memory-read surface the
+// project-description phase needs to find its single backing memory by tag.
+// Kept off MemoryReader so the broad phase-fake set is unaffected. Satisfied
+// by *storage.MemoryRepo.
+type DescriptionMemoryLister interface {
+	ListByNamespaceFiltered(ctx context.Context, namespaceID uuid.UUID, filters storage.MemoryListFilters, limit, offset int) ([]model.Memory, error)
+}
+
+// DescriptionMemoryWriter is the narrow memory-write surface the
+// project-description phase needs: create a backing memory and soft-delete a
+// stale one. Kept off the broad MemoryWriter so it is trivially fakeable.
+// Satisfied by *storage.MemoryRepo.
+type DescriptionMemoryWriter interface {
+	Create(ctx context.Context, mem *model.Memory) error
+	SoftDelete(ctx context.Context, id, namespaceID uuid.UUID) error
+}
+
 // MemoryWriter creates and updates memories.
 type MemoryWriter interface {
 	Create(ctx context.Context, mem *model.Memory) error

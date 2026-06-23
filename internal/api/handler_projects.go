@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 )
@@ -57,13 +58,13 @@ func slugify(name string) string {
 
 // NewMeProjectsHandler returns an http.HandlerFunc that handles
 // GET /v1/me/projects (list) and POST /v1/me/projects (create).
-func NewMeProjectsHandler(projects ProjectLister, users UserGetter, namespaces NamespaceCreator) http.HandlerFunc {
+func NewMeProjectsHandler(projects ProjectLister, users UserGetter, namespaces NamespaceCreator, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			handleListProjects(w, r, projects, users)
 		case http.MethodPost:
-			handleCreateProject(w, r, projects, users, namespaces)
+			handleCreateProject(w, r, projects, users, namespaces, bus)
 		default:
 			w.Header().Set("Allow", "GET, POST")
 			WriteError(w, &APIError{
@@ -126,7 +127,7 @@ func handleListProjects(w http.ResponseWriter, r *http.Request, projects Project
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func handleCreateProject(w http.ResponseWriter, r *http.Request, projects ProjectLister, users UserGetter, namespaces NamespaceCreator) {
+func handleCreateProject(w http.ResponseWriter, r *http.Request, projects ProjectLister, users UserGetter, namespaces NamespaceCreator, bus events.EventBus) {
 	ac := auth.FromContext(r.Context())
 	if ac == nil {
 		WriteError(w, ErrUnauthorized("authentication required"))
@@ -199,6 +200,10 @@ func handleCreateProject(w http.ResponseWriter, r *http.Request, projects Projec
 		return
 	}
 
+	if strings.TrimSpace(project.Description) != "" {
+		events.EmitProjectUpdated(r.Context(), bus, project.ID)
+	}
+
 	writeJSON(w, http.StatusCreated, project)
 }
 
@@ -220,13 +225,13 @@ type meUpdateProjectRequest struct {
 // NewMeProjectItemHandler returns an http.HandlerFunc that handles
 // GET /v1/me/projects/{id} and PUT /v1/me/projects/{id}.
 // Only the project owner can access their own projects.
-func NewMeProjectItemHandler(projects ProjectItemStore, users UserGetter) http.HandlerFunc {
+func NewMeProjectItemHandler(projects ProjectItemStore, users UserGetter, bus events.EventBus) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			handleMeGetProject(w, r, projects, users)
 		case http.MethodPut:
-			handleMeUpdateProject(w, r, projects, users)
+			handleMeUpdateProject(w, r, projects, users, bus)
 		default:
 			w.Header().Set("Allow", "GET, PUT")
 			WriteError(w, &APIError{
@@ -275,7 +280,7 @@ func handleMeGetProject(w http.ResponseWriter, r *http.Request, projects Project
 	writeJSON(w, http.StatusOK, project)
 }
 
-func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects ProjectItemStore, users UserGetter) {
+func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects ProjectItemStore, users UserGetter, bus events.EventBus) {
 	ac := auth.FromContext(r.Context())
 	if ac == nil {
 		WriteError(w, ErrUnauthorized("authentication required"))
@@ -329,6 +334,7 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 		}
 	}
 
+	oldDesc := project.Description
 	if !reserved {
 		if body.Name != "" {
 			project.Name = body.Name
@@ -351,6 +357,10 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 	if err := projects.Update(r.Context(), project); err != nil {
 		WriteError(w, ErrInternal("failed to update project"))
 		return
+	}
+
+	if strings.TrimSpace(oldDesc) != strings.TrimSpace(project.Description) {
+		events.EmitProjectUpdated(r.Context(), bus, project.ID)
 	}
 
 	// Re-fetch to get updated timestamps and computed fields.

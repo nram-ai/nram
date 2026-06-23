@@ -128,7 +128,7 @@ func TestMeProjects_ListSuccess(t *testing.T) {
 		},
 	}
 
-	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 	w := doProjectsRequest(handler, http.MethodGet, nil, ac, "limit=50&offset=0")
 
@@ -168,7 +168,7 @@ func TestMeProjects_CreateSuccess(t *testing.T) {
 		},
 	}
 
-	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
 	body := map[string]any{
@@ -204,7 +204,7 @@ func TestMeProjects_CreateSuccess(t *testing.T) {
 }
 
 func TestMeProjects_CreateMissingName(t *testing.T) {
-	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
 	body := map[string]any{
@@ -236,7 +236,7 @@ func TestMeProjects_CreateSlugConflict(t *testing.T) {
 		},
 	}
 
-	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
 	body := map[string]any{
@@ -272,7 +272,7 @@ func TestMeProjects_CreateAutoSlug(t *testing.T) {
 		},
 	}
 
-	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(projects, &mockUserGetter{user: user}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
 
 	body := map[string]any{
@@ -294,7 +294,7 @@ func TestMeProjects_CreateAutoSlug(t *testing.T) {
 }
 
 func TestMeProjects_GetUnauthenticated(t *testing.T) {
-	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{}, nil)
 
 	w := doProjectsRequest(handler, http.MethodGet, nil, nil, "")
 
@@ -312,7 +312,7 @@ func TestMeProjects_GetUnauthenticated(t *testing.T) {
 }
 
 func TestMeProjects_PostInvalidJSON(t *testing.T) {
-	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/me/projects", bytes.NewBufferString("{invalid"))
@@ -336,7 +336,7 @@ func TestMeProjects_PostInvalidJSON(t *testing.T) {
 }
 
 func TestMeProjects_MethodNotAllowed(t *testing.T) {
-	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{})
+	handler := NewMeProjectsHandler(&mockProjectLister{}, &mockUserGetter{}, &mockNamespaceCreator{}, nil)
 	ac := &auth.AuthContext{UserID: uuid.New(), Role: "user"}
 
 	w := doProjectsRequest(handler, http.MethodDelete, nil, ac, "")

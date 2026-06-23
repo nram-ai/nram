@@ -67,9 +67,12 @@ func (dt *DirtyTracker) loop(ctx context.Context, ch <-chan events.Event) {
 }
 
 func (dt *DirtyTracker) handleEvent(ctx context.Context, event events.Event) {
-	// Only care about memory lifecycle events.
+	// Care about memory lifecycle events and project-description changes. A
+	// description edit touches no memory, so without ProjectUpdated the
+	// project_description_sync phase would never be scheduled to pick it up
+	// (including the first-ever backfill for a project with no stored memories).
 	switch event.Type {
-	case events.MemoryCreated, events.MemoryUpdated, events.MemoryDeleted:
+	case events.MemoryCreated, events.MemoryUpdated, events.MemoryDeleted, events.ProjectUpdated:
 	default:
 		return
 	}

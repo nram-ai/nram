@@ -35,3 +35,15 @@ func Emit(ctx context.Context, bus EventBus, eventType, scope string, data any) 
 		slog.Warn("events: failed to publish event", "event_type", eventType, "err", err)
 	}
 }
+
+// EmitProjectUpdated publishes a ProjectUpdated event for the given project.
+// It is the single source of truth for the event's scope and payload: the
+// dreaming DirtyTracker consumes it (scope "project:<id>" plus a project_id
+// payload it can parse) to mark the project dirty so the
+// project_description_sync phase reconciles its backing memory. Safe with a
+// nil bus.
+func EmitProjectUpdated(ctx context.Context, bus EventBus, projectID uuid.UUID) {
+	Emit(ctx, bus, ProjectUpdated, "project:"+projectID.String(), map[string]string{
+		"project_id": projectID.String(),
+	})
+}
