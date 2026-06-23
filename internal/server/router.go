@@ -227,6 +227,15 @@ type Handlers struct {
 	SystemActivity  http.HandlerFunc
 	SystemAnalytics http.HandlerFunc
 	SystemUsage     http.HandlerFunc
+
+	// SystemIdentity serves the admin-only persistent instance identity view at
+	// GET /v1/admin/system/identity (instance UUID + public key; never the
+	// private key). RoleAdministrator only by virtue of the /v1/admin group.
+	SystemIdentity http.HandlerFunc
+
+	// JWKS serves the instance public key as a JWK Set at the public
+	// GET /.well-known/jwks.json for instance-signed-JWT verification.
+	JWKS http.HandlerFunc
 }
 
 // notImplemented returns a handler that responds with 501 Not Implemented.
@@ -316,6 +325,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	// CORS middleware instead of being rejected by chi's method routing.
 	r.Group(func(r chi.Router) {
 		r.Use(CORSMiddleware)
+		// Public JWK Set exposing the instance public signing key so external
+		// clients (and a future central router) can verify instance-signed JWTs.
+		r.HandleFunc("/.well-known/jwks.json", handler(handlers.JWKS))
 		r.HandleFunc("/.well-known/oauth-authorization-server", handler(handlers.OAuthMetadata))
 		r.HandleFunc("/.well-known/oauth-protected-resource", handler(handlers.OAuthProtectedResource))
 		// Per-share connector URLs (/mcp/{share_id}) discover via path-scoped
@@ -634,6 +646,9 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Get("/system/activity", handler(handlers.SystemActivity))
 			r.Get("/system/analytics", handler(handlers.SystemAnalytics))
 			r.Get("/system/usage", handler(handlers.SystemUsage))
+			// Persistent instance identity (UUID + public key). Read-only;
+			// generated on first boot and not settable through the UI.
+			r.Get("/system/identity", handler(handlers.SystemIdentity))
 
 			// System-ops pipelines (admin-only, full cross-tenant
 			// observability for debugging). Wrapped in EnrichmentGate so

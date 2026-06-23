@@ -81,8 +81,13 @@ type RelationshipTraverser interface {
 // Dependencies holds all service and repository references that MCP tool handlers require.
 type Dependencies struct {
 	Backend string
-	Store   *service.StoreService
-	Recall  *service.RecallService
+	// InstanceID is this deployment's persistent instance UUID, advertised in
+	// the per-connection MCP instructions so a client (or a future central
+	// router) can identify which nram instance it is talking to. Empty disables
+	// the advertisement.
+	InstanceID string
+	Store      *service.StoreService
+	Recall     *service.RecallService
 	// Ask backs the ask synthesis tool. Optional: when nil the tool is not
 	// registered. When non-nil it is registered but its visibility is gated
 	// live by the ask.enabled setting via the tool-list filter, so toggling
@@ -239,6 +244,9 @@ func NewServer(deps Dependencies) *Server {
 		// restart, and the guidance only mentions ask when the tool is live.
 		ask := deps.Settings.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
 		result.Instructions = buildInstructions(he, hr, ask)
+		if deps.InstanceID != "" {
+			result.Instructions += "\n\nInstance: " + deps.InstanceID + " (public signing key at /.well-known/jwks.json)."
+		}
 		result.ServerInfo.Icons = []mcp.Icon{iconAnnotation()}
 	})
 

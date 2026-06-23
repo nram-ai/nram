@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
+	"github.com/nram-ai/nram/internal/config"
 	"github.com/nram-ai/nram/internal/migration"
+	"github.com/nram-ai/nram/internal/storage"
 	"github.com/nram-ai/nram/internal/version"
 )
 
@@ -82,6 +86,47 @@ func printVersion(w io.Writer) {
 	_, _ = fmt.Fprintf(w, "  go:     %s\n", b.Go)
 }
 
+// instanceIDForVersion does a best-effort, side-effect-free read of the
+// persistent instance UUID for the --version banner. It never creates a SQLite
+// database file: when the backend is SQLite and ./nram.db does not exist, it
+// reports the instance as uninitialized rather than opening (and thus creating)
+// the file. Any config-load, connect, or read failure collapses to (", false).
+func instanceIDForVersion() (string, bool) {
+	cfg, err := config.Load(configPathFromArgs(os.Args))
+	if err != nil {
+		return "", false
+	}
+
+	// Guard the SQLite path so a version check never creates ./nram.db.
+	if cfg.Database.URL == "" {
+		if _, statErr := os.Stat("nram.db"); statErr != nil {
+			return "", false
+		}
+	}
+
+	db, err := storage.Open(cfg.Database)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return storage.ReadInstanceID(ctx, db)
+}
+
+// configPathFromArgs returns the value of the --config flag from the command
+// line, or "" when it is absent. Shared by main (to load config) and the
+// --version banner so the two never drift in how they resolve the flag.
+func configPathFromArgs(args []string) string {
+	for i, arg := range args[1:] {
+		if arg == "--config" && i+1 < len(args[1:]) {
+			return args[i+2]
+		}
+	}
+	return ""
+}
+
 // hasHelpToken reports whether any of the given args is a help request.
 func hasHelpToken(args []string) bool {
 	for _, a := range args {
@@ -106,6 +151,11 @@ func handleInfoFlags(args []string) bool {
 	switch args[1] {
 	case "-v", "--version":
 		printVersion(os.Stdout)
+		if id, ok := instanceIDForVersion(); ok {
+			_, _ = fmt.Fprintf(os.Stdout, "  instance: %s\n", id)
+		} else {
+			_, _ = fmt.Fprintln(os.Stdout, "  instance: (not initialized)")
+		}
 		return true
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)

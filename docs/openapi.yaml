@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.11.0
+  version: 0.11.1
   license:
     name: MIT
 
@@ -260,6 +260,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OAuthServerMetadata"
+
+  /.well-known/jwks.json:
+    get:
+      operationId: getJWKS
+      tags: [OAuth]
+      summary: JSON Web Key Set for the instance public signing key (RFC 7517)
+      description: |
+        Serves this deployment's persistent instance public key as a single-key
+        JWK Set. The key is an ECDSA P-256 (ES256) public key; the private half
+        is never exposed. Used to verify instance-signed JWTs.
+      security: []
+      responses:
+        "200":
+          description: JSON Web Key Set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JWKS"
 
   /.well-known/oauth-protected-resource:
     get:
@@ -3842,6 +3860,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/SystemActivityResponse"
 
+  /v1/admin/system/identity:
+    get:
+      operationId: systemGetIdentity
+      tags: [Admin - System]
+      summary: Persistent instance identity (UUID + public signing key)
+      description: |
+        Returns this deployment's persistent instance UUID and ECDSA P-256
+        (ES256) public key in PEM and JWK form. Generated once on first boot and
+        not settable through the UI. The private key is never returned.
+      responses:
+        "200":
+          description: Instance identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceIdentity"
+
   /v1/admin/system/analytics:
     get:
       operationId: systemGetAnalytics
@@ -4698,6 +4733,60 @@ components:
               format: uuid
 
     # ── OAuth ──────────────────────────────────────────────────────────
+    JWK:
+      type: object
+      description: A JSON Web Key (RFC 7517) for an EC public key.
+      properties:
+        kty:
+          type: string
+          example: EC
+        crv:
+          type: string
+          example: P-256
+        x:
+          type: string
+          description: base64url-encoded x coordinate.
+        y:
+          type: string
+          description: base64url-encoded y coordinate.
+        use:
+          type: string
+          example: sig
+        alg:
+          type: string
+          example: ES256
+        kid:
+          type: string
+          description: RFC 7638 JWK thumbprint.
+
+    JWKS:
+      type: object
+      description: A JSON Web Key Set (RFC 7517).
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/JWK"
+
+    InstanceIdentity:
+      type: object
+      description: This deployment's persistent instance identity. The private key is never included.
+      properties:
+        instance_id:
+          type: string
+          format: uuid
+        algorithm:
+          type: string
+          example: ES256
+        public_key_pem:
+          type: string
+          description: PKIX/SPKI PEM encoding of the instance public key.
+        public_key_jwk:
+          $ref: "#/components/schemas/JWK"
+        created_at:
+          type: string
+          format: date-time
+
     OAuthServerMetadata:
       type: object
       properties:
@@ -4711,6 +4800,13 @@ components:
           type: string
         userinfo_endpoint:
           type: string
+        jwks_uri:
+          type: string
+          description: URL of the JWK Set exposing the instance public signing key.
+        instance_id:
+          type: string
+          format: uuid
+          description: This deployment's persistent instance UUID (non-standard field).
         response_types_supported:
           type: array
           items:

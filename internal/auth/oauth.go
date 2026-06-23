@@ -52,6 +52,7 @@ type OAuthServer struct {
 	jwtSecret     []byte
 	shareTokens   ShareTokenResolver // optional; nil disables the share-paste consent path
 	projectLookup ProjectByIDLookup  // optional; nil collapses grant rows to "(project unavailable)"
+	instanceID    string             // optional; advertised in RFC 8414 server metadata when set
 }
 
 // NewOAuthServer creates a new OAuthServer with the given dependencies.
@@ -71,6 +72,14 @@ func (s *OAuthServer) WithShareTokens(resolver ShareTokenResolver, projects Proj
 	return s
 }
 
+// WithInstanceID sets the persistent instance UUID advertised in the RFC 8414
+// server metadata (alongside the jwks_uri pointing at the instance public key).
+// Returns the receiver for fluent construction.
+func (s *OAuthServer) WithInstanceID(id string) *OAuthServer {
+	s.instanceID = id
+	return s
+}
+
 // serverMetadata is the response for RFC 8414 server metadata.
 type serverMetadata struct {
 	Issuer                            string   `json:"issuer"`
@@ -78,10 +87,14 @@ type serverMetadata struct {
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	RegistrationEndpoint              string   `json:"registration_endpoint"`
 	UserinfoEndpoint                  string   `json:"userinfo_endpoint"`
+	JWKSURI                           string   `json:"jwks_uri,omitempty"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	// InstanceID is a non-standard field advertising this deployment's
+	// persistent instance UUID. Omitted when the instance identity is unwired.
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 // MetadataHandler returns the RFC 8414 OAuth Authorization Server Metadata.
@@ -94,10 +107,12 @@ func (s *OAuthServer) MetadataHandler() http.HandlerFunc {
 			TokenEndpoint:                     base + "/token",
 			RegistrationEndpoint:              base + "/register",
 			UserinfoEndpoint:                  base + "/userinfo",
+			JWKSURI:                           base + "/.well-known/jwks.json",
 			ResponseTypesSupported:            []string{"code"},
 			GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 			CodeChallengeMethodsSupported:     []string{codeChallengeMethodS256},
 			TokenEndpointAuthMethodsSupported: []string{"client_secret_post", "none"},
+			InstanceID:                        s.instanceID,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

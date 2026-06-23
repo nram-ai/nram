@@ -86,15 +86,7 @@ func main() {
 	}
 
 	// Determine config file path from --config flag if provided.
-	var configPath string
-	for i, arg := range os.Args[1:] {
-		if arg == "--config" && i+1 < len(os.Args[1:]) {
-			configPath = os.Args[i+2]
-			break
-		}
-	}
-
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(configPathFromArgs(os.Args))
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
@@ -244,6 +236,18 @@ func main() {
 	if err := seedRegisteredSettings(context.Background(), settingsRepo); err != nil {
 		slog.Warn("boot: settings seed failed", "err", err)
 	}
+
+	// Load (or generate on first boot) this deployment's persistent instance
+	// identity: a v4 UUID plus an ECDSA P-256 signing keypair, both stored in
+	// system_meta and never settable through the UI. Generated once and loaded
+	// verbatim thereafter; it survives restarts and a SQLite->Postgres data
+	// migration (DataMigrator copies system_meta verbatim). The private half
+	// signs on the instance's behalf; the public half is exposed read-only.
+	instanceIdentity, err := storage.LoadOrCreateInstanceIdentity(context.Background(), db)
+	if err != nil {
+		log.Fatalf("failed to load instance identity: %v", err)
+	}
+	slog.Info("boot: instance identity", "instance_id", instanceIdentity.ID)
 
 	// Install the SQL log sink. From here on, slog (and, via the bridge below,
 	// the stdlib log package) tees diagnostic logs to the log_entries table for
@@ -663,6 +667,7 @@ func main() {
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{
 		Backend:        db.Backend(),
+		InstanceID:     instanceIdentity.ID.String(),
 		Store:          storeSvc,
 		Recall:         recallSvc,
 		Ask:            askSvc,
@@ -931,7 +936,8 @@ func main() {
 	// Share-paste consent + magic-link landing depend on the share-token
 	// service and a project lookup for the grants display.
 	oauthServer := auth.NewOAuthServer(oauthRepo, userRepo, jwtSecret).
-		WithShareTokens(shareTokenSvc, projectRepo)
+		WithShareTokens(shareTokenSvc, projectRepo).
+		WithInstanceID(instanceIdentity.ID.String())
 
 	// Session-JWT TTL and refresh threshold are runtime-configurable via
 	// the settings registry (auth.session_token_ttl_seconds /
@@ -1275,7 +1281,9 @@ func main() {
 		SystemAnalytics: api.NewSystemAnalyticsHandler(api.SystemAnalyticsConfig{
 			Store: aggregatesStore,
 		}),
-		SystemUsage: api.NewSystemUsageHandler(api.UsageConfig{Store: usageStore}),
+		SystemUsage:    api.NewSystemUsageHandler(api.UsageConfig{Store: usageStore}),
+		SystemIdentity: api.NewInstanceIdentityHandler(instanceIdentity),
+		JWKS:           api.NewJWKSHandler(instanceIdentity),
 	}
 
 	// Build router config with auth middleware and rate limiter. Cleanup
