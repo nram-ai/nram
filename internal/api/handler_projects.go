@@ -215,9 +215,16 @@ type ProjectItemStore interface {
 
 // meUpdateProjectRequest is the JSON body for PUT /v1/me/projects/{id}.
 type meUpdateProjectRequest struct {
+	// Name and Slug stay plain strings: they are applied only when non-empty
+	// (an empty name or slug is not a valid project state), so an omitted field
+	// already preserves the stored value. Description differs because an empty
+	// description is a legitimate value, so it alone needs a pointer to
+	// distinguish an absent field (leave unchanged) from an explicit empty
+	// string (clear). A plain string blanked the column on any partial PUT that
+	// omitted it, e.g. the settings-only writes from the graph-layout drawer.
 	Name        string          `json:"name"`
 	Slug        string          `json:"slug"`
-	Description string          `json:"description"`
+	Description *string         `json:"description"`
 	DefaultTags []string        `json:"default_tags"`
 	Settings    json.RawMessage `json:"settings"`
 }
@@ -328,7 +335,7 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 	if reserved {
 		if (body.Name != "" && body.Name != project.Name) ||
 			(body.Slug != "" && body.Slug != project.Slug) ||
-			body.Description != project.Description {
+			(body.Description != nil && *body.Description != project.Description) {
 			WriteError(w, ErrBadRequest("this project is reserved; its name, slug, and description are managed by nram and cannot be changed"))
 			return
 		}
@@ -342,7 +349,9 @@ func handleMeUpdateProject(w http.ResponseWriter, r *http.Request, projects Proj
 		if body.Slug != "" {
 			project.Slug = body.Slug
 		}
-		project.Description = body.Description
+		if body.Description != nil {
+			project.Description = *body.Description
+		}
 	}
 	if body.DefaultTags != nil {
 		project.DefaultTags = body.DefaultTags

@@ -346,6 +346,91 @@ func TestMeProjects_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// --- item handler (GET/PUT /v1/me/projects/{id}) tests ---
+
+// mockProjectItemStore backs NewMeProjectItemHandler. It holds a single
+// project; GetByID returns it (the handler mutates it in place and re-fetches
+// after Update, so the stored pointer reflects the final persisted state).
+type mockProjectItemStore struct {
+	project *model.Project
+}
+
+func (m *mockProjectItemStore) GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error) {
+	if m.project == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	return m.project, nil
+}
+
+func (m *mockProjectItemStore) Update(ctx context.Context, project *model.Project) error {
+	return nil
+}
+
+// itemHandlerFixture wires a project owned by the test user and the item
+// handler; the {id} path param is supplied via the shared doChiRequest helper.
+func itemHandlerFixture(t *testing.T, project *model.Project) (http.HandlerFunc, *mockProjectItemStore, *auth.AuthContext) {
+	t.Helper()
+	userNSID := uuid.New()
+	project.OwnerNamespaceID = userNSID
+	user := &model.User{ID: uuid.New(), NamespaceID: userNSID}
+	store := &mockProjectItemStore{project: project}
+	handler := NewMeProjectItemHandler(store, &mockUserGetter{user: user}, nil)
+	ac := &auth.AuthContext{UserID: user.ID, Role: "user"}
+	return handler, store, ac
+}
+
+// TestMeProjects_Update_Description covers the PATCH semantics of the
+// description field on PUT /v1/me/projects/{id}: an omitted field leaves it
+// unchanged (the regression case — a settings-only body, as the graph-layout
+// drawer sends, must not blank it), an explicit empty string clears it, and a
+// non-empty string sets it.
+func TestMeProjects_Update_Description(t *testing.T) {
+	const orig = "Phantom-stock equity platform"
+	cases := []struct {
+		name     string
+		body     map[string]any
+		wantDesc string
+	}{
+		{
+			name:     "settings-only body preserves description",
+			body:     map[string]any{"settings": map[string]any{"graph_center_gravity": 0.3}},
+			wantDesc: orig,
+		},
+		{
+			name:     "explicit empty clears description",
+			body:     map[string]any{"description": ""},
+			wantDesc: "",
+		},
+		{
+			name:     "non-empty sets description",
+			body:     map[string]any{"description": "new text"},
+			wantDesc: "new text",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			project := &model.Project{
+				ID:          uuid.New(),
+				Slug:        "velocity",
+				Name:        "Velocity",
+				Description: orig,
+			}
+			handler, store, ac := itemHandlerFixture(t, project)
+
+			w := doChiRequest(handler, http.MethodPut, "/v1/me/projects/"+project.ID.String(),
+				map[string]string{"id": project.ID.String()}, tc.body, ac)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+			if store.project.Description != tc.wantDesc {
+				t.Errorf("description = %q, want %q", store.project.Description, tc.wantDesc)
+			}
+		})
+	}
+}
+
 func TestSlugify(t *testing.T) {
 	tests := []struct {
 		input    string
