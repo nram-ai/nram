@@ -800,16 +800,17 @@ function CycleTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead>
           <tr className="border-b bg-muted/50 text-left">
-            <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Project</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Phase</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Tokens</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Duration</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Started</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground" />
+            <th className="w-[150px] whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Status</th>
+            <th className="w-[240px] whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Activity</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Project</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Phase</th>
+            <th className="w-[150px] whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Tokens</th>
+            <th className="w-[96px] whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Duration</th>
+            <th className="w-[96px] whitespace-nowrap px-4 py-3 font-medium text-muted-foreground">Started</th>
+            <th className="w-[88px] px-4 py-3 font-medium text-muted-foreground" />
           </tr>
         </thead>
         <tbody>
@@ -817,39 +818,46 @@ function CycleTable({
             const rowTint = cycle.is_abandonable
               ? "bg-destructive/40"
               : "";
+            const ls = live[cycle.id];
             return (
               <tr
                 key={cycle.id}
                 onClick={() => onSelect(cycle.id)}
-                className={`cursor-pointer border-b transition-colors hover:bg-muted/30 ${rowTint} ${
+                className={`h-[52px] cursor-pointer border-b transition-colors hover:bg-muted/30 ${rowTint} ${
                   selectedId === cycle.id ? "bg-muted/50" : ""
                 }`}
               >
                 <td className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <StatusBadge status={cycle.status} />
                     {cycle.is_abandonable ? (
                       <StuckPill />
                     ) : cycle.is_stale_diagnostic ? (
                       <StaleDiagnosticPill />
                     ) : null}
-                    {cycle.status === "running" && live[cycle.id]?.currentCall && (
-                      <InFlightCallChip call={live[cycle.id].currentCall!} />
+                  </div>
+                </td>
+                <td className="px-4 py-3 overflow-hidden">
+                  <div className="flex items-center gap-2">
+                    {cycle.status === "running" && ls?.currentCall && (
+                      <InFlightCallChip call={ls.currentCall} />
                     )}
-                    {cycle.status === "running" && live[cycle.id]?.phaseProgress && (
-                      <PhaseProgressChip progress={live[cycle.id].phaseProgress!} />
+                    {cycle.status === "running" && ls?.phaseProgress && (
+                      <PhaseProgressChip progress={ls.phaseProgress} />
                     )}
                     {cycle.status === "running" &&
                       (() => {
-                        const ts = live[cycle.id]?.lastActivityAt ?? cycle.heartbeat_at;
+                        const ts = ls?.lastActivityAt ?? cycle.heartbeat_at;
                         return ts ? <LastActivityChip iso={ts} /> : null;
                       })()}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground" title={cycle.project_id}>
-                  {showProjectName && cycle.project_name
-                    ? cycle.project_name
-                    : truncateId(cycle.project_id)}
+                  <span className="block truncate">
+                    {showProjectName && cycle.project_name
+                      ? cycle.project_name
+                      : truncateId(cycle.project_id)}
+                  </span>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
                   {(() => {

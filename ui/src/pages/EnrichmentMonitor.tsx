@@ -828,12 +828,12 @@ function QueueTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
-      <table className="w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/50">
             <th className="w-8 px-3 py-2.5" aria-label="Expand row" />
             {showWriteActions && (
-              <th className="px-3 py-2.5 text-left">
+              <th className="w-10 px-3 py-2.5 text-left">
                 <input
                   type="checkbox"
                   checked={allFailedSelected && failedIds.size > 0}
@@ -844,13 +844,13 @@ function QueueTable({
                 />
               </th>
             )}
-            <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+            <th className="w-[130px] whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Memory ID
             </th>
-            <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+            <th className="w-[130px] whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Project
             </th>
-            <th className="px-3 py-2.5 text-left">
+            <th className="w-[130px] whitespace-nowrap px-3 py-2.5 text-left">
               <SortHeader
                 label="Status"
                 field="status"
@@ -859,7 +859,10 @@ function QueueTable({
                 onSort={onSort}
               />
             </th>
-            <th className="px-3 py-2.5 text-left">
+            <th className="w-[220px] whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+              Activity
+            </th>
+            <th className="w-[72px] whitespace-nowrap px-3 py-2.5 text-left">
               <SortHeader
                 label="Attempts"
                 field="attempts"
@@ -871,7 +874,7 @@ function QueueTable({
             <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Last Error
             </th>
-            <th className="px-3 py-2.5 text-left">
+            <th className="w-[96px] whitespace-nowrap px-3 py-2.5 text-left">
               <SortHeader
                 label="Queued"
                 field="created_at"
@@ -880,7 +883,7 @@ function QueueTable({
                 onSort={onSort}
               />
             </th>
-            <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
+            <th className="w-[80px] whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
               Actions
             </th>
           </tr>
@@ -895,14 +898,14 @@ function QueueTable({
             const expanded = expandedJobs.has(item.id);
             // Total column count for the expansion row's colSpan. Header
             // always renders: chevron, [checkbox if showWriteActions],
-            // memory_id, project, status, attempts, last_error, queued,
-            // actions. That's 9 with checkbox, 8 without.
-            const totalCols = showWriteActions ? 9 : 8;
+            // memory_id, project, status, activity, attempts, last_error,
+            // queued, actions. That's 10 with checkbox, 9 without.
+            const totalCols = showWriteActions ? 10 : 9;
 
             return (
               <Fragment key={item.id}>
               <tr
-                className={`cursor-pointer hover:bg-muted/30 transition-colors ${rowTint}`}
+                className={`h-[44px] cursor-pointer hover:bg-muted/30 transition-colors ${rowTint}`}
                 onClick={() => toggleJob(item.id)}
               >
                 <td className="px-3 py-2.5">
@@ -944,7 +947,7 @@ function QueueTable({
                   >
                     <Link
                       to={memoryFocusHref(item.project_id, item.memory_id)}
-                      className="font-mono text-xs text-info hover:underline"
+                      className="block truncate font-mono text-xs text-info hover:underline"
                       title={item.memory_id}
                     >
                       {truncateId(item.memory_id)}
@@ -953,7 +956,7 @@ function QueueTable({
                 ) : (
                   <td className="px-3 py-2.5">
                     <span
-                      className="font-mono text-xs text-foreground"
+                      className="block truncate font-mono text-xs text-foreground"
                       title={item.memory_id}
                     >
                       {truncateId(item.memory_id)}
@@ -964,14 +967,16 @@ function QueueTable({
                   className="px-3 py-2.5 text-xs text-muted-foreground"
                   title={item.project_id ?? ""}
                 >
-                  {showProjectName && item.project_name
-                    ? item.project_name
-                    : item.project_id
-                      ? truncateId(item.project_id)
-                      : "-"}
+                  <span className="block truncate">
+                    {showProjectName && item.project_name
+                      ? item.project_name
+                      : item.project_id
+                        ? truncateId(item.project_id)
+                        : "-"}
+                  </span>
                 </td>
                 <td className="px-3 py-2.5">
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  <div className="flex items-center gap-1.5">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeCls}`}
                     >
@@ -986,6 +991,10 @@ function QueueTable({
                     {alert?.kind === "requeued" && (
                       <RequeuedPill reason={alert.reason} />
                     )}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5 overflow-hidden">
+                  <div className="flex items-center gap-1.5">
                     {item.status === "processing" &&
                       (() => {
                         const lj = liveJobs[item.id];
