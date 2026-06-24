@@ -179,6 +179,71 @@ jobs:
       - name: go test
         run: go test -count=1 ./...
 
+  # Race detector over the full surface, including the Postgres/pgvector/Qdrant
+  # integration paths where the most concurrency lives (connection pools, the
+  # enrichment/dreaming workers, the event bus). Same service containers and env
+  # as go-test-integration so the gated integration tests actually run, but with
+  # -race. The detector needs CGO and a C toolchain (both present on the GitHub
+  # ubuntu runner) and runs several times slower, so it is its own job rather
+  # than folded into go-build-test's cross-OS matrix.
+  go-race:
+    name: Go race detector (Postgres + pgvector + Qdrant, Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nram
+          POSTGRES_PASSWORD: nram
+          POSTGRES_DB: nram
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nram -d nram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      qdrant:
+        image: qdrant/qdrant
+        ports:
+          - 6333:6333
+          - 6334:6334
+    env:
+      DATABASE_URL: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+      PGVECTOR_TEST_DSN: postgres://nram:nram@localhost:5432/nram?sslmode=disable
+      QDRANT_TEST_ADDR: localhost:6334
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache embedded-postgres binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-embedded-postgres-
+      - name: Wait for Qdrant
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:6333/readyz >/dev/null 2>&1; then
+              echo "qdrant ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "qdrant did not become ready within 60s"
+          exit 1
+      - name: Enable pgvector extension
+        run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector'
+      - name: go test -race
+        # -race slows each test 2-10x; the Postgres-backed internal/storage
+        # package runs well past Go's 10m default per-package timeout under it, so
+        # raise the per-package timeout.
+        run: go test -race -count=1 -timeout 30m ./...
+
   migration-e2e:
     name: Migration e2e (CLI + admin endpoint, SQLite -> Postgres, Linux)
     runs-on: ubuntu-latest
