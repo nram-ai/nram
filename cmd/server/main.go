@@ -576,6 +576,7 @@ func main() {
 	// embedder, or dream dependency by design; that absence keeps it verbatim.
 	proceduralSvc := service.NewProceduralService(proceduralRepo)
 	enrichSvc.AttachParaphraseCandidateLister(memoryRepo)
+	enrichSvc.AttachReExtract(memoryRepo, graphReaper)
 	exportSvc := service.NewExportService(
 		memoryRepo, entityRepo, relationshipRepo, lineageRepo, projectRepo,
 		settingsSvc,
@@ -1215,6 +1216,42 @@ func main() {
 					return 0, 0, err
 				}
 				return resp.CandidateCount, resp.Enqueued, nil
+			},
+			RelabelGraph: func(ctx context.Context, dryRun bool) (api.EnrichmentRelabelResult, error) {
+				retyped, merged, err := entityRepo.RelabelEntities(ctx, dryRun)
+				if err != nil {
+					return api.EnrichmentRelabelResult{}, err
+				}
+				rows, before, after, err := relationshipRepo.RelabelRelations(ctx, dryRun)
+				if err != nil {
+					return api.EnrichmentRelabelResult{}, err
+				}
+				return api.EnrichmentRelabelResult{
+					EntitiesRetyped:         retyped,
+					EntitiesMerged:          merged,
+					RelationRowsRelabeled:   rows,
+					DistinctRelationsBefore: before,
+					DistinctRelationsAfter:  after,
+				}, nil
+			},
+			BackfillEmbeddingDims: func(ctx context.Context) (int64, error) {
+				return entityRepo.BackfillEmbeddingDimFromVectors(ctx)
+			},
+			ReExtract: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (api.EnrichmentReExtractResult, error) {
+				resp, err := enrichSvc.ReExtract(ctx, &service.ReExtractRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return api.EnrichmentReExtractResult{}, err
+				}
+				return api.EnrichmentReExtractResult{
+					CandidateCount:      resp.CandidateCount,
+					Enqueued:            resp.Enqueued,
+					EntitiesRecomputed:  resp.EntitiesRecomputed,
+					FactChildrenRemoved: resp.FactChildrenRemoved,
+				}, nil
 			},
 		}),
 		AdminOAuth:           api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),

@@ -51,9 +51,9 @@ func (r *RelationshipRepo) Create(ctx context.Context, rel *model.Relationship) 
 	}
 	// Canonicalize the relation label so formatting variants collapse onto one
 	// row via the unique key (the ON CONFLICT below then merges weights). The
-	// repo is the single write choke point, so every caller is covered without
-	// per-writer edits. Write back onto the struct, like rel.ID above, so the
-	// caller observes the persisted value.
+	// repo applies formatting-only normalization; closed-vocabulary coercion is
+	// done at the extraction write path so imports and programmatic edges keep
+	// their original labels. Write back onto the struct, like rel.ID above.
 	rel.Relation = model.CanonicalRelation(rel.Relation)
 
 	var validUntil any
@@ -309,6 +309,167 @@ func (r *RelationshipRepo) ListByEntity(ctx context.Context, entityID uuid.UUID,
 	defer func() { _ = rows.Close() }()
 
 	return r.scanRelationships(rows)
+}
+
+// RelabelRelations coerces every relationship label into the closed vocabulary
+// (model.CanonicalRelationVocab) in place, stamping kinship subtype into
+// properties.kind before the family_of collapse erases it. When a relabel would
+// collide with an existing edge on the unique key (namespace, source, target,
+// relation, valid_from), the colliding rows are merged (max weight kept) rather
+// than failing the constraint. Idempotent; dryRun returns the counts without
+// writing. Returns rows whose label changes, and the distinct-relation
+// cardinality before and after.
+func (r *RelationshipRepo) RelabelRelations(ctx context.Context, dryRun bool) (rowsChanged int64, distinctBefore, distinctAfter int, err error) {
+	rows, err := r.db.Query(ctx, `SELECT relation, COUNT(*) FROM relationships GROUP BY relation`)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("relabel relations: distinct scan: %w", err)
+	}
+	type relCount struct {
+		old   string
+		count int64
+	}
+	var counts []relCount
+	afterSet := make(map[string]struct{})
+	for rows.Next() {
+		var rc relCount
+		if scanErr := rows.Scan(&rc.old, &rc.count); scanErr != nil {
+			_ = rows.Close()
+			return 0, 0, 0, fmt.Errorf("relabel relations: scan: %w", scanErr)
+		}
+		counts = append(counts, rc)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, fmt.Errorf("relabel relations: rows: %w", err)
+	}
+
+	distinctBefore = len(counts)
+	for _, rc := range counts {
+		newRel := model.CanonicalRelationVocab(rc.old)
+		afterSet[newRel] = struct{}{}
+		if newRel != rc.old {
+			rowsChanged += rc.count
+		}
+	}
+	distinctAfter = len(afterSet)
+	if dryRun {
+		return rowsChanged, distinctBefore, distinctAfter, nil
+	}
+
+	for _, rc := range counts {
+		if kind := model.RelationKind(rc.old); kind != "" {
+			if err := r.stampRelationKind(ctx, rc.old, kind); err != nil {
+				return rowsChanged, distinctBefore, distinctAfter, err
+			}
+		}
+		newRel := model.CanonicalRelationVocab(rc.old)
+		if newRel == rc.old {
+			continue
+		}
+		if err := r.relabelRelationOne(ctx, rc.old, newRel); err != nil {
+			return rowsChanged, distinctBefore, distinctAfter, err
+		}
+	}
+	return rowsChanged, distinctBefore, distinctAfter, nil
+}
+
+// stampRelationKind writes properties.kind for every row with the given relation
+// label that does not already carry a kind, using each backend's JSON builder.
+func (r *RelationshipRepo) stampRelationKind(ctx context.Context, relation, kind string) error {
+	var query string
+	var args []any
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE relationships
+			SET properties = jsonb_set(COALESCE(properties, '{}'::jsonb), '{kind}', to_jsonb($2::text), true)
+			WHERE relation = $1 AND (properties->>'kind') IS NULL`
+		args = []any{relation, kind}
+	} else {
+		query = `UPDATE relationships
+			SET properties = json_set(COALESCE(properties, '{}'), '$.kind', ?)
+			WHERE relation = ? AND json_extract(COALESCE(properties, '{}'), '$.kind') IS NULL`
+		args = []any{kind, relation}
+	}
+	if _, err := r.db.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("stamp relation kind: %w", err)
+	}
+	return nil
+}
+
+// relabelRelationOne relabels all rows with relation=old to new, merging any
+// that would collide with an existing new-labeled edge on the unique key
+// (keeping the higher weight). Mirrors mergeRelationshipsByEndpoint but keys on
+// the relation label.
+func (r *RelationshipRepo) relabelRelationOne(ctx context.Context, old, newRel string) error {
+	pg := r.db.Backend() == BackendPostgres
+	// Step 1: lift max(weight) onto existing new-labeled rows that collide.
+	var maxQ string
+	if pg {
+		maxQ = `UPDATE relationships newrel SET weight = GREATEST(newrel.weight, oldrel.weight)
+			FROM relationships oldrel
+			WHERE newrel.relation = $2 AND oldrel.relation = $1
+			  AND newrel.namespace_id = oldrel.namespace_id
+			  AND newrel.source_id = oldrel.source_id
+			  AND newrel.target_id = oldrel.target_id
+			  AND newrel.valid_from = oldrel.valid_from`
+	} else {
+		maxQ = `UPDATE relationships
+			SET weight = MAX(weight, (
+				SELECT o.weight FROM relationships o
+				WHERE o.relation = ? AND o.namespace_id = relationships.namespace_id
+				  AND o.source_id = relationships.source_id AND o.target_id = relationships.target_id
+				  AND o.valid_from = relationships.valid_from))
+			WHERE relation = ? AND EXISTS (
+				SELECT 1 FROM relationships o
+				WHERE o.relation = ? AND o.namespace_id = relationships.namespace_id
+				  AND o.source_id = relationships.source_id AND o.target_id = relationships.target_id
+				  AND o.valid_from = relationships.valid_from)`
+	}
+	if pg {
+		if _, err := r.db.Exec(ctx, maxQ, old, newRel); err != nil {
+			return fmt.Errorf("relabel merge weights: %w", err)
+		}
+	} else {
+		if _, err := r.db.Exec(ctx, maxQ, old, newRel, old); err != nil {
+			return fmt.Errorf("relabel merge weights: %w", err)
+		}
+	}
+	// Step 2: delete old-labeled rows that collide with a new-labeled row.
+	var delQ string
+	if pg {
+		delQ = `DELETE FROM relationships oldrel USING relationships newrel
+			WHERE oldrel.relation = $1 AND newrel.relation = $2
+			  AND newrel.namespace_id = oldrel.namespace_id
+			  AND newrel.source_id = oldrel.source_id
+			  AND newrel.target_id = oldrel.target_id
+			  AND newrel.valid_from = oldrel.valid_from`
+	} else {
+		delQ = `DELETE FROM relationships
+			WHERE relation = ? AND EXISTS (
+				SELECT 1 FROM relationships n
+				WHERE n.relation = ? AND n.namespace_id = relationships.namespace_id
+				  AND n.source_id = relationships.source_id AND n.target_id = relationships.target_id
+				  AND n.valid_from = relationships.valid_from)`
+	}
+	if _, err := r.db.Exec(ctx, delQ, old, newRel); err != nil {
+		return fmt.Errorf("relabel delete collisions: %w", err)
+	}
+	// Step 3: relabel the survivors.
+	var updQ string
+	if pg {
+		updQ = `UPDATE relationships SET relation = $2 WHERE relation = $1`
+	} else {
+		updQ = `UPDATE relationships SET relation = ? WHERE relation = ?`
+	}
+	if pg {
+		if _, err := r.db.Exec(ctx, updQ, old, newRel); err != nil {
+			return fmt.Errorf("relabel survivors: %w", err)
+		}
+	} else {
+		if _, err := r.db.Exec(ctx, updQ, newRel, old); err != nil {
+			return fmt.Errorf("relabel survivors: %w", err)
+		}
+	}
+	return nil
 }
 
 // ListByEntities returns every relationship touching any of the given entities
@@ -736,9 +897,10 @@ func (r *RelationshipRepo) execBatchCreateChunk(ctx context.Context, tx *sql.Tx,
 		} else {
 			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		}
-		// Canonicalize before binding so variants collide on the unique key and
-		// the ON CONFLICT merge fires. fallbackPerRowCreate re-enters this method
-		// per row, but CanonicalRelation is idempotent so that is harmless.
+		// Formatting-only canonicalization before binding so variants collide on
+		// the unique key and the ON CONFLICT merge fires. fallbackPerRowCreate
+		// re-enters this method per row, but CanonicalRelation is idempotent so
+		// that is harmless. Vocabulary coercion happens at the extraction layer.
 		rel.Relation = model.CanonicalRelation(rel.Relation)
 		var validUntil any
 		if rel.ValidUntil != nil {

@@ -76,13 +76,62 @@ type EnrichmentAdminConfig struct {
 	// memories (stored before multi-vector was enabled) gain topic facets. Nil
 	// disables the endpoint with a 503 response.
 	BackfillMultiVector func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
+
+	// RelabelGraph re-types every entity and re-labels every relation in place
+	// against the closed vocabulary, merging colliders (no LLM). DryRun reports
+	// the would-be counts. Nil disables the endpoint with a 503.
+	RelabelGraph func(ctx context.Context, dryRun bool) (EnrichmentRelabelResult, error)
+
+	// BackfillEmbeddingDims repairs the entities.embedding_dim scalar from actual
+	// vector presence (Postgres only). Returns rows updated. Nil disables with 503.
+	BackfillEmbeddingDims func(ctx context.Context) (int64, error)
+
+	// ReExtract tombstones each candidate memory's graph footprint, clears its
+	// enriched flag, and re-enqueues it for full re-extraction under the current
+	// prompt/vocabulary. DryRun returns the candidate count only. Nil disables
+	// the endpoint with a 503.
+	ReExtract func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (EnrichmentReExtractResult, error)
+}
+
+// EnrichmentRelabelResult is the response for POST /enrichment/relabel-graph.
+type EnrichmentRelabelResult struct {
+	EntitiesRetyped         int64 `json:"entities_retyped"`
+	EntitiesMerged          int64 `json:"entities_merged"`
+	RelationRowsRelabeled   int64 `json:"relation_rows_relabeled"`
+	DistinctRelationsBefore int   `json:"distinct_relations_before"`
+	DistinctRelationsAfter  int   `json:"distinct_relations_after"`
+	DryRun                  bool  `json:"dry_run"`
+}
+
+// EnrichmentReExtractResult is the response for POST /enrichment/re-extract.
+type EnrichmentReExtractResult struct {
+	CandidateCount      int  `json:"candidate_count"`
+	Enqueued            int  `json:"enqueued"`
+	EntitiesRecomputed  int  `json:"entities_recomputed"`
+	FactChildrenRemoved int  `json:"fact_children_removed"`
+	DryRun              bool `json:"dry_run"`
 }
 
 // EnrichmentQueueStatus is the response for GET /enrichment/queue.
 type EnrichmentQueueStatus struct {
-	Counts EnrichmentQueueCounts `json:"counts"`
-	Items  []EnrichmentQueueItem `json:"items"`
-	Paused bool                  `json:"paused"`
+	Counts           EnrichmentQueueCounts          `json:"counts"`
+	Items            []EnrichmentQueueItem          `json:"items"`
+	Paused           bool                           `json:"paused"`
+	ExtractionHealth EnrichmentExtractionHealthInfo `json:"extraction_health"`
+}
+
+// EnrichmentExtractionHealthInfo summarizes the extraction outcomes recorded in
+// enrichment_queue.last_error so the admin UI can show how often extraction is
+// truncating, looping, or failing to parse, without an operator reading server
+// logs. Counts are over jobs whose latest last_error carries each marker (a job
+// that partial-recovered then completed keeps its warning), so they read as a
+// rolling indicator, not an exact lifetime rate.
+type EnrichmentExtractionHealthInfo struct {
+	PartialRecovery  int64 `json:"partial_recovery"`
+	ParseFailed      int64 `json:"parse_failed"`
+	LengthNoRecovery int64 `json:"length_no_recovery"`
+	EmptyResponse    int64 `json:"empty_response"`
+	LLMCallFailed    int64 `json:"llm_call_failed"`
 }
 
 // Queue list pagination bounds. The default page size matches the historical
@@ -295,6 +344,12 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentBackfillMultiVector(w, r, cfg)
 		case "backfill-extracted-fact-paraphrase":
 			handleEnrichmentBackfillExtractedFactParaphrase(w, r, cfg)
+		case "relabel-graph":
+			handleEnrichmentRelabelGraph(w, r, cfg)
+		case "backfill-embedding-dims":
+			handleEnrichmentBackfillEmbeddingDims(w, r, cfg)
+		case "re-extract":
+			handleEnrichmentReExtract(w, r, cfg)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -827,4 +882,86 @@ func handleEnrichmentBackfillExtractedFactParaphrase(w http.ResponseWriter, r *h
 		Enqueued:       enq,
 		DryRun:         body.DryRun,
 	})
+}
+
+// enrichmentDryRunRequest is the wire shape for operations that take only a
+// dry-run flag (relabel-graph).
+type enrichmentDryRunRequest struct {
+	DryRun bool `json:"dry_run"`
+}
+
+// handleEnrichmentRelabelGraph handles POST /enrichment/relabel-graph: the
+// no-LLM deterministic re-type + re-label + collider-merge over the existing
+// graph. DryRun reports the would-be counts without writing.
+func handleEnrichmentRelabelGraph(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.RelabelGraph == nil {
+		http.Error(w, "relabel-graph not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentDryRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	result, err := cfg.RelabelGraph(r.Context(), body.DryRun)
+	if err != nil {
+		WriteError(w, ErrInternal("relabel graph: "+err.Error()))
+		return
+	}
+	result.DryRun = body.DryRun
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleEnrichmentBackfillEmbeddingDims handles POST
+// /enrichment/backfill-embedding-dims: repair the entities.embedding_dim scalar
+// from actual vector presence so dedup's cosine path is re-enabled.
+func handleEnrichmentBackfillEmbeddingDims(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillEmbeddingDims == nil {
+		http.Error(w, "backfill-embedding-dims not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	updated, err := cfg.BackfillEmbeddingDims(r.Context())
+	if err != nil {
+		WriteError(w, ErrInternal("backfill embedding dims: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"updated": updated})
+}
+
+// handleEnrichmentReExtract handles POST /enrichment/re-extract. ProjectID is
+// optional; omit to scope the whole deployment. DryRun returns the candidate
+// count without writing; Limit caps how many memories this call processes.
+func handleEnrichmentReExtract(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.ReExtract == nil {
+		http.Error(w, "re-extract not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest // {project_id?, dry_run, limit}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	result, err := cfg.ReExtract(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("re-extract: "+err.Error()))
+		return
+	}
+	result.DryRun = body.DryRun
+	writeJSON(w, http.StatusOK, result)
 }

@@ -183,9 +183,10 @@ func RenderContradictionUser(statementA, statementB string) string {
 	return provider.Fence("statement_a", statementA) + "\n\n" + provider.Fence("statement_b", statementB)
 }
 
-// ExtractFactsLLM runs the fact-extraction prompt and parses the response.
+// extractFactsOnce runs the fact-extraction prompt once over the given content
+// and parses the response. ExtractFactsLLM wraps it with chunking + continuation.
 // Returns *ExtractionFailure on call or parse failure (use errors.As).
-func ExtractFactsLLM(
+func extractFactsOnce(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	settings *SettingsService,
@@ -232,9 +233,10 @@ func ExtractFactsLLM(
 	}, nil
 }
 
-// ExtractEntitiesLLM runs the entity-extraction prompt and parses the response.
+// extractEntitiesOnce runs the entity-extraction prompt once over the given
+// content. ExtractEntitiesLLM wraps it with chunking + continuation.
 // Returns *ExtractionFailure on call or parse failure (use errors.As).
-func ExtractEntitiesLLM(
+func extractEntitiesOnce(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	settings *SettingsService,

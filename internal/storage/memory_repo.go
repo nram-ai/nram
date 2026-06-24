@@ -1296,6 +1296,82 @@ ORDER BY m.id ASC`
 	return scanBackfillCandidates(rows)
 }
 
+// ListReExtractCandidates returns memories eligible for full re-extraction:
+// enriched, live (not deleted/superseded), user/import origin (never dream
+// syntheses, which the worker would skip anyway), and not themselves a derived
+// extracted-fact child (re-extracting a parent regenerates those). Scoped to the
+// given namespaces when non-empty; ordered by id for stable paging.
+func (r *MemoryRepo) ListReExtractCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+	pg := r.db.Backend() == BackendPostgres
+	args := []any{}
+	ph := func() string {
+		if pg {
+			return fmt.Sprintf("$%d", len(args)+1)
+		}
+		return "?"
+	}
+
+	enrichedPH := ph()
+	args = append(args, EncodeBool(r.db.Backend(), true))
+	dreamPH := ph()
+	args = append(args, string(model.OriginDream))
+
+	relPHs := make([]string, len(ExtractedChildRelations))
+	for i, rel := range ExtractedChildRelations {
+		relPHs[i] = ph()
+		args = append(args, rel)
+	}
+
+	nsClause := ""
+	if len(namespaceIDs) > 0 {
+		placeholders := make([]string, len(namespaceIDs))
+		for i, ns := range namespaceIDs {
+			placeholders[i] = ph()
+			args = append(args, ns.String())
+		}
+		nsClause = " AND m.namespace_id IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+
+	query := `SELECT m.id, m.namespace_id
+FROM memories m
+WHERE m.enriched = ` + enrichedPH + `
+  AND m.deleted_at IS NULL
+  AND m.superseded_by IS NULL
+  AND m.origin <> ` + dreamPH + `
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_lineage l
+    WHERE l.memory_id = m.id AND l.namespace_id = m.namespace_id
+      AND l.relation IN (` + strings.Join(relPHs, ", ") + `)
+  )` + nsClause + `
+ORDER BY m.id ASC`
+	if limit > 0 {
+		query += " LIMIT " + ph()
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list re-extract candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanBackfillCandidates(rows)
+}
+
+// ResetEnriched clears the enriched flag so the worker re-runs fact and entity
+// extraction on the next enqueue (the skip guard gates on enriched). Used by the
+// re-extraction path after the memory's prior graph footprint is tombstoned.
+func (r *MemoryRepo) ResetEnriched(ctx context.Context, id, namespaceID uuid.UUID) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE memories SET enriched = ?, updated_at = ? WHERE id = ? AND namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE memories SET enriched = $1, updated_at = $2 WHERE id = $3 AND namespace_id = $4`
+	}
+	if _, err := r.db.Exec(ctx, query, EncodeBool(r.db.Backend(), false), now, id.String(), namespaceID.String()); err != nil {
+		return fmt.Errorf("reset enriched: %w", err)
+	}
+	return nil
+}
+
 // UpdateEmbeddingDim sets a memory's embedding_dim without rewriting every
 // other column. Used by the enrichment worker to record the dim that a
 // child memory's vector was written at.

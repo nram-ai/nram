@@ -47,6 +47,9 @@ func (s *recordingFacetStore) GetByIDs(_ context.Context, _ storage.VectorKind, 
 	}
 	return out, nil
 }
+func (s *recordingFacetStore) Search(context.Context, storage.VectorKind, []float32, uuid.UUID, int, int) ([]storage.VectorSearchResult, error) {
+	return nil, nil
+}
 func (s *recordingFacetStore) UpsertFacets(_ context.Context, memoryID, _ uuid.UUID, _ int, facets [][]float32) error {
 	s.facetCalls[memoryID] = facets
 	return nil

@@ -105,6 +105,8 @@ type ExtractionService struct {
 	entityProvider func() provider.LLMProvider
 	embedProvider  func() provider.EmbeddingProvider
 	settings       *SettingsService
+	relClassifier  *SemanticClassifier
+	typeClassifier *SemanticClassifier
 }
 
 // NewExtractionService creates a new ExtractionService with the given
@@ -127,6 +129,10 @@ func NewExtractionService(
 	embedProvider func() provider.EmbeddingProvider,
 	settings *SettingsService,
 ) *ExtractionService {
+	threshold := GetDefaultFloat(SettingSemanticVocabThreshold)
+	if settings != nil {
+		threshold = settings.ResolveFloatWithDefault(context.Background(), SettingSemanticVocabThreshold, "global")
+	}
 	return &ExtractionService{
 		memories:       memories,
 		projects:       projects,
@@ -140,6 +146,8 @@ func NewExtractionService(
 		entityProvider: entityProvider,
 		embedProvider:  embedProvider,
 		settings:       settings,
+		relClassifier:  NewRelationClassifier(embedProvider, threshold),
+		typeClassifier: NewEntityTypeClassifier(embedProvider, threshold),
 	}
 }
 
@@ -359,7 +367,7 @@ func (s *ExtractionService) extractEntities(
 			NamespaceID:  ns.ID,
 			Name:         ed.Name,
 			Canonical:    canonical,
-			EntityType:   ed.Type,
+			EntityType:   s.typeClassifier.Classify(ctx, ed.Type),
 			Properties:   props,
 			MentionCount: 1,
 			CreatedAt:    time.Now(),
@@ -401,6 +409,10 @@ func (s *ExtractionService) extractEntities(
 			propsBytes, _ := json.Marshal(map[string]string{"temporal": rel.Temporal})
 			relationship.Properties = propsBytes
 		}
+
+		// Coerce the extracted relation into the closed vocabulary (static map +
+		// embedding nearest-neighbor fallback) and stamp kinship subtype.
+		s.relClassifier.ApplyRelation(ctx, relationship)
 
 		relCandidates = append(relCandidates, relationship)
 	}

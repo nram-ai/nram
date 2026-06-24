@@ -1123,6 +1123,7 @@ function EnrichmentMonitor() {
     [pages],
   );
   const isPaused = firstPage?.paused ?? false;
+  const health = firstPage?.extraction_health;
 
   const handleSort = useCallback(
     (field: SortField) => {
@@ -1359,6 +1360,27 @@ function EnrichmentMonitor() {
             )}
           </div>
           )}
+
+          {/* Extraction health: rolling counts of truncation / loop / parse
+              failures recorded on the queue, so the operator sees extraction
+              quality pressure without reading server logs. */}
+          {health &&
+            (health.partial_recovery > 0 ||
+              health.length_no_recovery > 0 ||
+              health.parse_failed > 0 ||
+              health.empty_response > 0 ||
+              health.llm_call_failed > 0) && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  Extraction health
+                </span>
+                <span>partial recovery: {health.partial_recovery}</span>
+                <span>truncated: {health.length_no_recovery}</span>
+                <span>parse failed: {health.parse_failed}</span>
+                <span>empty: {health.empty_response}</span>
+                <span>call failed: {health.llm_call_failed}</span>
+              </div>
+            )}
 
           {/* Mutation feedback */}
           {retryMutation.isSuccess && (

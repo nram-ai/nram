@@ -379,6 +379,28 @@ const (
 	SettingEntityExtractionSyncTemperature  = "enrichment.entity_extraction.sync.temperature"
 	SettingEntityExtractionAsyncTemperature = "enrichment.entity_extraction.async.temperature"
 
+	// Write-path entity resolution: embed the candidate name and cosine-match
+	// against existing entity vectors before creating a new entity, so a
+	// near-duplicate is merged at creation instead of only in dreaming. Disabled
+	// by setting the enabled flag false; threshold matches the dreaming merge.
+	SettingEntityResolutionCosineEnabled   = "enrichment.entity_resolution.cosine_enabled"
+	SettingEntityResolutionCosineThreshold = "enrichment.entity_resolution.cosine_threshold"
+
+	// Semantic vocabulary classifier: when an extracted relation or entity type
+	// is not in the static synonym map, embed it and assign the nearest canonical
+	// term whose gloss is at least this cosine-similar, instead of dropping it to
+	// related to / other. Keeps the meaningful-label rate high on an 8b model's
+	// open verb/type vocabulary. Set the threshold to 1 to effectively disable.
+	SettingSemanticVocabThreshold = "enrichment.semantic_vocab.threshold"
+
+	// Extraction robustness: split a memory whose estimated content tokens
+	// exceed the threshold into overlapping chunks, extract per chunk, and merge,
+	// so dense memories no longer truncate at the model's max_tokens. The
+	// continuation cap bounds how many finish_reason=length follow-up passes run.
+	SettingExtractionChunkThresholdTokens  = "enrichment.extraction.chunk_threshold_tokens"
+	SettingExtractionChunkOverlapTokens    = "enrichment.extraction.chunk_overlap_tokens"
+	SettingExtractionContinuationMaxPasses = "enrichment.extraction.continuation_max_passes"
+
 	// Dreaming worker tuning beyond what the existing dreaming.* keys cover.
 	SettingDreamContradictionNeighbors = "dreaming.contradiction.neighbors_per_anchor"
 	SettingDreamEntityMergeThreshold   = "dreaming.entity_merge.cosine_threshold"
@@ -739,22 +761,42 @@ Hard rules:
 - Do NOT emit a fact that differs from the input only by punctuation, capitalization, or whitespace.
 - Tag-only deltas are NOT a reason to emit a fact. If the only thing you would add is a new tag on otherwise-identical content, return an empty array; the calling system merges tags from suppressed facts into the parent automatically.
 - Only emit facts that introduce a new entity, relationship, quantity, date, cause, consequence, or other proposition not already explicit in the input.
+- Do NOT repeat a fact you have already emitted, and do NOT loop the same cluster of facts. Each fact must be distinct. Stop once every distinct fact is listed; never pad the output.
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
-	entitySystemPromptText = `You are an entity and relationship extraction engine. Given a text, extract all named entities and relationships between them as JSON.
+	// entitySystemPromptText enumerates the closed entity-type and relation
+	// vocabularies as a soft constraint; CanonicalEntityType / CanonicalRelationVocab
+	// enforce them deterministically on the write path. The lists here are kept
+	// in step with model.CanonicalEntityTypes / model.CanonicalRelations by
+	// TestEntitySystemPromptListsClosedVocab (drift guard).
+	entitySystemPromptText = `You are an entity and relationship extraction engine. Given a text, extract the named entities and the relationships between them as JSON.
 
 Return a JSON object with two fields:
 - "entities": array of objects with fields:
-  - "name": the entity name (string)
-  - "type": the entity type, e.g. "person", "organization", "location", "concept" (string)
+  - "name": the entity's proper name, as short as possible (string)
+  - "type": one of EXACTLY these types (string): person, organization, location, product, event, role, date, concept, technology, software, code_symbol, file, data_store, system, configuration, command, vcs_ref, credential, identifier, metric, document, research_artifact, medication, medical_condition, biomarker. If none fit, use "other". Never invent a type outside this list.
   - "properties": optional key-value pairs (object)
 - "relationships": array of objects with fields:
   - "source": source entity name (string)
   - "target": target entity name (string)
-  - "relation": the relationship type (string)
+  - "relation": one of EXACTLY these relations (string). Map your verb to the closest one; do NOT invent verbs. Guide:
+    - member of: employment/study/affiliation (worked at, studied at, joined, member of)
+    - produces: creation/authorship (authored, founded, built, developed, created, wrote)
+    - uses: consumes/operates/calls (uses, written in, calls, deployed, adopted)
+    - depends on: needs/hosted by (requires, served by, runs on, relies on)
+    - affects: manages/leads/changes (managed, led, oversaw, modifies, influences)
+    - family of: kinship (married to, mother of, brother of, child of)
+    - has property: traits/titles/credentials (has, held title, earned, characterized by)
+    - located in: place (lives in, based in, near)
+    - part of / has part / is a / references / implements / supports / compares to / interacts with: structural/semantic links
+    If truly none fit, use "related to". Never output a relation outside this list.
   - "weight": confidence/strength 0.0 to 1.0 (number)
   - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
+
+Hard rules:
+- An entity is a NAMED thing (a person, place, system, file, drug, etc.), not a statement. Do NOT extract whole sentences, claims, opinions, questions, code snippets, SQL, shell commands, or file contents as entities. A name longer than a short phrase is almost always wrong.
+- Do NOT repeat an entity or relationship you have already emitted, and do NOT loop. Each entity and relationship must be distinct.
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
@@ -1068,6 +1110,15 @@ var settingDefaults = map[string]string{
 	SettingFactExtractionAsyncTemperature:   "0.2",
 	SettingEntityExtractionSyncTemperature:  "0.1",
 	SettingEntityExtractionAsyncTemperature: "0.2",
+
+	SettingEntityResolutionCosineEnabled:   "true",
+	SettingEntityResolutionCosineThreshold: "0.92",
+
+	SettingSemanticVocabThreshold: "0.50",
+
+	SettingExtractionChunkThresholdTokens:  "2800",
+	SettingExtractionChunkOverlapTokens:    "200",
+	SettingExtractionContinuationMaxPasses: "2",
 
 	SettingDreamContradictionNeighbors: "1",
 	SettingDreamEntityMergeThreshold:   "0.92",

@@ -406,6 +406,10 @@ func (m *mockEntityUpserter) FindBySimilarity(_ context.Context, _ uuid.UUID, _ 
 	return nil, nil
 }
 
+func (m *mockEntityUpserter) GetByID(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.Entity, error) {
+	return nil, nil
+}
+
 func (m *mockEntityUpserter) UpdateEmbeddingDimBatch(_ context.Context, _ []uuid.UUID, _ int) error {
 	return nil
 }
@@ -578,6 +582,10 @@ func (m *mockVectorWriter) GetByIDs(_ context.Context, _ storage.VectorKind, ids
 		}
 	}
 	return out, nil
+}
+
+func (m *mockVectorWriter) Search(_ context.Context, _ storage.VectorKind, _ []float32, _ uuid.UUID, _ int, _ int) ([]storage.VectorSearchResult, error) {
+	return nil, nil
 }
 
 // mockLLMProvider simulates an LLM provider.
@@ -1104,8 +1112,10 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		t.Errorf("expected 1 relationship, got %d", len(h.rels.created))
 	} else {
 		rel := h.rels.created[0]
-		if rel.Relation != "works_at" {
-			t.Errorf("expected relation 'works_at', got %q", rel.Relation)
+		// "works_at" is coerced to the closed-vocabulary "member_of" at the
+		// extraction write path (model.ApplyRelationVocab).
+		if rel.Relation != "member of" {
+			t.Errorf("expected relation 'member of' (coerced from works_at), got %q", rel.Relation)
 		}
 	}
 
@@ -1130,13 +1140,14 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 	}
 
 	// Token usage: fact_extraction + entity_extraction + query_augment +
-	// embedding = 4 records (query augmentation defaults on and runs on the
-	// parent before embedding). Each must attribute to the parent memory;
-	// query_augment and embedding are the regression guard (both previously
-	// wrote token_usage rows with memory_id=NULL, so those phases never
-	// attached to a memory in the per-phase metrics views).
-	if len(h.tokens.records) != 4 {
-		t.Errorf("expected 4 token usage records, got %d", len(h.tokens.records))
+	// embedding = 4 base records (query augmentation defaults on and runs on the
+	// parent before embedding), plus 2 write-path cosine-resolution embeds (one
+	// per new entity; cosine-on-write defaults on) = 6. Each must attribute to
+	// the parent memory; query_augment, embedding, and the cosine embeds are the
+	// regression guard (these previously wrote token_usage rows with
+	// memory_id=NULL, so those phases never attached to a memory).
+	if len(h.tokens.records) != 6 {
+		t.Errorf("expected 6 token usage records, got %d", len(h.tokens.records))
 	}
 	for _, op := range []string{"fact_extraction", "entity_extraction", "query_augment", "embedding"} {
 		found := false
@@ -1448,6 +1459,12 @@ func TestProcessJob_BackfillSkipsFactsWhenLineagePresent(t *testing.T) {
 	factLLM, entityLLM, embedProv, factCalls, entityCalls, embedCalls := backfillProbeProviders()
 
 	h := newTestHarness(factLLM, entityLLM, embedProv)
+	// Disable write-path cosine resolution so the embed-call count reflects only
+	// the backfill/augmentation embed under test (cosine would add one embed per
+	// new entity; that path is covered by TestProcessJob_FullPipeline).
+	if err := h.settings.Set(context.Background(), service.SettingEntityResolutionCosineEnabled, "false", "global", nil); err != nil {
+		t.Fatalf("disable cosine: %v", err)
+	}
 	h.lineage.hasExtractedFactChildren = true // simulate prior fact extraction
 	mem := testMemory()
 	mem.Enriched = false
@@ -1513,6 +1530,12 @@ func TestProcessJob_BackfillRunsBothWhenNothingPresent(t *testing.T) {
 	// paraphrase guard so this test exercises the absence-probe path
 	// and not the guard.
 	disableParaphraseGuard(t, h)
+	// Disable write-path cosine resolution so the embed-call count reflects only
+	// the extraction/augmentation path under test (covered with cosine on in
+	// TestProcessJob_FullPipeline).
+	if err := h.settings.Set(context.Background(), service.SettingEntityResolutionCosineEnabled, "false", "global", nil); err != nil {
+		t.Fatalf("disable cosine: %v", err)
+	}
 	mem := testMemory()
 	mem.Enriched = false
 	h.reader.byID[mem.ID] = mem

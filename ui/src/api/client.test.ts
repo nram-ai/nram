@@ -1582,6 +1582,33 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("relabelGraph() dry run returns counts or errors", async () => {
+      try {
+        const res = await adminAPI.relabelGraph({ dry_run: true });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("backfillEmbeddingDims() returns updated count or errors", async () => {
+      try {
+        const res = await adminAPI.backfillEmbeddingDims();
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("reExtract() dry run returns candidate counts or errors", async () => {
+      try {
+        const res = await adminAPI.reExtract({ dry_run: true, limit: 5 });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("getGraphHealth() + repairGraph() run", async () => {
       const health = await adminAPI.getGraphHealth();
       expect(health).toBeDefined();

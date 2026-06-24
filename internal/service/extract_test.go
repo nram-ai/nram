@@ -235,8 +235,10 @@ func TestExtract_SuccessfulFactsAndEntities(t *testing.T) {
 		t.Fatalf("expected 1 relationship, got %d", len(deps.relationships.relationships))
 	}
 	rel := deps.relationships.relationships[0]
-	if rel.Relation != "works_at" {
-		t.Errorf("expected relation 'works_at', got %q", rel.Relation)
+	// The extracted "works_at" is coerced to the closed-vocabulary "member_of"
+	// at the extraction write path (model.ApplyRelationVocab).
+	if rel.Relation != "member of" {
+		t.Errorf("expected relation 'member of' (coerced from works_at), got %q", rel.Relation)
 	}
 
 	// Token totals.
@@ -660,8 +662,9 @@ func TestExtract_RelationshipsWithCorrectSourceTarget(t *testing.T) {
 	if rel.TargetID != googleID {
 		t.Errorf("expected target ID %s (Google), got %s", googleID, rel.TargetID)
 	}
-	if rel.Relation != "employed_by" {
-		t.Errorf("expected relation 'employed_by', got %q", rel.Relation)
+	// "employed_by" is coerced to the closed-vocabulary "member_of".
+	if rel.Relation != "member of" {
+		t.Errorf("expected relation 'member of' (coerced from employed_by), got %q", rel.Relation)
 	}
 }
 

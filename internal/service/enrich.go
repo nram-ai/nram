@@ -63,6 +63,16 @@ type MultiVectorCandidateLister interface {
 	ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
+// ReExtractStore is the storage surface the re-extraction path needs beyond the
+// shared queue/lineage deps: candidate listing, enriched reset, and soft-delete
+// of prior extracted-fact children. Kept as a tiny interface so re-extraction
+// can be wired without widening MemoryReader.
+type ReExtractStore interface {
+	ListReExtractCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+	ResetEnriched(ctx context.Context, id, namespaceID uuid.UUID) error
+	SoftDelete(ctx context.Context, id, namespaceID uuid.UUID) error
+}
+
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
 	memories         MemoryReader
@@ -72,6 +82,110 @@ type EnrichService struct {
 	augLister        AugmentationCandidateLister
 	paraphraseLister ParaphraseCandidateLister
 	mvLister         MultiVectorCandidateLister
+	reExtractStore   ReExtractStore
+	graphReaper      GraphReaper
+}
+
+// AttachReExtract wires the dependencies for ReExtract: the candidate/reset/
+// soft-delete store and the graph reaper that tombstones a memory's footprint.
+// Optional: when unset, ReExtract returns an explanatory error.
+func (s *EnrichService) AttachReExtract(store ReExtractStore, reaper GraphReaper) {
+	s.reExtractStore = store
+	s.graphReaper = reaper
+}
+
+// ReExtractRequest scopes a full re-extraction to a project (or the whole
+// deployment when ProjectID is zero). DryRun returns the candidate count and
+// writes nothing. Limit caps how many memories one call processes (0 = no cap);
+// re-extraction over a large deployment is run in pages.
+type ReExtractRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+}
+
+// ReExtractResponse reports the outcome of one re-extraction call.
+type ReExtractResponse struct {
+	CandidateCount      int   `json:"candidate_count"`
+	Enqueued            int   `json:"enqueued"`
+	DryRun              bool  `json:"dry_run"`
+	EntitiesRecomputed  int   `json:"entities_recomputed"`
+	FactChildrenRemoved int   `json:"fact_children_removed"`
+	LatencyMs           int64 `json:"latency_ms"`
+}
+
+// ReExtract re-runs fact and entity extraction over already-enriched memories
+// under the current prompt and vocabulary. For each candidate it tombstones the
+// memory's prior graph footprint (so it is not double-counted), removes prior
+// extracted-fact children (so they are not duplicated), clears the enriched flag
+// and re-enqueues the memory. The worker's skip guard gates on enriched AND on
+// the relationships-exist probe, so both the reset and the tombstone are
+// required for extraction to actually re-run. Dream syntheses and procedural
+// entries are never candidates. DryRun returns the candidate count only.
+func (s *EnrichService) ReExtract(ctx context.Context, req *ReExtractRequest) (*ReExtractResponse, error) {
+	start := time.Now()
+	if s.reExtractStore == nil || s.graphReaper == nil {
+		return nil, fmt.Errorf("re-extraction not configured (call AttachReExtract)")
+	}
+
+	var namespaceIDs []uuid.UUID
+	if req.ProjectID != uuid.Nil {
+		project, perr := s.projects.GetByID(ctx, req.ProjectID)
+		if perr != nil {
+			return nil, fmt.Errorf("project not found: %w", perr)
+		}
+		namespaceIDs = []uuid.UUID{project.NamespaceID}
+	}
+
+	candidates, err := s.reExtractStore.ListReExtractCandidates(ctx, namespaceIDs, req.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list re-extract candidates: %w", err)
+	}
+	resp := &ReExtractResponse{CandidateCount: len(candidates), DryRun: req.DryRun}
+	if req.DryRun || len(candidates) == 0 {
+		resp.LatencyMs = time.Since(start).Milliseconds()
+		return resp, nil
+	}
+
+	now := time.Now()
+	for _, cand := range candidates {
+		affected, rerr := s.graphReaper.ReapMemoryFootprint(ctx, cand.NamespaceID, cand.ID)
+		if rerr != nil {
+			return nil, fmt.Errorf("reap footprint for memory %s: %w", cand.ID, rerr)
+		}
+		resp.EntitiesRecomputed += affected
+
+		if children, lerr := s.lineage.FindChildIDsByRelation(ctx, cand.NamespaceID, cand.ID, storage.ExtractedChildRelations); lerr == nil {
+			for _, child := range children {
+				if derr := s.reExtractStore.SoftDelete(ctx, child, cand.NamespaceID); derr == nil {
+					resp.FactChildrenRemoved++
+				}
+			}
+		}
+
+		if err := s.reExtractStore.ResetEnriched(ctx, cand.ID, cand.NamespaceID); err != nil {
+			return nil, fmt.Errorf("reset enriched for memory %s: %w", cand.ID, err)
+		}
+
+		job := &model.EnrichmentJob{
+			ID:          uuid.New(),
+			MemoryID:    cand.ID,
+			NamespaceID: cand.NamespaceID,
+			Status:      "pending",
+			MaxAttempts: 3,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		inserted, ierr := s.enrichmentQueue.Enqueue(ctx, job)
+		if ierr != nil {
+			return nil, fmt.Errorf("enqueue re-extract for memory %s: %w", cand.ID, ierr)
+		}
+		if inserted {
+			resp.Enqueued++
+		}
+	}
+	resp.LatencyMs = time.Since(start).Milliseconds()
+	return resp, nil
 }
 
 // NewEnrichService creates a new EnrichService with the given dependencies.

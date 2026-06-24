@@ -102,8 +102,19 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 ) int {
 	merged := 0
 
+	// Merge toward the higher-mention-count canonical: sorting the group by
+	// mention_count desc means the survivor (primary, the lower index) is always
+	// the more-established entity. This fixes the inversion where a mangled
+	// low-count variant (e.g. "Brandonlehmann") absorbed the real "Brandon".
+	slices.SortStableFunc(entities, func(a, b model.Entity) int {
+		return b.MentionCount - a.MentionCount
+	})
+
 	vectorsByID, normsByID := p.preloadVectors(ctx, entities)
 	consumed := make(map[uuid.UUID]bool)
+	// memCache memoizes each entity's source-memory set for the name-variant
+	// co-occurrence guard, scoped to this dedup group.
+	memCache := make(map[uuid.UUID]map[uuid.UUID]struct{})
 
 	tracker := CycleTrackerFromContext(ctx)
 	progressStep := progressEmitStep(len(entities))
@@ -129,7 +140,8 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 			}
 			candidate := &entities[j]
 
-			if !p.shouldMerge(primary, candidate, vectorsByID, normsByID, threshold) {
+			if !p.shouldMerge(primary, candidate, vectorsByID, normsByID, threshold) &&
+				!p.shouldMergeNameVariant(ctx, entityType, primary, candidate, memCache) {
 				continue
 			}
 
@@ -157,29 +169,58 @@ func (p *EntityDedupPhase) preloadVectors(ctx context.Context, entities []model.
 	}
 
 	byDim := make(map[int][]uuid.UUID)
+	var nilDim []uuid.UUID
 	for _, e := range entities {
 		if e.EmbeddingDim == nil {
+			// The scalar may be NULL while a vector still exists (historical
+			// Upsert clobber). Probe for these below rather than skipping them,
+			// so a stale scalar can no longer silently disable dedup.
+			nilDim = append(nilDim, e.ID)
 			continue
 		}
 		byDim[*e.EmbeddingDim] = append(byDim[*e.EmbeddingDim], e.ID)
 	}
-	if len(byDim) == 0 {
+	if len(byDim) == 0 && len(nilDim) == 0 {
 		return nil, nil
 	}
 
 	vecs := make(map[uuid.UUID][]float32)
 	norms := make(map[uuid.UUID]float32)
-	for dim, ids := range byDim {
+	load := func(dim int, ids []uuid.UUID) {
+		if len(ids) == 0 {
+			return
+		}
 		got, err := p.vectorStore.GetByIDs(ctx, storage.VectorKindEntity, ids, dim)
 		if err != nil {
 			slog.Warn("dreaming: entity vector preload failed; vector fallback unavailable for this dim",
 				"dim", dim, "ids", len(ids), "err", err)
-			continue
+			return
 		}
 		for k, v := range got {
 			vecs[k] = v
 			norms[k] = hnsw.Norm(v)
 		}
+	}
+	for dim, ids := range byDim {
+		load(dim, ids)
+	}
+	// Recover vectors for entities whose embedding_dim scalar is NULL by probing
+	// each known dim; an entity resolves on the dim whose table holds its vector.
+	// In practice an instance runs one embedding model, so nearly all resolve on
+	// the first probed dim. Drop resolved IDs so later probes shrink to nothing.
+	pending := nilDim
+	for _, dim := range storage.OrderedVectorDimensions {
+		if len(pending) == 0 {
+			break
+		}
+		load(dim, pending)
+		next := pending[:0]
+		for _, id := range pending {
+			if _, ok := vecs[id]; !ok {
+				next = append(next, id)
+			}
+		}
+		pending = next
 	}
 	return vecs, norms
 }
@@ -202,22 +243,96 @@ func (p *EntityDedupPhase) shouldMerge(a, b *model.Entity, vectorsByID map[uuid.
 		return true
 	}
 
-	// Vector-similarity fallback. A dim mismatch (mid-migration after switching
-	// providers) is treated as no-match so we never compare vectors of
-	// incompatible shape.
-	if a.EmbeddingDim == nil || b.EmbeddingDim == nil {
-		return false
-	}
-	if *a.EmbeddingDim != *b.EmbeddingDim {
-		return false
-	}
+	// Vector-similarity fallback. Gate on the actual presence and shape of the
+	// preloaded vectors, NOT the entities.embedding_dim scalar: that scalar was
+	// historically clobbered to NULL on re-mention while the vector persisted,
+	// which silently disabled this branch for the most-mentioned entities.
+	// preloadVectors recovers vectors even when the scalar is NULL, so a vector
+	// present here is authoritative. Unequal length means incompatible shape
+	// (mid-migration after a provider switch); treat as no-match.
 	aVec, aOK := vectorsByID[a.ID]
 	bVec, bOK := vectorsByID[b.ID]
-	if !aOK || !bOK {
+	if !aOK || !bOK || len(aVec) == 0 || len(aVec) != len(bVec) {
 		return false
 	}
 	sim := hnsw.CosineSimilarityWithNorms(aVec, bVec, normsByID[a.ID], normsByID[b.ID])
 	return float64(sim) >= threshold
+}
+
+// isTokenPrefixVariant reports whether one canonical name is a strict
+// whitespace-token prefix of the other (first-name vs full-name, e.g.
+// "brandon" / "brandon lehmann"). Surname-only ("lehmann") does NOT match a
+// full name, which keeps the rule biased to the first-name case.
+func isTokenPrefixVariant(a, b string) bool {
+	ta := strings.Fields(a)
+	tb := strings.Fields(b)
+	if len(ta) == 0 || len(tb) == 0 || len(ta) == len(tb) {
+		return false
+	}
+	short, long := ta, tb
+	if len(ta) > len(tb) {
+		short, long = tb, ta
+	}
+	for i := range short {
+		if short[i] != long[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// shouldMergeNameVariant merges a person whose name is a first-name/full-name
+// token-prefix variant of another, guarded by co-occurrence in at least one
+// shared source memory so two distinct people who share a first name are not
+// merged. Restricted to the person type (entities are pre-grouped by type, so
+// the caller passes the group's type) because the prefix heuristic is unsafe on
+// code symbols / concepts ("User" vs "User Service"). The cosine path already
+// handles cases where the vectors agree; this catches the ones where the short
+// and full name embed too far apart to clear the threshold.
+func (p *EntityDedupPhase) shouldMergeNameVariant(ctx context.Context, entityType string, a, b *model.Entity, memCache map[uuid.UUID]map[uuid.UUID]struct{}) bool {
+	if entityType != "person" {
+		return false
+	}
+	if !isTokenPrefixVariant(a.Canonical, b.Canonical) {
+		return false
+	}
+	return p.coOccur(ctx, a, b, memCache)
+}
+
+// coOccur reports whether a and b share at least one source memory among their
+// relationships. memCache memoizes each entity's source-memory set within a
+// dedup group so the lookup runs at most once per entity.
+func (p *EntityDedupPhase) coOccur(ctx context.Context, a, b *model.Entity, memCache map[uuid.UUID]map[uuid.UUID]struct{}) bool {
+	am := p.sourceMemories(ctx, a, memCache)
+	if len(am) == 0 {
+		return false
+	}
+	for m := range p.sourceMemories(ctx, b, memCache) {
+		if _, ok := am[m]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *EntityDedupPhase) sourceMemories(ctx context.Context, e *model.Entity, memCache map[uuid.UUID]map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
+	if s, ok := memCache[e.ID]; ok {
+		return s
+	}
+	s := make(map[uuid.UUID]struct{})
+	rels, err := p.relationships.ListByEntity(ctx, e.ID, []uuid.UUID{e.NamespaceID})
+	if err != nil {
+		slog.Warn("dreaming: name-variant co-occurrence lookup failed", "entity", e.ID, "err", err)
+		memCache[e.ID] = s
+		return s
+	}
+	for _, r := range rels {
+		if r.SourceMemory != nil {
+			s[*r.SourceMemory] = struct{}{}
+		}
+	}
+	memCache[e.ID] = s
+	return s
 }
 
 // mergeEntities absorbs candidate into primary: retargets candidate's

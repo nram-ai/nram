@@ -42,6 +42,8 @@ import {
   type ExtractionTestResult,
   type AugmentationBackfillResponse,
   type MultiVectorBackfillResponse,
+  type RelabelGraphResponse,
+  type ReExtractResponse,
   type VectorMigrationResult,
   type VectorMigrationDirection,
   type MigrationStartAck,
@@ -1364,6 +1366,44 @@ export function useBackfillMultiVector() {
     { project_id?: string; dry_run?: boolean; limit?: number }
   >({
     mutationFn: (req) => adminAPI.backfillMultiVector(req),
+    onSuccess: (_, variables) => {
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function useRelabelGraph() {
+  const qc = useQueryClient();
+  return useMutation<RelabelGraphResponse, Error, { dry_run?: boolean }>({
+    mutationFn: (req) => adminAPI.relabelGraph(req),
+    onSuccess: (_, variables) => {
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function useBackfillEmbeddingDims() {
+  const qc = useQueryClient();
+  return useMutation<{ updated: number }, Error, void>({
+    mutationFn: () => adminAPI.backfillEmbeddingDims(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+    },
+  });
+}
+
+export function useReExtract() {
+  const qc = useQueryClient();
+  return useMutation<
+    ReExtractResponse,
+    Error,
+    { project_id?: string; dry_run?: boolean; limit?: number }
+  >({
+    mutationFn: (req) => adminAPI.reExtract(req),
     onSuccess: (_, variables) => {
       if (!variables.dry_run) {
         qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });

@@ -232,6 +232,7 @@ type QueueClaimer interface {
 type EntityUpserter interface {
 	Upsert(ctx context.Context, entity *model.Entity) error
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
+	GetByID(ctx context.Context, id, namespaceID uuid.UUID) (*model.Entity, error)
 	UpdateEmbeddingDimBatch(ctx context.Context, ids []uuid.UUID, dim int) error
 }
 
@@ -272,6 +273,7 @@ type VectorWriter interface {
 	UpsertBatch(ctx context.Context, items []storage.VectorUpsertItem) error
 	Delete(ctx context.Context, kind storage.VectorKind, id uuid.UUID) error
 	GetByIDs(ctx context.Context, kind storage.VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error)
+	Search(ctx context.Context, kind storage.VectorKind, embedding []float32, namespaceID uuid.UUID, dimension int, topK int) ([]storage.VectorSearchResult, error)
 }
 
 // MemorySoftDeleter soft-deletes a memory row and purges its vector. Used
@@ -345,6 +347,8 @@ type WorkerPool struct {
 	queryAugmentProvider func() provider.LLMProvider
 	deduplicator         *Deduplicator
 	settings             *service.SettingsService
+	relClassifier        *service.SemanticClassifier
+	typeClassifier       *service.SemanticClassifier
 	cascade              *service.CascadeResolver
 	metrics              *metrics.Metrics
 
@@ -427,10 +431,19 @@ func NewWorkerPool(
 		queryAugmentProvider: queryAugmentProvider,
 		deduplicator:         deduplicator,
 		settings:             settings,
+		relClassifier:        service.NewRelationClassifier(embedProvider, semanticVocabThreshold(settings)),
+		typeClassifier:       service.NewEntityTypeClassifier(embedProvider, semanticVocabThreshold(settings)),
 		cascade:              cascade,
 		bus:                  bus,
 		progress:             newProgressTracker(bus, settings),
 	}
+}
+
+// semanticVocabThreshold resolves the embedding-fallback threshold once at
+// construction; changing it takes effect on restart (the classifier caches its
+// reference embeddings and per-label results).
+func semanticVocabThreshold(settings *service.SettingsService) float64 {
+	return settings.ResolveFloatWithDefault(context.Background(), service.SettingSemanticVocabThreshold, "global")
 }
 
 // WithMetrics attaches the Prometheus metrics sink. Returns the same pool
@@ -1544,18 +1557,40 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 		})
 	}
 
+	// Resolve the cosine-on-write knobs once per memory; they cannot change
+	// mid-loop, so this avoids a settings lookup per extracted entity.
+	cosineEnabled := wp.settings.ResolveBoolWithDefault(ctx, service.SettingEntityResolutionCosineEnabled, "global")
+	cosineThreshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingEntityResolutionCosineThreshold, "global")
+
 	entityNameToID := make(map[string]uuid.UUID)
 	for idx := range entResult.Entities {
 		ent := &entResult.Entities[idx]
-		entID := uuid.New()
-		props, _ := json.Marshal(ent.Properties)
+		canonical := strings.ToLower(ent.Name)
+		coercedType := wp.typeClassifier.Classify(ctx, ent.Type)
 
+		// Write-path cosine resolution: reuse a near-duplicate existing entity
+		// instead of creating a new one. On a match, bump its mention count and
+		// map this name onto it for relationship wiring.
+		if matched := wp.cosineResolveEntity(ctx, mem.NamespaceID, mem.ID, canonical, coercedType, cosineEnabled, cosineThreshold); matched != nil {
+			matched.MentionCount++
+			matched.UpdatedAt = time.Now().UTC()
+			if err := wp.entities.Upsert(ctx, matched); err != nil {
+				slog.Error("enrichment: upsert cosine-resolved entity", "job", job.ID, "entity", ent.Name, "err", err)
+				// fall through to the create path on failure
+			} else {
+				entityNameToID[ent.Name] = matched.ID
+				addFact(matched)
+				continue
+			}
+		}
+
+		props, _ := json.Marshal(ent.Properties)
 		modelEntity := &model.Entity{
-			ID:           entID,
+			ID:           uuid.New(),
 			NamespaceID:  mem.NamespaceID,
 			Name:         ent.Name,
-			Canonical:    strings.ToLower(ent.Name),
-			EntityType:   ent.Type,
+			Canonical:    canonical,
+			EntityType:   coercedType,
 			Properties:   props,
 			MentionCount: 1,
 			CreatedAt:    time.Now().UTC(),
@@ -1616,6 +1651,14 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 			ValidFrom:    mem.CreatedAt,
 			CreatedAt:    time.Now().UTC(),
 		})
+	}
+
+	// Coerce extracted relations into the closed vocabulary (static synonym map,
+	// then embedding nearest-neighbor for verbs the map misses) and stamp kinship
+	// subtype before persisting. Done here, at the extraction write path, not in
+	// the repo, so imports and programmatic edges keep their original labels.
+	for _, rel := range relCandidates {
+		wp.relClassifier.ApplyRelation(ctx, rel)
 	}
 
 	if len(relCandidates) > 0 {
@@ -2234,6 +2277,63 @@ func (wp *WorkerPool) resolveOrCreateEntity(ctx context.Context, namespaceID uui
 	}
 	slog.Debug("enrichment: created stub entity from relationship reference", "entity", name, "id", entity.ID)
 	return entity, nil
+}
+
+// cosineResolveEntity is the write-path embed+cosine resolution tier: when no
+// exact canonical+type entity exists for a candidate, it embeds the candidate's
+// canonical name and searches existing entity vectors, returning the best
+// same-type match at or above the configured threshold, or nil to create a new
+// entity. This prevents duplicates at creation instead of only cleaning them in
+// dreaming. Gated by SettingEntityResolutionCosineEnabled; any miss or error
+// returns nil so resolution never blocks on the embedder. It runs only for
+// names that would otherwise create a new entity (the exact-match short-circuit
+// keeps recurring entities off the embed path).
+func (wp *WorkerPool) cosineResolveEntity(ctx context.Context, namespaceID, memoryID uuid.UUID, canonical, entityType string, enabled bool, threshold float64) *model.Entity {
+	if !enabled {
+		return nil
+	}
+	if wp.vectorStore == nil || wp.embedProvider == nil {
+		return nil
+	}
+	ep := wp.embedProvider()
+	if ep == nil {
+		return nil
+	}
+	// Skip cosine when an exact canonical+type entity already exists; the Upsert
+	// dedup key handles that without an embed call.
+	if similar, err := wp.entities.FindBySimilarity(ctx, namespaceID, canonical, entityType, 10); err == nil {
+		for i := range similar {
+			if similar[i].Canonical == canonical && similar[i].EntityType == entityType {
+				return nil
+			}
+		}
+	}
+	// Stamp the memory/namespace so the resolution embed's token_usage row
+	// attributes to this memory rather than recording with a NULL memory_id.
+	embedCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, namespaceID), memoryID)
+	resp, err := ep.Embed(provider.WithOperation(embedCtx, provider.OperationEmbedding),
+		&provider.EmbeddingRequest{Input: []string{canonical}})
+	if err != nil || len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+		return nil
+	}
+	vec := resp.Embeddings[0]
+	results, err := wp.vectorStore.Search(ctx, storage.VectorKindEntity, vec, namespaceID, len(vec), 5)
+	if err != nil {
+		return nil
+	}
+	for _, res := range results {
+		if res.Score < threshold {
+			break // results are sorted by descending similarity
+		}
+		cand, err := wp.entities.GetByID(ctx, res.ID, namespaceID)
+		if err != nil || cand == nil {
+			continue
+		}
+		if cand.EntityType == entityType {
+			return cand
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

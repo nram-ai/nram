@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.11.4
+  version: 0.11.5
   license:
     name: MIT
 
@@ -6180,10 +6180,15 @@ components:
         - "enrichment.entity_extraction.async.temperature"
         - "enrichment.entity_extraction.max_tokens"
         - "enrichment.entity_extraction.sync.temperature"
+        - "enrichment.entity_resolution.cosine_enabled"
+        - "enrichment.entity_resolution.cosine_threshold"
         - "enrichment.entity_system_prompt"
         - "enrichment.extracted_fact_backfill_batch_size"
         - "enrichment.extracted_fact_guard_enabled"
         - "enrichment.extracted_fact_paraphrase_threshold"
+        - "enrichment.extraction.chunk_overlap_tokens"
+        - "enrichment.extraction.chunk_threshold_tokens"
+        - "enrichment.extraction.continuation_max_passes"
         - "enrichment.fact_extraction.async.temperature"
         - "enrichment.fact_extraction.max_tokens"
         - "enrichment.fact_extraction.sync.temperature"
@@ -6207,6 +6212,7 @@ components:
         - "enrichment.query_augment.max_input_chars"
         - "enrichment.query_augment.max_tokens"
         - "enrichment.query_augment.system_prompt"
+        - "enrichment.semantic_vocab.threshold"
         - "enrichment.stuck_scan_limit"
         - "enrichment.stuck_sweep_seconds"
         - "enrichment.stuck_threshold_seconds"

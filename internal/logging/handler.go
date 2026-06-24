@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
@@ -174,7 +175,19 @@ func attrValue(v slog.Value) any {
 	case slog.KindTime:
 		return v.Time().UTC().Format(time.RFC3339Nano)
 	default:
-		return v.Any()
+		a := v.Any()
+		// An error attr (slog.Any("err", err)) is the common case behind the
+		// historical `"err": {}` log payloads: a standard wrapped error has no
+		// exported fields, so reflection-marshaling it yields an empty object.
+		// Render it as its message string, matching slog's text handler. Errors
+		// that carry their own JSON shape (json.Marshaler, e.g. structured
+		// failure payloads) are left to marshal normally so their fields survive.
+		if err, ok := a.(error); ok {
+			if _, isJSON := a.(json.Marshaler); !isJSON {
+				return err.Error()
+			}
+		}
+		return a
 	}
 }
 

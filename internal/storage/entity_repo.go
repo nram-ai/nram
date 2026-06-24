@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,7 +118,7 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(namespace_id, canonical, entity_type) DO UPDATE SET
 			name = excluded.name,
-			embedding_dim = excluded.embedding_dim,
+			embedding_dim = COALESCE(excluded.embedding_dim, embedding_dim),
 			properties = excluded.properties,
 			mention_count = mention_count + 1,
 			metadata = excluded.metadata,
@@ -127,7 +128,7 @@ func (r *EntityRepo) Upsert(ctx context.Context, entity *model.Entity) error {
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(namespace_id, canonical, entity_type) DO UPDATE SET
 				name = EXCLUDED.name,
-				embedding_dim = EXCLUDED.embedding_dim,
+				embedding_dim = COALESCE(EXCLUDED.embedding_dim, entities.embedding_dim),
 				properties = EXCLUDED.properties,
 				mention_count = entities.mention_count + 1,
 				metadata = EXCLUDED.metadata,
@@ -316,6 +317,176 @@ func (r *EntityRepo) UpdateEmbeddingDim(ctx context.Context, id uuid.UUID, dim i
 		return fmt.Errorf("entity update embedding_dim: %w", err)
 	}
 	return nil
+}
+
+// BackfillEmbeddingDimFromVectors repairs the entities.embedding_dim scalar by
+// setting it from the actual presence of a vector row in entity_vectors_<dim>,
+// for entities whose dim is currently NULL. It undoes the historical desync in
+// which the Upsert ON CONFLICT clobbered the column to NULL on every re-mention
+// while the vector row persisted (the COALESCE in Upsert prevents this going
+// forward). Because dedup gates its cosine path on this scalar, the desync
+// silently disabled merging for the most-mentioned entities; this restores it
+// without any re-embedding. Postgres/pgvector only: the vector store is a set of
+// SQL tables solely on that backend (SQLite uses an HNSW index, Qdrant is
+// external), and a fresh SQLite DB carries no legacy desync. Returns rows
+// updated; idempotent.
+func (r *EntityRepo) BackfillEmbeddingDimFromVectors(ctx context.Context) (int64, error) {
+	if r.db.Backend() != BackendPostgres {
+		return 0, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	var total int64
+	for _, dim := range OrderedVectorDimensions {
+		// Table name comes from the fixed OrderedVectorDimensions allowlist
+		// (ints), never user input, so the interpolation is injection-safe.
+		query := fmt.Sprintf(`UPDATE entities SET embedding_dim = $1, updated_at = $2
+			WHERE embedding_dim IS NULL
+			  AND id IN (SELECT entity_id FROM entity_vectors_%d)`, dim)
+		res, err := r.db.Exec(ctx, query, dim, now)
+		if err != nil {
+			return total, fmt.Errorf("entity backfill embedding_dim (dim %d): %w", dim, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("entity backfill embedding_dim rows affected (dim %d): %w", dim, err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// UpdateType sets an entity's entity_type without touching mention_count or
+// re-running the Upsert merge. The caller is responsible for ensuring no other
+// entity already holds (namespace_id, canonical, new type); RelabelEntities
+// guarantees this by merging colliders first.
+func (r *EntityRepo) UpdateType(ctx context.Context, id, namespaceID uuid.UUID, newType string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `UPDATE entities SET entity_type = ?, updated_at = ? WHERE id = ? AND namespace_id = ?`
+	if r.db.Backend() == BackendPostgres {
+		query = `UPDATE entities SET entity_type = $1, updated_at = $2 WHERE id = $3 AND namespace_id = $4`
+	}
+	if _, err := r.db.Exec(ctx, query, newType, now, id.String(), namespaceID.String()); err != nil {
+		return fmt.Errorf("entity update type: %w", err)
+	}
+	return nil
+}
+
+// MergeInto absorbs the `absorbed` entity into `primary`: it retargets the
+// absorbed entity's relationships (both endpoints) and aliases onto primary,
+// records the absorbed name as an alias, folds its mention_count into primary,
+// and deletes the absorbed row (its vector cascades). Both entities must live in
+// the same namespace. Reuses the same primitives as stub promotion so the merge
+// matches dreaming-dedup semantics.
+func (r *EntityRepo) MergeInto(ctx context.Context, primary, absorbed *model.Entity) error {
+	pid := primary.ID.String()
+	aid := absorbed.ID.String()
+	if pid == aid {
+		return nil
+	}
+	if err := r.mergeRelationshipsByEndpoint(ctx, "source_id", aid, pid); err != nil {
+		return err
+	}
+	if err := r.mergeRelationshipsByEndpoint(ctx, "target_id", aid, pid); err != nil {
+		return err
+	}
+	if err := r.mergeAliasesToEntity(ctx, aid, pid); err != nil {
+		return err
+	}
+	// Preserve the absorbed name as an alias on the survivor (best effort:
+	// a duplicate alias is harmless and ignored).
+	aliasQuery := `INSERT INTO entity_aliases (id, entity_id, namespace_id, alias, alias_type)
+		VALUES (?, ?, ?, ?, 'relabel_merge') ON CONFLICT (entity_id, alias) DO NOTHING`
+	if r.db.Backend() == BackendPostgres {
+		aliasQuery = `INSERT INTO entity_aliases (id, entity_id, namespace_id, alias, alias_type)
+			VALUES ($1, $2, $3, $4, 'relabel_merge') ON CONFLICT (entity_id, alias) DO NOTHING`
+	}
+	if _, err := r.db.Exec(ctx, aliasQuery, uuid.New().String(), pid, primary.NamespaceID.String(), absorbed.Name); err != nil {
+		return fmt.Errorf("merge register alias: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	bumpQuery := `UPDATE entities SET mention_count = mention_count + ?, updated_at = ? WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		bumpQuery = `UPDATE entities SET mention_count = mention_count + $1, updated_at = $2 WHERE id = $3`
+	}
+	if _, err := r.db.Exec(ctx, bumpQuery, absorbed.MentionCount, now, pid); err != nil {
+		return fmt.Errorf("merge bump mention_count: %w", err)
+	}
+	delQuery := `DELETE FROM entities WHERE id = ?`
+	if r.db.Backend() == BackendPostgres {
+		delQuery = `DELETE FROM entities WHERE id = $1`
+	}
+	if _, err := r.db.Exec(ctx, delQuery, aid); err != nil {
+		return fmt.Errorf("merge delete absorbed entity: %w", err)
+	}
+	return nil
+}
+
+// RelabelEntities re-types every entity through model.CanonicalEntityType in
+// place. When re-typing would collide with an existing entity at the same
+// (namespace, canonical, target type), the lower-mention entity is merged into
+// the higher-mention one instead (so the established node and its history
+// survive). Idempotent: a second run finds everything already canonical and is
+// a no-op. dryRun computes and returns the counts without writing. The graph is
+// loaded fully (bounded: tens of thousands of rows) and grouped in memory.
+func (r *EntityRepo) RelabelEntities(ctx context.Context, dryRun bool) (retyped, merged int64, err error) {
+	var all []model.Entity
+	offset := 0
+	const page = 1000
+	for {
+		batch, err := r.ListAll(ctx, page, offset)
+		if err != nil {
+			return 0, 0, fmt.Errorf("relabel entities: list: %w", err)
+		}
+		all = append(all, batch...)
+		offset += len(batch)
+		if len(batch) < page {
+			break
+		}
+	}
+	// Highest mention_count first so the survivor of any collision is the most
+	// established entity.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].MentionCount > all[j].MentionCount })
+
+	type groupKey struct {
+		ns         uuid.UUID
+		canonical  string
+		entityType string
+	}
+	primaryByKey := make(map[groupKey]*model.Entity, len(all))
+	var retypes []*model.Entity
+	var merges [][2]*model.Entity
+	for i := range all {
+		e := &all[i]
+		target := model.CanonicalEntityType(e.EntityType)
+		k := groupKey{e.NamespaceID, e.Canonical, target}
+		if primary, ok := primaryByKey[k]; ok {
+			merges = append(merges, [2]*model.Entity{primary, e})
+			continue
+		}
+		primaryByKey[k] = e
+		if e.EntityType != target {
+			retypes = append(retypes, e)
+		}
+	}
+	retyped = int64(len(retypes))
+	merged = int64(len(merges))
+	if dryRun {
+		return retyped, merged, nil
+	}
+	// Merge colliders first so the subsequent re-type of a primary cannot hit
+	// the unique constraint.
+	for _, m := range merges {
+		if err := r.MergeInto(ctx, m[0], m[1]); err != nil {
+			return retyped, merged, fmt.Errorf("relabel entities: merge: %w", err)
+		}
+	}
+	for _, e := range retypes {
+		target := model.CanonicalEntityType(e.EntityType)
+		if err := r.UpdateType(ctx, e.ID, e.NamespaceID, target); err != nil {
+			return retyped, merged, fmt.Errorf("relabel entities: retype: %w", err)
+		}
+	}
+	return retyped, merged, nil
 }
 
 // mergeRelationshipsByEndpoint repoints stub-owned relationships at one

@@ -24,6 +24,7 @@ import Switch from "../components/Switch";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { MultiVectorBackfillBlock } from "../components/MultiVectorBackfillBlock";
+import { GraphCleanupBlock } from "../components/GraphCleanupBlock";
 import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
 import { VectorMigrationBlock } from "../components/VectorMigrationBlock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -777,6 +778,7 @@ function InlineSettingEditor({
 function CategoryTrailingBlock({ category }: { category: string }) {
   if (category === "enrichment_query_augment") return <QueryAugmentBackfillBlock />;
   if (category === "enrichment_multi_vector") return <MultiVectorBackfillBlock />;
+  if (category === "enrichment_performance") return <GraphCleanupBlock />;
   if (category === "lifecycle") return <GraphMaintenanceBlock />;
   if (category === "qdrant") return <VectorMigrationBlock />;
   return null;

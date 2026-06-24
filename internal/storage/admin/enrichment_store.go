@@ -541,6 +541,7 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.Queue
 	}
 
 	paused, _ := s.IsPaused(ctx)
+	health, _ := s.extractionHealth(ctx)
 
 	return &api.EnrichmentQueueStatus{
 		Counts: api.EnrichmentQueueCounts{
@@ -549,9 +550,35 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.Queue
 			Completed:  stats.Completed,
 			Failed:     stats.Failed,
 		},
-		Items:  queueItems,
-		Paused: paused,
+		Items:            queueItems,
+		Paused:           paused,
+		ExtractionHealth: health,
 	}, nil
+}
+
+// extractionHealth counts enrichment_queue jobs whose latest last_error carries
+// each extraction outcome marker (the stable ExtractionReason strings). last_error
+// is JSONB on Postgres and text on SQLite; a substring match over its text form
+// covers both the structured warnings ({"warnings":[{"reason":...}]}) and the
+// top-level failure payloads without parsing per-backend JSON paths.
+func (s *EnrichmentAdminStore) extractionHealth(ctx context.Context) (api.EnrichmentExtractionHealthInfo, error) {
+	var info api.EnrichmentExtractionHealthInfo
+	errText := "last_error::text"
+	if s.db.Backend() != storage.BackendPostgres {
+		errText = "CAST(last_error AS TEXT)"
+	}
+	cnt := func(marker string) string {
+		return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s LIKE '%%%s%%' THEN 1 ELSE 0 END),0)", errText, marker)
+	}
+	q := fmt.Sprintf(`SELECT %s, %s, %s, %s, %s FROM enrichment_queue WHERE last_error IS NOT NULL`,
+		cnt("partial_recovery"), cnt("parse_failed"), cnt("length_no_recovery"),
+		cnt("empty_response"), cnt("llm_call_failed"))
+	row := s.db.QueryRow(ctx, q)
+	if err := row.Scan(&info.PartialRecovery, &info.ParseFailed, &info.LengthNoRecovery,
+		&info.EmptyResponse, &info.LLMCallFailed); err != nil {
+		return api.EnrichmentExtractionHealthInfo{}, fmt.Errorf("extraction health counts: %w", err)
+	}
+	return info, nil
 }
 
 // orgNamespacePath returns the org's root namespace path. Used as the LIKE

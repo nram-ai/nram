@@ -1508,10 +1508,22 @@ export interface EnrichmentPhaseMetric {
   at: string;
 }
 
+// Rolling extraction-outcome counts derived from enrichment_queue.last_error,
+// surfaced so an operator can see truncation / loop / parse-failure pressure
+// without reading server logs.
+export interface EnrichmentExtractionHealth {
+  partial_recovery: number;
+  parse_failed: number;
+  length_no_recovery: number;
+  empty_response: number;
+  llm_call_failed: number;
+}
+
 export interface EnrichmentQueueStatus {
   counts: EnrichmentQueueCounts;
   items: EnrichmentQueueItem[];
   paused: boolean;
+  extraction_health: EnrichmentExtractionHealth;
 }
 
 // EnrichmentQueueStatus item status values, used for the status filter.
@@ -1579,6 +1591,26 @@ export interface AugmentationBackfillResponse {
 export interface MultiVectorBackfillResponse {
   candidate_count: number;
   enqueued: number;
+  dry_run: boolean;
+}
+
+// Response for POST /admin/enrichment/relabel-graph. The deterministic, no-LLM
+// re-type + re-label + collider-merge pass over the existing graph.
+export interface RelabelGraphResponse {
+  entities_retyped: number;
+  entities_merged: number;
+  relation_rows_relabeled: number;
+  distinct_relations_before: number;
+  distinct_relations_after: number;
+  dry_run: boolean;
+}
+
+// Response for POST /admin/enrichment/re-extract.
+export interface ReExtractResponse {
+  candidate_count: number;
+  enqueued: number;
+  entities_recomputed: number;
+  fact_children_removed: number;
   dry_run: boolean;
 }
 
@@ -2096,6 +2128,34 @@ export const adminAPI = {
       "/admin/enrichment/backfill-multi-vector",
       req,
     ),
+
+  // Deterministic (no-LLM) re-type + re-label + collider-merge over the existing
+  // graph. dry_run reports the would-be counts without writing.
+  relabelGraph: (req: { dry_run?: boolean }) =>
+    request<RelabelGraphResponse>(
+      "POST",
+      "/admin/enrichment/relabel-graph",
+      req,
+    ),
+
+  // Repair entities.embedding_dim from actual vector presence (Postgres only),
+  // re-enabling the dedup cosine path. Returns { updated }.
+  backfillEmbeddingDims: () =>
+    request<{ updated: number }>(
+      "POST",
+      "/admin/enrichment/backfill-embedding-dims",
+      {},
+    ),
+
+  // Full re-extraction: tombstone each candidate's graph footprint, clear its
+  // enriched flag, and re-enqueue under the current prompt/vocabulary. dry_run
+  // returns the candidate count only; project_id omitted scopes the whole
+  // deployment; limit caps how many memories this call processes.
+  reExtract: (req: {
+    project_id?: string;
+    dry_run?: boolean;
+    limit?: number;
+  }) => request<ReExtractResponse>("POST", "/admin/enrichment/re-extract", req),
 
   // Per-memory preview of the augmentation phase. Project-scoped, does not
   // persist; used by the MemoryDetailPanel Preview button.
