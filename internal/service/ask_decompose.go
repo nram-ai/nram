@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/google/uuid"
@@ -69,45 +68,15 @@ func (s *AskService) decomposeQuery(
 }
 
 // parseDecomposition extracts the sub-query list from the decomposition model's
-// reply. The contract is {"subqueries":[...]}; it also tolerates a bare JSON
-// array of strings (a small model dropping the envelope). Returns nil on any
-// parse failure or an empty list — both mean "do not decompose". Whitespace-only
-// entries are dropped; an empty result after cleaning is treated as no
-// decomposition.
+// reply. The contract is {"subqueries":[...]}; it delegates to ParseLLMStringList,
+// so it also tolerates a bare JSON array, any-key object envelope, mixed element
+// types, missing/mixed quoting, and truncated arrays (the small-model failure
+// modes the query-augment path already learned). Returns nil on any parse
+// failure or an empty list — both mean "do not decompose".
 func parseDecomposition(raw string) []string {
-	body := strings.TrimSpace(raw)
-	// Clip to the outermost JSON object, else the outermost array, ignoring any
-	// markdown fences or prose the model wrapped around it.
-	if start, end := strings.Index(body, "{"), strings.LastIndex(body, "}"); start >= 0 && end > start {
-		body = body[start : end+1]
-	} else if start, end := strings.Index(body, "["), strings.LastIndex(body, "]"); start >= 0 && end > start {
-		body = body[start : end+1]
-	} else {
+	subs, err := ParseLLMStringList(raw)
+	if err != nil {
 		return nil
 	}
-
-	var raws []string
-	var envelope struct {
-		Subqueries []string `json:"subqueries"`
-	}
-	if err := json.Unmarshal([]byte(body), &envelope); err == nil && envelope.Subqueries != nil {
-		raws = envelope.Subqueries
-	} else {
-		var arr []string
-		if err := json.Unmarshal([]byte(body), &arr); err != nil {
-			return nil
-		}
-		raws = arr
-	}
-
-	cleaned := make([]string, 0, len(raws))
-	for _, q := range raws {
-		if q = strings.TrimSpace(q); q != "" {
-			cleaned = append(cleaned, q)
-		}
-	}
-	if len(cleaned) == 0 {
-		return nil
-	}
-	return cleaned
+	return subs
 }

@@ -2048,9 +2048,19 @@ func TestMergeTagsIntoParent_ConcurrentMergesAreSerialized(t *testing.T) {
 		tag := tagsPerGoroutine[i]
 		go func() {
 			defer wg.Done()
+			// Each goroutine merges through its own copy of the parent struct.
+			// In production every concurrent caller owns a distinct
+			// *model.Memory loaded per job (GetByID returns a fresh copy), so
+			// the helper's in-memory write-back (inMemoryParent.Tags/Metadata/
+			// UpdatedAt) targets a job-local pointer. The invariant under test
+			// is store-level serialization, keyed by the shared ID/NamespaceID
+			// via MutateInLock's per-id lock, not the in-memory copy; sharing
+			// one pointer across goroutines would only add a write-back data
+			// race that production never exhibits.
+			p := *parent
 			if err := pool.mergeTagsIntoParent(
 				context.Background(),
-				parent, nil,
+				&p, nil,
 				[]string{tag}, "suppressed-"+tag, 0.99, "parent", "test",
 			); err != nil {
 				t.Errorf("merge for tag %q failed: %v", tag, err)
