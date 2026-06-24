@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -39,13 +40,16 @@ func (*askSeqLLM) Models() []string { return []string{"seq"} }
 // askMapRecaller returns a distinct RecallResponse per request query, modelling
 // the per-class clusters a focused sub-query retrieves.
 type askMapRecaller struct {
+	mu      sync.Mutex
 	byQuery map[string]*RecallResponse
 	def     *RecallResponse
 	queries []string
 }
 
 func (f *askMapRecaller) Recall(_ context.Context, req *RecallRequest) (*RecallResponse, error) {
+	f.mu.Lock()
 	f.queries = append(f.queries, req.Query)
+	f.mu.Unlock()
 	if r, ok := f.byQuery[req.Query]; ok {
 		return r, nil
 	}

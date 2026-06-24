@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/observability/metrics"
@@ -307,16 +308,35 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	// question, leaving the single recall untouched; a failed sub-query recall is
 	// skipped, so decomposition is strictly additive and fail-soft.
 	recallResponses := []*RecallResponse{recallResp}
-	subqueryCount := 0
-	for _, sub := range s.decomposeQuery(ctx, llm, req, primaryProjectID, primaryNS) {
-		subRR := *rr
-		subRR.Query = sub
-		subResp, serr := s.recall.Recall(ctx, &subRR)
-		if serr != nil {
-			continue
+	subs := s.decomposeQuery(ctx, llm, req, primaryProjectID, primaryNS)
+	if len(subs) > 0 {
+		// Fan the sub-query recalls out concurrently. They are independent of one
+		// another and of the original recall, and RecallService.Recall makes no
+		// receiver-field writes on the read path (the only mutation is the
+		// reinforcement hook, which ask never wires), so this is safe. Each
+		// goroutine owns a distinct index in subResults, so no lock is needed.
+		subResults := make([]*RecallResponse, len(subs))
+		g, gctx := errgroup.WithContext(ctx)
+		for i, sub := range subs {
+			g.Go(func() error {
+				subRR := *rr
+				subRR.Query = sub
+				subResp, serr := s.recall.Recall(gctx, &subRR)
+				if serr != nil {
+					return nil // fail-soft: skip this sub-query, leave its slot nil
+				}
+				subResults[i] = subResp
+				return nil
+			})
 		}
-		recallResponses = append(recallResponses, subResp)
-		subqueryCount++
+		_ = g.Wait()
+		// Collect in sub-query order so the downstream round-robin merge stays
+		// deterministic; nil slots are failed/empty sub-queries, skipped as before.
+		for _, subResp := range subResults {
+			if subResp != nil {
+				recallResponses = append(recallResponses, subResp)
+			}
+		}
 	}
 
 	// The full namespace set recall searched, reused for graph traversal.
@@ -481,7 +501,9 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	meta := AskSynthesisMeta{
 		LatencyMs:        time.Since(start).Milliseconds(),
 		NeighborhoodSize: len(neighborhood),
-		SubqueryCount:    subqueryCount,
+		// One sub-query response per successful decomposition recall; the first
+		// entry is always the original recall, so the rest are the sub-queries.
+		SubqueryCount: len(recallResponses) - 1,
 	}
 
 	// --- Synthesize -----------------------------------------------------------
