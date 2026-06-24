@@ -93,3 +93,17 @@ export function buildFallbackGroup(
     subsections: orphans.map((category) => ({ category, label: category })),
   };
 }
+
+// Keys edited on another admin surface; filtered out of the Settings page so
+// they cannot be edited in two places. usage.cost_rates is configured on the
+// Analytics page (its cost-rate editor), which is where it belongs.
+const EXTERNALLY_MANAGED_KEYS = new Set(["usage.cost_rates"]);
+
+// isHiddenFromSettings reports whether a schema entry is edited on a dedicated
+// page and so must not appear on the Settings page. Prompt-typed entries are
+// edited on the Prompt Templates page; they are identified by type (mirroring
+// the backend's Type == "prompt" predicate) so this can never drift from the
+// schema the way a hardcoded key list does.
+export function isHiddenFromSettings(schema: SettingSchema): boolean {
+  return schema.type === "prompt" || EXTERNALLY_MANAGED_KEYS.has(schema.key);
+}

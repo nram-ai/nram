@@ -184,6 +184,36 @@ describe("SettingsEditor tabs + search", () => {
     expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
   });
 
+  // Regression guard: prompt-typed settings (edited on the Prompt Templates
+  // page) must never leak onto the Settings page. Their categories are
+  // intentionally absent from the group taxonomy, so if they were not hidden
+  // they would be swept into a synthetic "Other" tab. The Ask prompts
+  // (category ask_prompts) once did exactly that.
+  it("hides prompt-typed settings instead of bucketing them into an Other tab", () => {
+    useSettingsSchemaMock.mockReturnValue(
+      loaded({
+        data: [
+          ...SCHEMAS,
+          { key: "ask.synthesis.system_prompt", type: "prompt", default_value: "", description: "Ask answer synthesis prompt", category: "ask_prompts" },
+          { key: "ask.decomposition.system_prompt", type: "prompt", default_value: "", description: "Ask query decomposition prompt", category: "ask_prompts" },
+        ],
+      }),
+    );
+
+    renderPage();
+
+    // No synthetic "Other" tab is created for the unmapped ask_prompts category.
+    expect(screen.queryByRole("tab", { name: "Other" })).not.toBeInTheDocument();
+
+    // The prompt keys never render on the Settings page, in any tab or search.
+    fireEvent.change(screen.getByLabelText("Search settings"), {
+      target: { value: "system_prompt" },
+    });
+    expect(screen.queryByText("ask.synthesis.system_prompt")).not.toBeInTheDocument();
+    expect(screen.queryByText("ask.decomposition.system_prompt")).not.toBeInTheDocument();
+    expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
+  });
+
   it("marks a row 'Modified' only when its value differs from the default", () => {
     // enrichment.batch_size (default 32) is overridden to 64; enrichment.enabled
     // has no stored override and stays at its default.

@@ -16,6 +16,7 @@ import type { SettingSchema, SettingGroup } from "../api/client";
 import {
   buildCategoryIndex,
   buildFallbackGroup,
+  isHiddenFromSettings,
   matchesQuery,
   resolveActiveGroup,
   type SettingWithSchema,
@@ -122,27 +123,6 @@ function canonicalize(v: unknown): unknown {
 // renders whatever the server returns, so a new category can never silently
 // vanish from this page.
 
-
-// Prompt-typed schema entries (the per-phase tunable system prompts). Surfaced
-// on the dedicated Prompt Templates page; filtered out of the Settings page
-// entirely so they cannot be edited in two places.
-const PROMPT_KEYS = new Set([
-  "enrichment.fact_system_prompt",
-  "enrichment.entity_system_prompt",
-  "enrichment.ingestion_decision.system_prompt",
-  "enrichment.query_augment.system_prompt",
-  "dreaming.contradiction_system_prompt",
-  "dreaming.synthesis_system_prompt",
-  "dreaming.alignment_system_prompt",
-  "dreaming.novelty.judge_system_prompt",
-]);
-
-// Keys owned by another admin surface, filtered out of the Settings page so
-// they cannot be edited in two places. usage.cost_rates is configured on the
-// Analytics page at the admin/system tier (its cost-rate editor), which is
-// where it belongs.
-const EXTERNALLY_MANAGED_KEYS = new Set(["usage.cost_rates"]);
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -174,16 +154,6 @@ function parseValue(raw: string, type: string): unknown {
     default:
       return raw;
   }
-}
-
-function isPromptKey(key: string): boolean {
-  return PROMPT_KEYS.has(key);
-}
-
-// isHiddenFromSettings reports whether a key is edited on a dedicated page
-// elsewhere and so must not appear on the Settings page.
-function isHiddenFromSettings(key: string): boolean {
-  return isPromptKey(key) || EXTERNALLY_MANAGED_KEYS.has(key);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,7 +449,7 @@ function InlineSettingEditor({
   const { schema, setting } = item;
   const currentValue = setting?.value ?? schema.default_value;
   const isDefault = setting === null;
-  const isPrompt = isPromptKey(schema.key);
+  const isPrompt = schema.type === "prompt";
 
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -986,7 +956,7 @@ function SettingsEditor() {
     const settingsMap = new Map(settings.map((s) => [s.key, s]));
     const out = new Map<string, SettingWithSchema[]>();
     for (const schema of schemas) {
-      if (isHiddenFromSettings(schema.key)) continue;
+      if (isHiddenFromSettings(schema)) continue;
       const cat = schema.category || "other";
       const merged: SettingWithSchema = {
         schema,

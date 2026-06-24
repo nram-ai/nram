@@ -7,6 +7,7 @@ import {
   OTHER_GROUP_ID,
   buildCategoryIndex,
   buildFallbackGroup,
+  isHiddenFromSettings,
   matchesQuery,
   resolveActiveGroup,
   type SettingWithSchema,
@@ -130,5 +131,53 @@ describe("buildFallbackGroup", () => {
     expect(fb!.subsections.map((s) => s.category)).toEqual(["export", "usage"]);
     // each orphan gets a label so it renders with a heading.
     expect(fb!.subsections.every((s) => s.label === s.category)).toBe(true);
+  });
+});
+
+describe("isHiddenFromSettings", () => {
+  function schema(
+    key: string,
+    type: string,
+    category: string,
+  ): SettingSchema {
+    return { key, type, default_value: "", description: "", category };
+  }
+
+  it("hides any prompt-typed entry regardless of key or category", () => {
+    // Regression guard: the Ask prompts (category ask_prompts) once leaked into
+    // the Settings "Other" tab because the hide list was hardcoded and drifted.
+    // Hiding by type covers them and any future prompt category automatically.
+    expect(
+      isHiddenFromSettings(
+        schema("ask.synthesis.system_prompt", "prompt", "ask_prompts"),
+      ),
+    ).toBe(true);
+    expect(
+      isHiddenFromSettings(
+        schema("ask.decomposition.system_prompt", "prompt", "ask_prompts"),
+      ),
+    ).toBe(true);
+    expect(
+      isHiddenFromSettings(
+        schema("enrichment.fact_system_prompt", "prompt", "enrichment_prompts"),
+      ),
+    ).toBe(true);
+    expect(
+      isHiddenFromSettings(
+        schema("some.future.prompt", "prompt", "brand_new_prompts"),
+      ),
+    ).toBe(true);
+  });
+
+  it("hides keys owned by another admin surface", () => {
+    expect(
+      isHiddenFromSettings(schema("usage.cost_rates", "json", "usage")),
+    ).toBe(true);
+  });
+
+  it("does not hide an ordinary setting", () => {
+    expect(
+      isHiddenFromSettings(schema("recall.default_limit", "int", "recall")),
+    ).toBe(false);
   });
 });
