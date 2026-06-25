@@ -585,6 +585,79 @@ func TestBackfillAugmentation_EnqueuesNoMarker(t *testing.T) {
 	}
 }
 
+type stubMissingEmbLister struct {
+	ids []uuid.UUID
+}
+
+func (s *stubMissingEmbLister) ListMissingEmbeddingCandidates(_ context.Context, _ []uuid.UUID, _ int) ([]storage.BackfillCandidate, error) {
+	cands := make([]storage.BackfillCandidate, len(s.ids))
+	for i, id := range s.ids {
+		cands[i] = storage.BackfillCandidate{ID: id}
+	}
+	return cands, nil
+}
+
+// TestBackfillMissingEmbeddings_EnqueuesNoMarker pins that the missing-embedding
+// repair enqueues plain full-pipeline jobs (no sentinel): the worker skips
+// extraction for an already-enriched memory and runs the re-embed + finalize
+// path, restoring the vector.
+func TestBackfillMissingEmbeddings_EnqueuesNoMarker(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1, id2 := uuid.New(), uuid.New()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		id1: makeEnrichMemory(id1, nsID, true),
+		id2: makeEnrichMemory(id2, nsID, true),
+	}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachMissingEmbeddingLister(&stubMissingEmbLister{ids: []uuid.UUID{id1, id2}})
+
+	resp, err := svc.BackfillMissingEmbeddings(context.Background(), &BackfillMissingEmbeddingsRequest{})
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if resp.Enqueued != 2 || len(queue.jobs) != 2 {
+		t.Fatalf("expected 2 enqueued/2 jobs; got %d/%d", resp.Enqueued, len(queue.jobs))
+	}
+	for i, job := range queue.jobs {
+		if job.StepsCompleted != nil {
+			t.Errorf("missing-embedding job[%d] should carry no marker; got StepsCompleted %s",
+				i, string(job.StepsCompleted))
+		}
+	}
+}
+
+func TestBackfillMissingEmbeddings_DryRunDoesNotEnqueue(t *testing.T) {
+	_, nsID, projects := setupEnrichFixtures()
+	id1 := uuid.New()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{
+		id1: makeEnrichMemory(id1, nsID, true),
+	}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+	svc.AttachMissingEmbeddingLister(&stubMissingEmbLister{ids: []uuid.UUID{id1}})
+
+	resp, err := svc.BackfillMissingEmbeddings(context.Background(), &BackfillMissingEmbeddingsRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if resp.CandidateCount != 1 || resp.Enqueued != 0 || len(queue.jobs) != 0 {
+		t.Fatalf("dry run expected 1 candidate / 0 enqueued / 0 jobs; got %d/%d/%d",
+			resp.CandidateCount, resp.Enqueued, len(queue.jobs))
+	}
+}
+
+func TestBackfillMissingEmbeddings_NoListerReturnsError(t *testing.T) {
+	_, _, projects := setupEnrichFixtures()
+	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{}}
+	queue := &enrichQueueRepo{}
+	svc := NewEnrichService(reader, projects, queue, &enrichLineageQuerier{children: map[uuid.UUID]uuid.UUID{}})
+
+	if _, err := svc.BackfillMissingEmbeddings(context.Background(), &BackfillMissingEmbeddingsRequest{}); err == nil {
+		t.Fatal("expected error when missing-embedding lister is not attached")
+	}
+}
+
 func TestBackfillMultiVector_NoListerReturnsError(t *testing.T) {
 	_, _, projects := setupEnrichFixtures()
 	reader := &enrichMemoryReader{memories: map[uuid.UUID]*model.Memory{}}

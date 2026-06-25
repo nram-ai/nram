@@ -42,6 +42,8 @@ import {
   type ExtractionTestResult,
   type AugmentationBackfillResponse,
   type MultiVectorBackfillResponse,
+  type MissingEmbeddingsBackfillResponse,
+  type ClearCompletedJobsResponse,
   type RelabelGraphResponse,
   type ReExtractResponse,
   type VectorMigrationResult,
@@ -1370,6 +1372,36 @@ export function useBackfillMultiVector() {
       if (!variables.dry_run) {
         qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
       }
+    },
+  });
+}
+
+export function useBackfillMissingEmbeddings() {
+  const qc = useQueryClient();
+  return useMutation<
+    MissingEmbeddingsBackfillResponse,
+    Error,
+    { project_id?: string; dry_run?: boolean; limit?: number }
+  >({
+    mutationFn: (req) => adminAPI.backfillMissingEmbeddings(req),
+    onSuccess: (_, variables) => {
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function useClearCompletedJobs() {
+  const qc = useQueryClient();
+  return useMutation<
+    ClearCompletedJobsResponse,
+    Error,
+    { older_than_days?: number }
+  >({
+    mutationFn: (req) => adminAPI.clearCompletedJobs(req),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
     },
   });
 }

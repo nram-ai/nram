@@ -155,7 +155,16 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 			if p.tryRepair(ctx, &mem, vecs[k], errs[k], stats) {
 				continue
 			}
-			p.clearDim(ctx, &mem, stats)
+			// Only clear the stale embedding_dim when the embedder is genuinely
+			// unavailable (nothing can re-embed this row now). A TRANSIENT embed
+			// failure — a provider error, an outage, an empty response — must NOT
+			// null the dim: with a crash-looping embedder that would strand
+			// divergent rows en masse (exactly the failure mode that produced the
+			// embedding-stranded backlog). Leaving the dim keeps the row a
+			// FindMemoriesMissingVector candidate the next cycle retries.
+			if errors.Is(errs[k], errBackfillNoEmbedder) {
+				p.clearDim(ctx, &mem, stats)
+			}
 		}
 	}
 

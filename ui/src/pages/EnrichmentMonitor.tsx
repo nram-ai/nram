@@ -1361,6 +1361,24 @@ function EnrichmentMonitor() {
           </div>
           )}
 
+          {/* Missing embeddings: live memories with no stored vector, which are
+              invisible to vector recall. The jobs that produced them are
+              recorded completed, so this is the one integrity signal the queue
+              counts cannot show. Drained by the Backfill Missing Embeddings
+              action in Settings. */}
+          {health && health.missing_embeddings > 0 && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900 dark:border-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-100">
+              <span className="font-semibold">
+                Missing embeddings: {health.missing_embeddings}
+              </span>
+              <span>
+                memories with no vector, invisible to recall. Repair via Settings
+                → Providers/Enrichment → Worker Performance → Backfill Missing
+                Embeddings.
+              </span>
+            </div>
+          )}
+
           {/* Extraction health: rolling counts of truncation / loop / parse
               failures recorded on the queue, so the operator sees extraction
               quality pressure without reading server logs. */}

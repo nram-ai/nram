@@ -252,7 +252,11 @@ func TestEmbeddingBackfillPhase_ClearsDimWhenEmbedderUnavailable(t *testing.T) {
 // previous test but exercises the path where the embedder is wired but
 // returns an error on every call (e.g. provider 4xx). Same outcome: the
 // row's embedding_dim is cleared.
-func TestEmbeddingBackfillPhase_ClearsDimOnFailingEmbedder(t *testing.T) {
+// A transient embed failure (provider error/outage) must NOT clear the dim:
+// stranding rows on a crash-looping embedder is exactly what produced the
+// embedding-stranded backlog. The row is left as a missing-vector candidate the
+// next cycle retries.
+func TestEmbeddingBackfillPhase_DoesNotClearDimOnTransientEmbedFailure(t *testing.T) {
 	ns := uuid.New()
 	dim := 768
 	row := memWithDim("provider failing", dim, ns)
@@ -279,8 +283,8 @@ func TestEmbeddingBackfillPhase_ClearsDimOnFailingEmbedder(t *testing.T) {
 	if emb.calls == 0 {
 		t.Errorf("expected at least one embed attempt; got 0")
 	}
-	if len(writer.embeddingDimClears) != 1 {
-		t.Fatalf("expected 1 ClearEmbeddingDim call after embedder failure; got %d", len(writer.embeddingDimClears))
+	if len(writer.embeddingDimClears) != 0 {
+		t.Fatalf("transient embed failure must not clear the dim; got %d clears", len(writer.embeddingDimClears))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -91,6 +92,20 @@ type EnrichmentAdminConfig struct {
 	// prompt/vocabulary. DryRun returns the candidate count only. Nil disables
 	// the endpoint with a 503.
 	ReExtract func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (EnrichmentReExtractResult, error)
+
+	// BackfillMissingEmbeddings re-enqueues embedding-stranded memories (no stored
+	// vector) so the worker re-embeds them. DryRun returns the candidate count
+	// only. Nil disables the endpoint with a 503.
+	BackfillMissingEmbeddings func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
+
+	// CountMissingEmbeddings returns the live embedding-stranded count for the
+	// queue health surface. Nil leaves the count at zero.
+	CountMissingEmbeddings func(ctx context.Context) (int64, error)
+
+	// ClearCompletedJobs deletes completed enrichment_queue rows (optionally only
+	// those older than olderThanDays; 0 = all completed). Never touches
+	// pending/processing. Returns rows deleted. Nil disables the endpoint with 503.
+	ClearCompletedJobs func(ctx context.Context, olderThanDays int) (int64, error)
 }
 
 // EnrichmentRelabelResult is the response for POST /enrichment/relabel-graph.
@@ -132,6 +147,10 @@ type EnrichmentExtractionHealthInfo struct {
 	LengthNoRecovery int64 `json:"length_no_recovery"`
 	EmptyResponse    int64 `json:"empty_response"`
 	LLMCallFailed    int64 `json:"llm_call_failed"`
+	// MissingEmbeddings counts live, embeddable memories that have no stored
+	// vector (embedding_dim IS NULL) — embedding-stranded rows that are invisible
+	// to vector recall. The "Backfill Missing Embeddings" action drains this.
+	MissingEmbeddings int64 `json:"missing_embeddings"`
 }
 
 // Queue list pagination bounds. The default page size matches the historical
@@ -321,7 +340,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "clear-completed-jobs" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -350,6 +369,10 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentBackfillEmbeddingDims(w, r, cfg)
 		case "re-extract":
 			handleEnrichmentReExtract(w, r, cfg)
+		case "backfill-missing-embeddings":
+			handleEnrichmentBackfillMissingEmbeddings(w, r, cfg)
+		case "clear-completed-jobs":
+			handleEnrichmentClearCompletedJobs(w, r, cfg)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -384,6 +407,17 @@ func handleEnrichmentQueue(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 	if status.Items == nil {
 		status.Items = []EnrichmentQueueItem{}
+	}
+
+	// Embedding-stranded count: a memories-table fact (no stored vector) the
+	// queue itself cannot see, since the jobs that stranded them are recorded
+	// completed. Surfaced here so it rides the same health panel the UI renders.
+	if cfg.CountMissingEmbeddings != nil {
+		if n, cErr := cfg.CountMissingEmbeddings(r.Context()); cErr == nil {
+			status.ExtractionHealth.MissingEmbeddings = n
+		} else {
+			slog.Warn("enrichment queue: count missing embeddings", "err", cErr)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, status)
@@ -848,6 +882,72 @@ func handleEnrichmentBackfillMultiVector(w http.ResponseWriter, r *http.Request,
 		Enqueued:       enq,
 		DryRun:         body.DryRun,
 	})
+}
+
+// handleEnrichmentBackfillMissingEmbeddings handles
+// POST /enrichment/backfill-missing-embeddings. ProjectID is optional; omit to
+// scan the whole deployment. DryRun returns the candidate count without
+// enqueueing. Limit caps how many memories this call enqueues.
+func handleEnrichmentBackfillMissingEmbeddings(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillMissingEmbeddings == nil {
+		http.Error(w, "backfill-missing-embeddings not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	count, enq, err := cfg.BackfillMissingEmbeddings(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("backfill missing embeddings: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         body.DryRun,
+	})
+}
+
+// enrichmentClearCompletedRequest scopes a completed-jobs purge. OlderThanDays
+// 0 deletes all completed rows; a positive value keeps rows completed within
+// that window.
+type enrichmentClearCompletedRequest struct {
+	OlderThanDays int `json:"older_than_days,omitempty"`
+}
+
+// handleEnrichmentClearCompletedJobs handles POST /enrichment/clear-completed-jobs.
+// Deletes completed enrichment_queue rows (never pending/processing), so the
+// queue view stays readable. Returns how many rows were deleted.
+func handleEnrichmentClearCompletedJobs(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.ClearCompletedJobs == nil {
+		http.Error(w, "clear-completed-jobs not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentClearCompletedRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	deleted, err := cfg.ClearCompletedJobs(r.Context(), body.OlderThanDays)
+	if err != nil {
+		WriteError(w, ErrInternal("clear completed jobs: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
 }
 
 // handleEnrichmentBackfillExtractedFactParaphrase handles

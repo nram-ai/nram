@@ -1357,6 +1357,38 @@ ORDER BY m.id ASC`
 	return scanBackfillCandidates(rows)
 }
 
+// ListMissingEmbeddingCandidates returns live, embeddable memories that have no
+// stored vector (embedding_dim IS NULL) across the given namespaces, or the whole
+// deployment when namespaceIDs is empty. These are the "embedding-stranded"
+// memories — enriched or not — that no longer surface in vector recall; the
+// missing-embeddings backfill re-enqueues them so the worker re-embeds and
+// finalizes. Mirrors ListReExtractCandidates' shape; the predicate matches
+// FindMemoriesNullEmbeddingDim so the on-demand backfill and the dreaming
+// embedding-backfill phase select the same rows.
+func (r *MemoryRepo) ListMissingEmbeddingCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+	return r.listBackfillCandidates(ctx,
+		[]string{"confidence > 0", "embedding_dim IS NULL"},
+		namespaceIDs, limit, "list missing-embedding candidates", "id ASC")
+}
+
+// CountMissingEmbeddings returns how many live, embeddable memories have no
+// stored vector across the whole deployment. Drives the enrichment health
+// surface so an operator can see the embedding-stranded count and watch the
+// backfill drain it.
+func (r *MemoryRepo) CountMissingEmbeddings(ctx context.Context) (int64, error) {
+	query := `SELECT count(*) FROM memories m
+WHERE m.deleted_at IS NULL
+  AND m.superseded_by IS NULL
+  AND m.confidence > 0
+  AND m.embedding_dim IS NULL
+  AND m.content IS NOT NULL AND trim(m.content) <> ''`
+	var n int64
+	if err := r.db.QueryRow(ctx, query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count missing embeddings: %w", err)
+	}
+	return n, nil
+}
+
 // ResetEnriched clears the enriched flag so the worker re-runs fact and entity
 // extraction on the next enqueue (the skip guard gates on enriched). Used by the
 // re-extraction path after the memory's prior graph footprint is tombstoned.

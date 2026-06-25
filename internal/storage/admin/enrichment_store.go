@@ -749,6 +749,38 @@ func (s *EnrichmentAdminStore) RetryFailed(ctx context.Context, ids []uuid.UUID)
 	return s.retryFailedInNamespacePath(ctx, "", ids)
 }
 
+// ClearCompletedJobs deletes completed enrichment_queue rows so the queue view
+// stays readable as the table accumulates history. When olderThanDays > 0 only
+// rows completed before that cutoff are removed; 0 deletes all completed rows.
+// It is scoped strictly to status='completed' and never touches pending or
+// processing rows, so it cannot strand an in-flight memory. Returns the number
+// of rows deleted.
+func (s *EnrichmentAdminStore) ClearCompletedJobs(ctx context.Context, olderThanDays int) (int64, error) {
+	pg := s.db.Backend() == storage.BackendPostgres
+	var query string
+	var args []any
+	if olderThanDays > 0 {
+		cutoff := time.Now().UTC().AddDate(0, 0, -olderThanDays).Format(time.RFC3339)
+		if pg {
+			query = `DELETE FROM enrichment_queue WHERE status = 'completed' AND completed_at < $1`
+		} else {
+			query = `DELETE FROM enrichment_queue WHERE status = 'completed' AND completed_at < ?`
+		}
+		args = []any{cutoff}
+	} else {
+		query = `DELETE FROM enrichment_queue WHERE status = 'completed'`
+	}
+	res, err := s.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("clear completed jobs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("clear completed jobs rows affected: %w", err)
+	}
+	return n, nil
+}
+
 func (s *EnrichmentAdminStore) SetPaused(ctx context.Context, paused bool) error {
 	value, _ := json.Marshal(paused)
 	setting := &model.Setting{

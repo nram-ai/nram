@@ -1517,6 +1517,9 @@ export interface EnrichmentExtractionHealth {
   length_no_recovery: number;
   empty_response: number;
   llm_call_failed: number;
+  // Live, embeddable memories with no stored vector — invisible to vector
+  // recall until re-embedded by the Backfill Missing Embeddings action.
+  missing_embeddings: number;
 }
 
 export interface EnrichmentQueueStatus {
@@ -1592,6 +1595,21 @@ export interface MultiVectorBackfillResponse {
   candidate_count: number;
   enqueued: number;
   dry_run: boolean;
+}
+
+// Response for POST /admin/enrichment/backfill-missing-embeddings. Same shape as
+// the other backfills: enqueued is 0 on a dry run, else the count of
+// embedding-stranded memories re-enqueued for re-embedding.
+export interface MissingEmbeddingsBackfillResponse {
+  candidate_count: number;
+  enqueued: number;
+  dry_run: boolean;
+}
+
+// Response for POST /admin/enrichment/clear-completed-jobs. deleted is the
+// number of completed enrichment_queue rows removed.
+export interface ClearCompletedJobsResponse {
+  deleted: number;
 }
 
 // Response for POST /admin/enrichment/relabel-graph. The deterministic, no-LLM
@@ -2126,6 +2144,31 @@ export const adminAPI = {
     request<MultiVectorBackfillResponse>(
       "POST",
       "/admin/enrichment/backfill-multi-vector",
+      req,
+    ),
+
+  // Re-enqueue embedding-stranded memories (no stored vector) for re-embedding.
+  // dry_run reports the candidate count without enqueueing. project_id omitted
+  // scans the whole deployment; limit caps how many memories land in the queue
+  // this call. Runs off the queue, independent of dreaming.
+  backfillMissingEmbeddings: (req: {
+    project_id?: string;
+    dry_run?: boolean;
+    limit?: number;
+  }) =>
+    request<MissingEmbeddingsBackfillResponse>(
+      "POST",
+      "/admin/enrichment/backfill-missing-embeddings",
+      req,
+    ),
+
+  // Delete completed enrichment_queue rows so the queue view stays readable.
+  // older_than_days 0 clears all completed rows; a positive value keeps rows
+  // completed within that window. Never touches pending/processing.
+  clearCompletedJobs: (req: { older_than_days?: number }) =>
+    request<ClearCompletedJobsResponse>(
+      "POST",
+      "/admin/enrichment/clear-completed-jobs",
       req,
     ),
 

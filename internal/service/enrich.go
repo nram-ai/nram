@@ -63,6 +63,14 @@ type MultiVectorCandidateLister interface {
 	ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
+// MissingEmbeddingCandidateLister returns live, embeddable memories with no
+// stored vector (embedding_dim IS NULL) — the embedding-stranded set. Used by
+// BackfillMissingEmbeddings to re-enqueue them for re-embedding. Same
+// tiny-interface pattern as the others.
+type MissingEmbeddingCandidateLister interface {
+	ListMissingEmbeddingCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+}
+
 // ReExtractStore is the storage surface the re-extraction path needs beyond the
 // shared queue/lineage deps: candidate listing, enriched reset, and soft-delete
 // of prior extracted-fact children. Kept as a tiny interface so re-extraction
@@ -82,6 +90,7 @@ type EnrichService struct {
 	augLister        AugmentationCandidateLister
 	paraphraseLister ParaphraseCandidateLister
 	mvLister         MultiVectorCandidateLister
+	missingEmbLister MissingEmbeddingCandidateLister
 	reExtractStore   ReExtractStore
 	graphReaper      GraphReaper
 }
@@ -216,6 +225,13 @@ func (s *EnrichService) AttachMultiVectorLister(lister MultiVectorCandidateListe
 	s.mvLister = lister
 }
 
+// AttachMissingEmbeddingLister wires the candidate lister used by
+// BackfillMissingEmbeddings. Optional: when nil, BackfillMissingEmbeddings
+// returns an explanatory error.
+func (s *EnrichService) AttachMissingEmbeddingLister(lister MissingEmbeddingCandidateLister) {
+	s.missingEmbLister = lister
+}
+
 // AttachParaphraseCandidateLister wires the candidate lister used by
 // BackfillExtractedFactParaphrase.
 func (s *EnrichService) AttachParaphraseCandidateLister(lister ParaphraseCandidateLister) {
@@ -311,6 +327,23 @@ type BackfillMultiVectorResponse struct {
 	LatencyMs      int64 `json:"latency_ms"`
 }
 
+// BackfillMissingEmbeddingsRequest scopes a missing-embedding repair to a project
+// (or the whole deployment if ProjectID is zero). DryRun returns the candidate
+// count without enqueueing. Limit caps the batch (0 = no cap).
+type BackfillMissingEmbeddingsRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+}
+
+// BackfillMissingEmbeddingsResponse reports the outcome of one call.
+type BackfillMissingEmbeddingsResponse struct {
+	CandidateCount int   `json:"candidate_count"`
+	Enqueued       int   `json:"enqueued"`
+	DryRun         bool  `json:"dry_run"`
+	LatencyMs      int64 `json:"latency_ms"`
+}
+
 // BackfillMultiVector enqueues live memories for a lean facet-only sweep: each
 // job carries the JobMarkerOnlyMultiVector sentinel, so the worker reuses the
 // memory's stored facet-0 vector and runs only the per-topic sentence embeds
@@ -392,6 +425,29 @@ func (s *EnrichService) BackfillMultiVector(ctx context.Context, req *BackfillMu
 		return nil, err
 	}
 	return &BackfillMultiVectorResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         req.DryRun,
+		LatencyMs:      time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// BackfillMissingEmbeddings re-enqueues every embedding-stranded memory (no
+// stored vector) so the worker re-embeds and finalizes it, restoring vector
+// recall. It enqueues a NORMAL enrichment job (empty marker): an already-enriched
+// memory skips re-extraction via the worker's mem.Enriched gate and proceeds
+// straight to embed + finalize. Runs entirely off the queue, independent of
+// dreaming, so an operator with dreaming disabled can still repair strays.
+func (s *EnrichService) BackfillMissingEmbeddings(ctx context.Context, req *BackfillMissingEmbeddingsRequest) (*BackfillMissingEmbeddingsResponse, error) {
+	start := time.Now()
+	if s.missingEmbLister == nil {
+		return nil, fmt.Errorf("missing-embedding candidate lister not configured (call AttachMissingEmbeddingLister)")
+	}
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, "", s.missingEmbLister.ListMissingEmbeddingCandidates)
+	if err != nil {
+		return nil, err
+	}
+	return &BackfillMissingEmbeddingsResponse{
 		CandidateCount: count,
 		Enqueued:       enq,
 		DryRun:         req.DryRun,

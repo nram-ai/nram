@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -584,6 +585,7 @@ func main() {
 	enrichSvc := service.NewEnrichService(memoryRepo, projectRepo, enrichmentQueueRepo, lineageRepo)
 	enrichSvc.AttachAugmentationLister(memoryRepo)
 	enrichSvc.AttachMultiVectorLister(memoryRepo)
+	enrichSvc.AttachMissingEmbeddingLister(memoryRepo)
 	// Procedural tier: verbatim standing instructions. Holds no enrichment,
 	// embedder, or dream dependency by design; that absence keeps it verbatim.
 	proceduralSvc := service.NewProceduralService(proceduralRepo)
@@ -1265,6 +1267,22 @@ func main() {
 					FactChildrenRemoved: resp.FactChildrenRemoved,
 				}, nil
 			},
+			BackfillMissingEmbeddings: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
+				resp, err := enrichSvc.BackfillMissingEmbeddings(ctx, &service.BackfillMissingEmbeddingsRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return 0, 0, err
+				}
+				return resp.CandidateCount, resp.Enqueued, nil
+			},
+			// The queue health surface is polled (~10s) and the count is a scan
+			// over the memories table, so cache it briefly to keep the poll off a
+			// repeated full scan; an informational indicator tolerates TTL staleness.
+			CountMissingEmbeddings: cachedInt64(30*time.Second, memoryRepo.CountMissingEmbeddings),
+			ClearCompletedJobs:     enrichmentAdminStore.ClearCompletedJobs,
 		}),
 		AdminOAuth:           api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
 		AdminWebhooks:        api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),
@@ -1456,4 +1474,33 @@ func logFusionStartupAudit(ctx context.Context, settingsSvc *service.SettingsSer
 // admin-UI slider resolution (step:0.05) and well above FP rounding noise.
 func nearlyEqual(a, b float64) bool {
 	return math.Abs(a-b) < 1e-9
+}
+
+// cachedInt64 wraps a count function with a short in-process TTL cache so a
+// polled health surface does not re-run an expensive count on every request.
+// On a refresh error it serves the last good value (when one exists) rather than
+// surfacing a transient zero. Safe for concurrent callers.
+func cachedInt64(ttl time.Duration, fn func(context.Context) (int64, error)) func(context.Context) (int64, error) {
+	var (
+		mu     sync.Mutex
+		val    int64
+		at     time.Time
+		cached bool
+	)
+	return func(ctx context.Context) (int64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached && time.Since(at) < ttl {
+			return val, nil
+		}
+		n, err := fn(ctx)
+		if err != nil {
+			if cached {
+				return val, nil
+			}
+			return 0, err
+		}
+		val, at, cached = n, time.Now(), true
+		return n, nil
+	}
 }

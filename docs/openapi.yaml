@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.11.7
+  version: 0.11.8
   license:
     name: MIT
 
@@ -4071,6 +4071,61 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
+  /v1/admin/enrichment/backfill-missing-embeddings:
+    post:
+      operationId: adminBackfillMissingEmbeddings
+      tags: [Enrichment]
+      summary: Re-embed memories that have no stored vector (administrator only)
+      description: >
+        Re-enqueues embedding-stranded memories (live, embeddable, no stored
+        vector) so the worker re-embeds them, restoring vector recall. Runs off
+        the queue, independent of dreaming. dry_run returns the candidate count
+        without enqueueing.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentBackfillRequest"
+      responses:
+        "200":
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
+  /v1/admin/enrichment/clear-completed-jobs:
+    post:
+      operationId: adminClearCompletedJobs
+      tags: [Enrichment]
+      summary: Delete completed enrichment queue rows (administrator only)
+      description: >
+        Deletes completed enrichment_queue rows so the queue view stays
+        readable. Scoped strictly to completed jobs; pending and processing rows
+        are never touched. older_than_days 0 clears all completed rows.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                older_than_days:
+                  type: integer
+                  minimum: 0
+                  description: Keep rows completed within this many days; 0 clears all.
+      responses:
+        "200":
+          description: Number of completed rows deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
 
   # ── Admin: dreaming (system-ops) ────────────────────────────────────────
   /v1/admin/dreaming:
