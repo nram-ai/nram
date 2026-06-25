@@ -1330,7 +1330,7 @@ export function useTestExtractionPrompt() {
     ExtractionTestResult,
     Error,
     {
-      type: "fact" | "entity" | "augment" | "ingestion";
+      type: "fact" | "entity" | "relationship" | "augment" | "ingestion";
       sampleInput: string;
       count?: number;
       systemPrompt?: string;

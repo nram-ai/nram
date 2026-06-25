@@ -42,10 +42,11 @@ type EnrichmentAdminConfig struct {
 	// them when the request omits system_prompt, so a defaults run sends the same
 	// system prompt the runtime does. The dynamic user message is always built
 	// from the phase's hardcoded code wrapper.
-	FactSystemPromptDefault      func(ctx context.Context) string
-	EntitySystemPromptDefault    func(ctx context.Context) string
-	QueryAugmentSystemPromptDef  func(ctx context.Context) string
-	IngestionSystemPromptDefault func(ctx context.Context) string
+	FactSystemPromptDefault         func(ctx context.Context) string
+	EntitySystemPromptDefault       func(ctx context.Context) string
+	RelationshipSystemPromptDefault func(ctx context.Context) string
+	QueryAugmentSystemPromptDef     func(ctx context.Context) string
+	IngestionSystemPromptDefault    func(ctx context.Context) string
 
 	// TestPromptMaxTokens returns the operator-tunable token cap for the Test
 	// surface's model call (SettingEnrichmentTestPromptMaxTokens). Resolved as a
@@ -491,7 +492,7 @@ func handleEnrichmentPause(w http.ResponseWriter, r *http.Request, cfg Enrichmen
 
 // enrichmentTestPromptRequest is the request body for POST /enrichment/test-prompt.
 type enrichmentTestPromptRequest struct {
-	Type string `json:"type"` // "fact", "entity", "augment", or "ingestion"
+	Type string `json:"type"` // "fact", "entity", "relationship", "augment", or "ingestion"
 	// SystemPrompt is the tunable instruction, sent as the system message. The
 	// dynamic user message is built from the phase's hardcoded code wrapper
 	// applied to SampleInput, so the Test surface exercises the exact
@@ -530,8 +531,8 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		return
 	}
 
-	if body.Type != "fact" && body.Type != "entity" && body.Type != "augment" && body.Type != "ingestion" {
-		WriteError(w, ErrBadRequest("type must be 'fact', 'entity', 'augment', or 'ingestion'"))
+	if body.Type != "fact" && body.Type != "entity" && body.Type != "relationship" && body.Type != "augment" && body.Type != "ingestion" {
+		WriteError(w, ErrBadRequest("type must be 'fact', 'entity', 'relationship', 'augment', or 'ingestion'"))
 		return
 	}
 
@@ -553,7 +554,9 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			WriteError(w, ErrBadRequest("fact extraction provider is not available"))
 			return
 		}
-	case "entity":
+	case "entity", "relationship":
+		// Relationship extraction (pass 2) runs against the entity provider slot,
+		// exactly as the worker does (it uses wp.entityProvider() for both passes).
 		if cfg.EntityProvider == nil {
 			WriteError(w, ErrBadRequest("no entity extraction provider configured"))
 			return
@@ -611,6 +614,10 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 			if cfg.EntitySystemPromptDefault != nil {
 				systemTemplate = cfg.EntitySystemPromptDefault(r.Context())
 			}
+		case "relationship":
+			if cfg.RelationshipSystemPromptDefault != nil {
+				systemTemplate = cfg.RelationshipSystemPromptDefault(r.Context())
+			}
 		case "augment":
 			if cfg.QueryAugmentSystemPromptDef != nil {
 				systemTemplate = cfg.QueryAugmentSystemPromptDef(r.Context())
@@ -656,6 +663,16 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 	if cfg.TestPromptMaxTokens != nil {
 		maxTokens = cfg.TestPromptMaxTokens(r.Context())
 	}
+
+	// Relationship extraction is two passes: first extract entities from the
+	// sample (using the saved entity prompt) to get the names, then test the
+	// relationship prompt-under-test fed those names — exactly what the runtime
+	// does. Handled in its own branch since the generic flow is single-call.
+	if body.Type == "relationship" {
+		runRelationshipPromptTest(w, r, cfg, llmProvider, systemTemplate, body.SampleInput, maxTokens, start)
+		return
+	}
+
 	completionReq := &provider.CompletionRequest{
 		Messages: provider.BuildMessages(systemTemplate, user),
 		// Model left empty: the resolved provider slot supplies its own model.
@@ -813,6 +830,91 @@ func parseTestEntityResponse(raw string) (any, error) {
 		return result, nil
 	}
 	return nil, fmt.Errorf("could not parse response as JSON entity object")
+}
+
+// parseTestRelationshipResponse parses an LLM relationship-extraction response
+// (the {"relationships":[...]} shape) into a generic object for the UI.
+func parseTestRelationshipResponse(raw string) (any, error) {
+	if result, ok := parseTestJSONObject(raw); ok {
+		return result, nil
+	}
+	return nil, fmt.Errorf("could not parse response as JSON relationship object")
+}
+
+// runRelationshipPromptTest exercises the relationship prompt-under-test the way
+// the runtime does: pass 1 extracts entities from the sample with the saved
+// entity prompt to get the names, then pass 2 runs the relationship prompt fed
+// those names. Both passes run against the entity provider slot. The response
+// surfaces pass 2's raw output, model, and parsed relationships.
+func runRelationshipPromptTest(
+	w http.ResponseWriter,
+	r *http.Request,
+	cfg EnrichmentAdminConfig,
+	llmProvider provider.LLMProvider,
+	relSystem, sampleInput string,
+	maxTokens int,
+	start time.Time,
+) {
+	// Pass 1: entity extraction with the saved entity prompt.
+	var entitySystem string
+	if cfg.EntitySystemPromptDefault != nil {
+		entitySystem = cfg.EntitySystemPromptDefault(r.Context())
+	}
+	if strings.TrimSpace(entitySystem) == "" {
+		writeJSON(w, http.StatusOK, enrichmentTestPromptResponse{
+			Error:     "no entity system prompt available for the relationship test's entity pass",
+			LatencyMs: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+	entReq := &provider.CompletionRequest{
+		Messages:    provider.BuildMessages(entitySystem, service.RenderExtractionUser(sampleInput)),
+		MaxTokens:   maxTokens,
+		Temperature: 0.1,
+		JSONMode:    true,
+	}
+	entResp, err := llmProvider.Complete(provider.WithOperation(r.Context(), provider.OperationProbe), entReq)
+	if err != nil {
+		writeJSON(w, http.StatusOK, enrichmentTestPromptResponse{
+			Error:     fmt.Sprintf("entity pass (pass 1) LLM call failed: %v", err),
+			LatencyMs: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+
+	// Extract entity names from pass 1 (lenient parse; an empty list still runs
+	// pass 2, which will return no relationships — a meaningful test result).
+	var entParsed service.EntityExtractionResult
+	_ = service.UnmarshalJSONLenient(entResp.Content, &entParsed)
+	names := service.EntityNames(entParsed.Entities)
+
+	// Pass 2: relationship extraction with the prompt under test.
+	relReq := &provider.CompletionRequest{
+		Messages:    provider.BuildMessages(relSystem, service.RenderRelationshipUser(sampleInput, names)),
+		MaxTokens:   maxTokens,
+		Temperature: 0.1,
+		JSONMode:    true,
+	}
+	relResp, err := llmProvider.Complete(provider.WithOperation(r.Context(), provider.OperationProbe), relReq)
+	if err != nil {
+		writeJSON(w, http.StatusOK, enrichmentTestPromptResponse{
+			Error:     fmt.Sprintf("relationship pass (pass 2) LLM call failed: %v", err),
+			LatencyMs: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+
+	out := enrichmentTestPromptResponse{
+		Output:    relResp.Content,
+		Model:     relResp.Model,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}
+	if parsed, perr := parseTestRelationshipResponse(relResp.Content); perr != nil {
+		out.Error = perr.Error()
+	} else {
+		out.Parsed = parsed
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // parseTestIngestionResponse parses an LLM ingestion-decision response into a

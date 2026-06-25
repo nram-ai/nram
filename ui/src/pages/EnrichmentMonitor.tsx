@@ -469,6 +469,7 @@ const PHASE_METRIC_LABELS: Record<string, string> = {
   fact_extraction: "Fact extraction",
   fact_guard_embedding: "Fact-guard embedding",
   entity_extraction: "Entity extraction",
+  relationship_extraction: "Relationship extraction",
   query_augment: "Query augmentation",
   embedding: "Embedding",
   facet_embedding: "Facet embedding",

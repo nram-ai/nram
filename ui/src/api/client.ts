@@ -2116,7 +2116,7 @@ export const adminAPI = {
   pauseEnrichment: (paused: boolean) =>
     request<EnrichmentPauseResponse>("POST", "/admin/enrichment/pause", { paused }),
   testExtractionPrompt: (
-    type: "fact" | "entity" | "augment" | "ingestion",
+    type: "fact" | "entity" | "relationship" | "augment" | "ingestion",
     sampleInput: string,
     count?: number,
     systemPrompt?: string,

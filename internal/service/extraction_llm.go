@@ -52,6 +52,21 @@ func EntityCallOptionKeys(sync bool) callOptionKeys {
 	}
 }
 
+// RelationshipCallOptionKeys returns the keys for the relationship-extraction
+// pass (pass 2). The relationship pass gets its own max_tokens budget so it is
+// never starved by a dense entity pass that truncated. sync selects the
+// request-path temperature key; false selects the async-worker key.
+func RelationshipCallOptionKeys(sync bool) callOptionKeys {
+	tmp := SettingRelationshipExtractionAsyncTemperature
+	if sync {
+		tmp = SettingRelationshipExtractionSyncTemperature
+	}
+	return callOptionKeys{
+		MaxTokens:   SettingRelationshipExtractionMaxTokens,
+		Temperature: tmp,
+	}
+}
+
 // ResolveCallOptions reads the extraction tunables from the settings cascade.
 func ResolveCallOptions(ctx context.Context, s *SettingsService, keys callOptionKeys) CallOptions {
 	return CallOptions{
@@ -83,6 +98,20 @@ type EntityExtractionEnvelope struct {
 	RawResponse     string
 }
 
+// RelationExtractionEnvelope is the relationship-pass counterpart to
+// EntityExtractionEnvelope. It carries the pass-2 (relationship-only) result and
+// the same diagnostic metadata so the worker can record an independent
+// relationship_extraction leg in the partial-recovery warning.
+type RelationExtractionEnvelope struct {
+	Result          *RelationExtractionResult
+	Usage           provider.TokenUsage
+	Model           string
+	ProviderName    string
+	FinishReason    string
+	PartialRecovery bool
+	RawResponse     string
+}
+
 // ExtractionFailure is the structured payload written to
 // enrichment_queue.last_error so admin views can distinguish cap-hit,
 // malformed JSON, and degenerate-loop outcomes without re-running the call.
@@ -101,8 +130,9 @@ type ExtractionFailure struct {
 
 // Extraction phase tags written into ExtractionFailure.Phase.
 const (
-	ExtractionPhaseFact   = "fact_extraction"
-	ExtractionPhaseEntity = "entity_extraction"
+	ExtractionPhaseFact         = "fact_extraction"
+	ExtractionPhaseEntity       = "entity_extraction"
+	ExtractionPhaseRelationship = "relationship_extraction"
 )
 
 // Extraction failure reasons written into ExtractionFailure.Reason. Stable
@@ -173,6 +203,17 @@ func buildExtractionRequest(messages []provider.Message, opts CallOptions) *prov
 // exact user message the runtime phases send.
 func RenderExtractionUser(content string) string {
 	return provider.Fence("text", content)
+}
+
+// RenderRelationshipUser builds the user message for the relationship-extraction
+// pass: the source text plus the entity names extracted in pass 1, each
+// nonce-fenced so neither body can forge the other's delimiter. The entity names
+// are one per line. Like RenderExtractionUser this dynamic wrapper is code, not a
+// setting; the tunable instruction lives in SettingRelationshipSystemPrompt.
+// Exported so the admin test surface renders the exact user message the runtime
+// relationship pass sends.
+func RenderRelationshipUser(content string, entityNames []string) string {
+	return provider.Fence("text", content) + "\n\n" + provider.Fence("entities", strings.Join(entityNames, "\n"))
 }
 
 // RenderContradictionUser builds the user message for the contradiction check.
@@ -380,6 +421,85 @@ func parseEntitiesRaw(raw string) (result *EntityExtractionResult, partialRecove
 		return nil, false, fmt.Errorf("failed to parse entity extraction response as JSON: %w", recErr)
 	}
 	return rec, true, nil
+}
+
+// parseRelationships parses a relationship-only extraction response (pass 2),
+// retrying on a de-fenced copy if the raw parse fails (see deFenceRetry). It is
+// the relationship-pass counterpart to parseEntities; the empty-completion
+// failure distinction lives in extractRelationshipsOnce, not here.
+func parseRelationships(raw string) (*RelationExtractionResult, bool, error) {
+	return deFenceRetry(raw, parseRelationshipsRaw)
+}
+
+func parseRelationshipsRaw(raw string) (result *RelationExtractionResult, partialRecovery bool, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return &RelationExtractionResult{}, false, nil
+	}
+
+	var clean RelationExtractionResult
+	if uerr := json.Unmarshal([]byte(raw), &clean); uerr == nil {
+		return &clean, false, nil
+	}
+
+	rec, recErr := recoverRelationshipsObjectPrefix(raw)
+	if recErr != nil {
+		return nil, false, fmt.Errorf("failed to parse relationship extraction response as JSON: %w", recErr)
+	}
+	return rec, true, nil
+}
+
+// recoverRelationshipsObjectPrefix walks an object containing an optional
+// "relationships" array, recovering whatever was cleanly decoded from it. It is
+// the relationship-only counterpart to recoverEntitiesObjectPrefix and reuses
+// streamRelationArray for the array prefix.
+func recoverRelationshipsObjectPrefix(raw string) (*RelationExtractionResult, error) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+
+	first, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := first.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, fmt.Errorf("expected JSON object, got %v", first)
+	}
+
+	out := &RelationExtractionResult{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			// Truncated key: return what we have.
+			return out, nil
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected object key, got %T", keyTok)
+		}
+
+		switch key {
+		case "relationships":
+			openTok, err := dec.Token()
+			if err != nil {
+				return out, nil
+			}
+			d, ok := openTok.(json.Delim)
+			if !ok || d != '[' {
+				return nil, fmt.Errorf("\"relationships\" is not a JSON array")
+			}
+			out.Relationships = streamRelationArray(dec)
+			if !consumeArrayClose(dec) {
+				// Array truncated mid-element; decoder state is unrecoverable.
+				return out, nil
+			}
+		default:
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return out, nil
+			}
+		}
+	}
+	return out, nil
 }
 
 // normalizeFacts copies the canonical text into both Fact and Content so

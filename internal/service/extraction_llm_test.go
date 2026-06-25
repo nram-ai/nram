@@ -147,6 +147,49 @@ func TestParseEntities_RecoverPartial(t *testing.T) {
 	}
 }
 
+func TestParseRelationships_Clean(t *testing.T) {
+	raw := `{"relationships":[{"source":"Alice","target":"Acme","relation":"member of","weight":0.9},{"source":"Acme","target":"Denver","relation":"located in"}]}`
+	result, partial, err := parseRelationships(raw)
+	if err != nil {
+		t.Fatalf("clean parse should not error: %v", err)
+	}
+	if partial {
+		t.Errorf("expected PartialRecovery=false on a clean parse")
+	}
+	if result == nil || len(result.Relationships) != 2 {
+		t.Fatalf("expected 2 relationships, got %v", result)
+	}
+}
+
+func TestParseRelationships_RecoverPartial(t *testing.T) {
+	// Truncated mid-second-element: longest-valid-prefix recovery keeps the first
+	// complete relationship and flags partial recovery.
+	truncated := `{"relationships":[{"source":"Alice","target":"Acme","relation":"member of","weight":0.9},{"source":"Acme","target":"Den`
+	result, partial, err := parseRelationships(truncated)
+	if err != nil {
+		t.Fatalf("relationship recovery should not error: %v", err)
+	}
+	if !partial {
+		t.Errorf("expected PartialRecovery=true")
+	}
+	if result == nil || len(result.Relationships) != 1 {
+		t.Fatalf("expected 1 relationship recovered (second is mid-string), got %v", result)
+	}
+}
+
+func TestParseRelationships_EmptyIsCleanNotPartial(t *testing.T) {
+	result, partial, err := parseRelationships(`{"relationships":[]}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if partial {
+		t.Errorf("an empty relationships array is a clean result, not a partial recovery")
+	}
+	if result == nil || len(result.Relationships) != 0 {
+		t.Fatalf("expected 0 relationships, got %v", result)
+	}
+}
+
 func TestParseFacts_NormalizationWritesBothFields(t *testing.T) {
 	// Input uses "fact" key (legacy/alternate); normalize must populate
 	// both Fact and Content so callers reading either field see the value.

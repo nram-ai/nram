@@ -241,12 +241,14 @@ func TestExtract_SuccessfulFactsAndEntities(t *testing.T) {
 		t.Errorf("expected relation 'member of' (coerced from works_at), got %q", rel.Relation)
 	}
 
-	// Token totals.
-	if resp.TokensUsed.Input != 220 {
-		t.Errorf("expected 220 input tokens, got %d", resp.TokensUsed.Input)
+	// Token totals. The entity provider is called twice (pass 1 entity-only +
+	// pass 2 relationship-only), each 120 prompt / 60 completion, plus the fact
+	// call (100/50): input 100+120+120=340, output 50+60+60=170.
+	if resp.TokensUsed.Input != 340 {
+		t.Errorf("expected 340 input tokens, got %d", resp.TokensUsed.Input)
 	}
-	if resp.TokensUsed.Output != 110 {
-		t.Errorf("expected 110 output tokens, got %d", resp.TokensUsed.Output)
+	if resp.TokensUsed.Output != 170 {
+		t.Errorf("expected 170 output tokens, got %d", resp.TokensUsed.Output)
 	}
 
 	// Latency should be non-negative.
@@ -509,9 +511,11 @@ func TestExtract_TokenUsageRecorded(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should have 2 token usage records: one for fact extraction, one for entity extraction.
-	if len(deps.tokenUsage.usages) != 2 {
-		t.Fatalf("expected 2 token usage records, got %d", len(deps.tokenUsage.usages))
+	// Should have 3 token usage records: fact extraction, entity extraction
+	// (pass 1), and relationship extraction (pass 2, run because pass 1 produced
+	// an entity). The relationship call reuses the entity provider/mock.
+	if len(deps.tokenUsage.usages) != 3 {
+		t.Fatalf("expected 3 token usage records, got %d", len(deps.tokenUsage.usages))
 	}
 
 	// Check fact extraction usage.
@@ -536,6 +540,15 @@ func TestExtract_TokenUsageRecorded(t *testing.T) {
 	}
 	if entityUsage.TokensInput != 80 {
 		t.Errorf("expected 80 input tokens, got %d", entityUsage.TokensInput)
+	}
+
+	// Check relationship extraction usage (pass 2, same entity mock).
+	relUsage := deps.tokenUsage.usages[2]
+	if relUsage.Operation != "relationship_extraction" {
+		t.Errorf("expected operation 'relationship_extraction', got %q", relUsage.Operation)
+	}
+	if relUsage.TokensInput != 80 {
+		t.Errorf("expected 80 input tokens, got %d", relUsage.TokensInput)
 	}
 }
 

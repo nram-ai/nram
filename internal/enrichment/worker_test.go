@@ -604,6 +604,19 @@ type mockLLMProvider struct {
 func (m *mockLLMProvider) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	return m.respond(req)
 }
+
+// isRelationshipRequest reports whether a completion request is the
+// relationship-extraction pass (pass 2), identified by its system prompt. The
+// entity provider serves both the entity pass and the relationship pass; tests
+// that count entity-extraction calls use this to exclude the relationship pass.
+func isRelationshipRequest(req *provider.CompletionRequest) bool {
+	for _, msg := range req.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "relationship extraction engine") {
+			return true
+		}
+	}
+	return false
+}
 func (m *mockLLMProvider) Name() string     { return m.name }
 func (m *mockLLMProvider) Models() []string { return []string{"test-model"} }
 
@@ -1146,17 +1159,18 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		}
 	}
 
-	// Token usage: fact_extraction + entity_extraction + query_augment +
-	// embedding = 4 base records (query augmentation defaults on and runs on the
-	// parent before embedding), plus 2 write-path cosine-resolution embeds (one
-	// per new entity; cosine-on-write defaults on) = 6. Each must attribute to
-	// the parent memory; query_augment, embedding, and the cosine embeds are the
-	// regression guard (these previously wrote token_usage rows with
+	// Token usage: fact_extraction + entity_extraction + relationship_extraction +
+	// query_augment + embedding = 5 base records (entity extraction is two passes
+	// now — entity-only then relationship-only — and query augmentation defaults on
+	// and runs on the parent before embedding), plus 2 write-path cosine-resolution
+	// embeds (one per new entity; cosine-on-write defaults on) = 7. Each must
+	// attribute to the parent memory; query_augment, embedding, and the cosine
+	// embeds are the regression guard (these previously wrote token_usage rows with
 	// memory_id=NULL, so those phases never attached to a memory).
-	if len(h.tokens.records) != 6 {
-		t.Errorf("expected 6 token usage records, got %d", len(h.tokens.records))
+	if len(h.tokens.records) != 7 {
+		t.Errorf("expected 7 token usage records, got %d", len(h.tokens.records))
 	}
-	for _, op := range []string{"fact_extraction", "entity_extraction", "query_augment", "embedding"} {
+	for _, op := range []string{"fact_extraction", "entity_extraction", "relationship_extraction", "query_augment", "embedding"} {
 		found := false
 		for _, r := range h.tokens.records {
 			if r.Operation != op {
@@ -1438,10 +1452,16 @@ func backfillProbeProviders() (factLLM, entityLLM provider.LLMProvider, embedPro
 		mu.Unlock()
 		return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
 	}}
-	entityLLM = &mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-		mu.Lock()
-		ec++
-		mu.Unlock()
+	entityLLM = &mockLLMProvider{name: "test-entity", respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		// The entity provider now serves two passes: entity extraction (pass 1)
+		// and relationship extraction (pass 2). Count only the entity pass so the
+		// gating assertions ("1 entity extraction call") stay meaningful; the
+		// relationship pass is identified by its system prompt.
+		if !isRelationshipRequest(req) {
+			mu.Lock()
+			ec++
+			mu.Unlock()
+		}
 		return &provider.CompletionResponse{Content: entityJSON(), Model: "entity-model"}, nil
 	}}
 	embedProv = &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {

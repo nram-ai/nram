@@ -328,6 +328,12 @@ func main() {
 		}
 	}
 
+	// One-time split of a stored entity_system_prompt that still holds the old
+	// combined entities+relationships default, so existing deployments pick up the
+	// entity-only prompt (relationships now extract in a separate pass). Guarded by
+	// a marker; an operator-customized prompt is left untouched with a warning.
+	migrateEntityPromptSplit(context.Background(), settingsSvc)
+
 	// Create provider registry. Provider configuration lives in the DB
 	// settings table (provider.{embedding,fact,entity}) and is managed via
 	// the admin UI. On a fresh install the slots are empty and the registry
@@ -1212,6 +1218,9 @@ func main() {
 			},
 			EntitySystemPromptDefault: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingEntitySystemPrompt, "global")
+			},
+			RelationshipSystemPromptDefault: func(ctx context.Context) string {
+				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingRelationshipSystemPrompt, "global")
 			},
 			QueryAugmentSystemPromptDef: func(ctx context.Context) string {
 				return service.ResolveOrDefault(ctx, settingsSvc, service.SettingQueryAugmentSystemPrompt, "global")

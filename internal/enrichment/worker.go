@@ -1194,11 +1194,12 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	var (
 		factEnv   *service.FactExtractionEnvelope
 		entEnv    *service.EntityExtractionEnvelope
+		relEnv    *service.RelationExtractionEnvelope
 		factErr   error
 		entityErr error
 	)
 
-	var factLatency, entityLatency time.Duration
+	var factLatency, entityLatency, relLatency time.Duration
 	if !skipFact {
 		t0 := time.Now()
 		factEnv, factErr = wp.extractFacts(ctx, wp.factProvider(), mem.Content)
@@ -1208,6 +1209,33 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		t0 := time.Now()
 		entEnv, entityErr = wp.extractEntities(ctx, wp.entityProvider(), mem.Content)
 		entityLatency = time.Since(t0)
+	}
+
+	// Relationship extraction (pass 2): a separate LLM call fed the deduped
+	// entity names from pass 1, asked for the edges among them. Run only when
+	// entity extraction produced entities; with none there are no possible
+	// relationships. Entities are deduped first so both the pass-2 prompt and the
+	// reported entity count see distinct names; relationships are deduped after.
+	if !skipEntity && entityErr == nil && entEnv != nil && entEnv.Result != nil {
+		dedupeEntityResult(entEnv.Result)
+		names := service.EntityNames(entEnv.Result.Entities)
+		if len(names) > 0 {
+			t0 := time.Now()
+			env, relErr := wp.extractRelationships(ctx, wp.entityProvider(), mem.Content, names)
+			relLatency = time.Since(t0)
+			if relErr != nil {
+				// Relationship-pass failure is soft: entities still persist and
+				// the job is not failed for it (mirrors the entity-only soft path).
+				slog.Warn("enrichment: relationship_extraction failed",
+					"job", job.ID, "memory", mem.ID, "err", relErr)
+			} else {
+				relEnv = env
+				if relEnv.Result != nil {
+					entEnv.Result.Relationships = relEnv.Result.Relationships
+				}
+			}
+		}
+		dedupeRelationResult(entEnv.Result)
 	}
 
 	var (
@@ -1255,13 +1283,24 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 			"job", job.ID,
 			"memory", mem.ID,
 			"entities", len(entResult.Entities),
-			"relationships", len(entResult.Relationships),
 			"model", entityModel,
 			"provider", entityProv,
 			"prompt_tokens", entityUsage.PromptTokens,
 			"completion_tokens", entityUsage.CompletionTokens,
 			"finish_reason", entEnv.FinishReason,
 			"llm_latency_ms", entityLatency.Milliseconds())
+	}
+	if relEnv != nil {
+		slog.Info("enrichment: relationship_extraction",
+			"job", job.ID,
+			"memory", mem.ID,
+			"relationships", len(entResult.Relationships),
+			"model", relEnv.Model,
+			"provider", relEnv.ProviderName,
+			"prompt_tokens", relEnv.Usage.PromptTokens,
+			"completion_tokens", relEnv.Usage.CompletionTokens,
+			"finish_reason", relEnv.FinishReason,
+			"llm_latency_ms", relLatency.Milliseconds())
 	}
 
 	if factErr != nil && entityErr != nil {
@@ -1464,7 +1503,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityUsage:            entityUsage,
 		entityModel:            entityModel,
 		entityProv:             entityProv,
-		partialRecoveryWarning: buildPartialRecoveryWarning(factEnv, entEnv),
+		partialRecoveryWarning: buildPartialRecoveryWarning(factEnv, entEnv, relEnv),
 	}
 	p.applyIngestion(ingestion)
 	return p, nil
@@ -1487,38 +1526,63 @@ type partialRecoveryLeg struct {
 }
 
 // buildPartialRecoveryWarning returns the last_error payload for
-// CompleteWithWarning when at least one leg recovered from a truncated or
-// looping response. Returns nil for clean-parse jobs so finalizeJob routes
-// through plain Complete.
-func buildPartialRecoveryWarning(factEnv *service.FactExtractionEnvelope, entEnv *service.EntityExtractionEnvelope) any {
+// CompleteWithWarning when at least one leg genuinely truncated. A leg is only
+// flagged when its envelope both ran prefix-recovery (PartialRecovery) AND the
+// final finish reason was a length/max_tokens cut (provider.IsTruncated): a
+// clean "stop" — including one where recovery ran on otherwise-complete output,
+// or a pass that a continuation completed to "stop" — is not flagged. Recovered
+// counts are the deduped, post-scrub counts since the envelopes' result arrays
+// are deduped in place before this runs. Returns nil for clean jobs so
+// finalizeJob routes through plain Complete.
+func buildPartialRecoveryWarning(
+	factEnv *service.FactExtractionEnvelope,
+	entEnv *service.EntityExtractionEnvelope,
+	relEnv *service.RelationExtractionEnvelope,
+) any {
 	var warnings []partialRecoveryLeg
-	if factEnv != nil && factEnv.PartialRecovery {
-		warnings = append(warnings, partialRecoveryLeg{
-			Phase:            service.ExtractionPhaseFact,
+	// add emits one leg when its pass genuinely truncated (recovery ran AND the
+	// final finish reason was a length/max_tokens cut). The gate and the common
+	// leg fields live here so each phase below is a single call plus its
+	// phase-specific recovered-count assignment.
+	add := func(phase string, recovered bool, finish string, usage provider.TokenUsage, model, prov string, setCount func(*partialRecoveryLeg)) {
+		if !recovered || !provider.IsTruncated(finish) {
+			return
+		}
+		leg := partialRecoveryLeg{
+			Phase:            phase,
 			Reason:           service.ExtractionReasonPartialRecovery,
-			FinishReason:     factEnv.FinishReason,
-			PromptTokens:     factEnv.Usage.PromptTokens,
-			CompletionTokens: factEnv.Usage.CompletionTokens,
-			Model:            factEnv.Model,
-			Provider:         factEnv.ProviderName,
-			FactsRecovered:   len(factEnv.Facts),
-		})
+			FinishReason:     finish,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			Model:            model,
+			Provider:         prov,
+		}
+		setCount(&leg)
+		warnings = append(warnings, leg)
 	}
-	if entEnv != nil && entEnv.PartialRecovery {
-		w := partialRecoveryLeg{
-			Phase:            service.ExtractionPhaseEntity,
-			Reason:           service.ExtractionReasonPartialRecovery,
-			FinishReason:     entEnv.FinishReason,
-			PromptTokens:     entEnv.Usage.PromptTokens,
-			CompletionTokens: entEnv.Usage.CompletionTokens,
-			Model:            entEnv.Model,
-			Provider:         entEnv.ProviderName,
-		}
-		if entEnv.Result != nil {
-			w.EntitiesRec = len(entEnv.Result.Entities)
-			w.RelationsRec = len(entEnv.Result.Relationships)
-		}
-		warnings = append(warnings, w)
+	if factEnv != nil {
+		add(service.ExtractionPhaseFact, factEnv.PartialRecovery, factEnv.FinishReason, factEnv.Usage, factEnv.Model, factEnv.ProviderName,
+			func(l *partialRecoveryLeg) { l.FactsRecovered = len(factEnv.Facts) })
+	}
+	if entEnv != nil {
+		// Entity-only pass: relationships are emitted by the relationship leg.
+		add(service.ExtractionPhaseEntity, entEnv.PartialRecovery, entEnv.FinishReason, entEnv.Usage, entEnv.Model, entEnv.ProviderName,
+			func(l *partialRecoveryLeg) {
+				if entEnv.Result != nil {
+					l.EntitiesRec = len(entEnv.Result.Entities)
+				}
+			})
+	}
+	if relEnv != nil {
+		// Report the deduped relationship count: entEnv.Result.Relationships holds
+		// the pass-2 relationships after the in-place dedup (relEnv's slice header
+		// still carries the pre-dedup length).
+		add(service.ExtractionPhaseRelationship, relEnv.PartialRecovery, relEnv.FinishReason, relEnv.Usage, relEnv.Model, relEnv.ProviderName,
+			func(l *partialRecoveryLeg) {
+				if entEnv != nil && entEnv.Result != nil {
+					l.RelationsRec = len(entEnv.Result.Relationships)
+				}
+			})
 	}
 	if len(warnings) == 0 {
 		return nil
@@ -2396,6 +2460,82 @@ func (wp *WorkerPool) extractEntities(
 ) (*service.EntityExtractionEnvelope, error) {
 	opts := service.ResolveCallOptions(ctx, wp.settings, service.EntityCallOptionKeys(false))
 	return service.ExtractEntitiesLLM(ctx, llm, wp.settings, content, opts)
+}
+
+// extractRelationships runs the relationship-extraction pass (pass 2): a second
+// LLM call fed the memory content plus the entity names from pass 1, asked for
+// the edges among them. Splitting it from entity extraction gives relationships
+// their own token budget so a dense entity flood that truncated pass 1 can no
+// longer starve relationships out.
+func (wp *WorkerPool) extractRelationships(
+	ctx context.Context,
+	llm provider.LLMProvider,
+	content string,
+	entityNames []string,
+) (*service.RelationExtractionEnvelope, error) {
+	opts := service.ResolveCallOptions(ctx, wp.settings, service.RelationshipCallOptionKeys(false))
+	return service.ExtractRelationshipsLLM(ctx, llm, wp.settings, content, entityNames, opts)
+}
+
+// entityDisplayNames returns the entity names to feed the relationship pass, in
+// extraction order. Call after dedupeEntityResult so each name appears once.
+// dedupeByKey collapses items by the key keyFn returns, in place, first
+// occurrence winning; keyFn returns ok=false to drop an item entirely (empty or
+// degenerate key). The backing array is reused (items[:0]).
+func dedupeByKey[T any](items []T, keyFn func(T) (string, bool)) []T {
+	if len(items) == 0 {
+		return items
+	}
+	seen := make(map[string]bool, len(items))
+	kept := items[:0]
+	for _, it := range items {
+		key, ok := keyFn(it)
+		if !ok || seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, it)
+	}
+	return kept
+}
+
+// dedupeEntityResult collapses entities by their canonical (name, type) key in
+// place, first occurrence winning. The graph's UNIQUE(namespace, canonical,
+// type) constraint collapses these on insert regardless; deduping here makes the
+// reported entity count honest and avoids redundant upsert candidates. Applied
+// before both the partial-recovery warning and the upsert so both see the same
+// deduped set.
+func dedupeEntityResult(res *entityExtractionResult) {
+	if res == nil {
+		return
+	}
+	res.Entities = dedupeByKey(res.Entities, func(e service.ExtractedEntityData) (string, bool) {
+		name := canonicalize(e.Name)
+		if name == "" {
+			return "", false
+		}
+		return name + "\x00" + canonicalize(e.Type), true
+	})
+}
+
+// dedupeRelationResult collapses relationships by their canonical (source,
+// relation, target) triple in place and drops self-relationships (source and
+// target canonicalize to the same entity, which carry no graph signal). Like the
+// entity dedup this makes the reported relationship count honest and avoids
+// redundant edge upserts; the DB also collapses same-triple/same-valid_from
+// edges via ON CONFLICT.
+func dedupeRelationResult(res *entityExtractionResult) {
+	if res == nil {
+		return
+	}
+	res.Relationships = dedupeByKey(res.Relationships, func(r service.ExtractedRelation) (string, bool) {
+		s := canonicalize(r.Source)
+		t := canonicalize(r.Target)
+		if s == "" || t == "" || s == t {
+			return "", false
+		}
+		return s + "\x00" + model.CanonicalRelation(r.Relation) + "\x00" + t, true
+	})
 }
 
 func mergeTags(parent, child []string) []string {

@@ -389,6 +389,16 @@ const (
 	SettingEntityExtractionSyncTemperature  = "enrichment.entity_extraction.sync.temperature"
 	SettingEntityExtractionAsyncTemperature = "enrichment.entity_extraction.async.temperature"
 
+	// Relationship extraction (pass 2). Entity extraction (pass 1) and
+	// relationship extraction run as two separate LLM calls; the relationship
+	// pass is fed the source text plus the deduped entity names and gets its own
+	// token budget so a dense entity flood that truncates pass 1 can no longer
+	// starve relationships out. Temperatures follow the same sync/async split as
+	// the other phases.
+	SettingRelationshipExtractionMaxTokens        = "enrichment.relationship_extraction.max_tokens"
+	SettingRelationshipExtractionSyncTemperature  = "enrichment.relationship_extraction.sync.temperature"
+	SettingRelationshipExtractionAsyncTemperature = "enrichment.relationship_extraction.async.temperature"
+
 	// Write-path entity resolution: embed the candidate name and cosine-match
 	// against existing entity vectors before creating a new entity, so a
 	// near-duplicate is merged at creation instead of only in dreaming. Disabled
@@ -691,6 +701,7 @@ const (
 const (
 	SettingFactSystemPrompt               = "enrichment.fact_system_prompt"
 	SettingEntitySystemPrompt             = "enrichment.entity_system_prompt"
+	SettingRelationshipSystemPrompt       = "enrichment.relationship_system_prompt"
 	SettingIngestionDecisionSystemPrompt  = "enrichment.ingestion_decision.system_prompt"
 	SettingQueryAugmentSystemPrompt       = "enrichment.query_augment.system_prompt"
 	SettingDreamContradictionSystemPrompt = "dreaming.contradiction_system_prompt"
@@ -800,21 +811,39 @@ Hard rules:
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
-	// entitySystemPromptText enumerates the closed entity-type and relation
-	// vocabularies as a soft constraint; CanonicalEntityType / CanonicalRelationVocab
-	// enforce them deterministically on the write path. The lists here are kept
-	// in step with model.CanonicalEntityTypes / model.CanonicalRelations by
-	// TestEntitySystemPromptListsClosedVocab (drift guard).
-	entitySystemPromptText = `You are an entity and relationship extraction engine. Given a text, extract the named entities and the relationships between them as JSON.
+	// entitySystemPromptText enumerates the closed entity-type vocabulary as a
+	// soft constraint; CanonicalEntityType enforces it deterministically on the
+	// write path. The list here is kept in step with model.CanonicalEntityTypes
+	// by TestEntitySystemPromptListsClosedVocab (drift guard). Relationships are
+	// extracted by a separate pass (relationshipSystemPromptText); this prompt is
+	// entity-only so a dense entity flood cannot truncate relationships off the
+	// end of a combined response.
+	entitySystemPromptText = `You are an entity extraction engine. Given a text, extract the named entities as JSON.
 
-Return a JSON object with two fields:
+Return a JSON object with one field:
 - "entities": array of objects with fields:
   - "name": the entity's proper name, as short as possible (string)
   - "type": one of EXACTLY these types (string): person, organization, location, product, event, role, date, concept, technology, software, code_symbol, file, data_store, system, configuration, command, vcs_ref, credential, identifier, metric, document, research_artifact, medication, medical_condition, biomarker. If none fit, use "other". Never invent a type outside this list.
   - "properties": optional key-value pairs (object)
+
+Hard rules:
+- An entity is a NAMED thing (a person, place, system, file, drug, etc.), not a statement. Do NOT extract whole sentences, claims, opinions, questions, or whole code/SQL/shell snippets or statements as entities; a single named code symbol (e.g. a function or type name, type code_symbol) or a file name/path (type file) is allowed. A name longer than a short phrase is almost always wrong.
+- Do NOT repeat an entity you have already emitted, and do NOT loop. Each entity must be distinct.
+
+Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
+
+	// relationshipSystemPromptText is the pass-2 (relationship-only) prompt. It is
+	// fed the source text plus the list of entities already extracted in pass 1
+	// and asked for the edges among them only. The closed relation vocabulary is a
+	// soft constraint; CanonicalRelationVocab enforces it on the write path. The
+	// list here is kept in step with model.CanonicalRelations by
+	// TestRelationshipSystemPromptListsClosedVocab (drift guard).
+	relationshipSystemPromptText = `You are a relationship extraction engine. You are given a text and a list of ENTITIES already extracted from that text. Identify the relationships BETWEEN those entities, grounded in the text.
+
+Return a JSON object with one field:
 - "relationships": array of objects with fields:
-  - "source": source entity name (string)
-  - "target": target entity name (string)
+  - "source": source entity name (string; must be one of the provided entity names, exactly)
+  - "target": target entity name (string; must be one of the provided entity names, exactly)
   - "relation": one of EXACTLY these relations (string). Map your verb to the closest one; do NOT invent verbs. Guide:
     - member of: employment/study/affiliation (worked at, studied at, joined, member of)
     - produces: creation/authorship (authored, founded, built, developed, created, wrote)
@@ -830,8 +859,10 @@ Return a JSON object with two fields:
   - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
 
 Hard rules:
-- An entity is a NAMED thing (a person, place, system, file, drug, etc.), not a statement. Do NOT extract whole sentences, claims, opinions, questions, or whole code/SQL/shell snippets or statements as entities; a single named code symbol (e.g. a function or type name, type code_symbol) or a file name/path (type file) is allowed. A name longer than a short phrase is almost always wrong.
-- Do NOT repeat an entity or relationship you have already emitted, and do NOT loop. Each entity and relationship must be distinct.
+- Use ONLY the provided entity names for "source" and "target". Do NOT introduce new entities.
+- Only assert a relationship that the text supports. Do NOT invent relationships.
+- Do NOT emit a self-relationship where source and target are the same entity.
+- Do NOT repeat a relationship you have already emitted, and do NOT loop. Each relationship must be distinct.
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction
 
@@ -1047,8 +1078,9 @@ var settingDefaults = map[string]string{
 
 	SettingMemorySoftDeleteRetentionDays: "30",
 
-	SettingFactSystemPrompt:   factSystemPromptText,
-	SettingEntitySystemPrompt: entitySystemPromptText,
+	SettingFactSystemPrompt:         factSystemPromptText,
+	SettingEntitySystemPrompt:       entitySystemPromptText,
+	SettingRelationshipSystemPrompt: relationshipSystemPromptText,
 
 	SettingAskEnabled:                    "false",
 	SettingAskSynthesisSystemPrompt:      askSynthesisSystemPromptText,
@@ -1151,6 +1183,10 @@ var settingDefaults = map[string]string{
 	SettingFactExtractionAsyncTemperature:   "0.2",
 	SettingEntityExtractionSyncTemperature:  "0.1",
 	SettingEntityExtractionAsyncTemperature: "0.2",
+
+	SettingRelationshipExtractionMaxTokens:        "4096",
+	SettingRelationshipExtractionSyncTemperature:  "0.1",
+	SettingRelationshipExtractionAsyncTemperature: "0.2",
 
 	SettingEntityResolutionCosineEnabled:   "true",
 	SettingEntityResolutionCosineThreshold: "0.92",

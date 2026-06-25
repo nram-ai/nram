@@ -63,6 +63,30 @@ type EntityExtractionResult struct {
 	Relationships []ExtractedRelation   `json:"relationships"`
 }
 
+// EntityNames returns the trimmed, non-empty entity names in extraction order.
+// It is the bridge from the entity pass to the relationship pass (whose prompt is
+// fed these names) and is shared by the async worker, the sync extract path, and
+// the admin test surface so all three build the name list identically.
+func EntityNames(entities []ExtractedEntityData) []string {
+	out := make([]string, 0, len(entities))
+	for _, e := range entities {
+		if n := strings.TrimSpace(e.Name); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// RelationExtractionResult holds the relationship-only extraction output. The
+// relationship pass (pass 2) runs as a separate LLM call from entity extraction
+// (pass 1): it is fed the source text plus the deduped entity names and asked
+// for the edges among them only. Splitting the passes gives relationships their
+// own token budget so a dense entity flood that truncates pass 1 can no longer
+// starve relationships out of the combined response.
+type RelationExtractionResult struct {
+	Relationships []ExtractedRelation `json:"relationships"`
+}
+
 // ExtractResponse contains the result of a synchronous extraction operation.
 type ExtractResponse struct {
 	Memories             []ExtractedMemory `json:"memories"`
@@ -382,8 +406,25 @@ func (s *ExtractionService) extractEntities(
 		entitiesCreated++
 	}
 
-	relCandidates := make([]*model.Relationship, 0, len(result.Relationships))
-	for _, rel := range result.Relationships {
+	// Relationship extraction (pass 2): a separate LLM call fed the extracted
+	// entity names. Entity extraction (pass 1) is entity-only, so relationships
+	// come from this pass. With no entities there are no possible relationships.
+	var relations []ExtractedRelation
+	if len(result.Entities) > 0 {
+		names := EntityNames(result.Entities)
+		relOpts := ResolveCallOptions(ctx, s.settings, RelationshipCallOptionKeys(true))
+		relEnv, relErr := ExtractRelationshipsLLM(ctx, ep, s.settings, content, names, relOpts)
+		if relEnv != nil {
+			tokens.Input += relEnv.Usage.PromptTokens
+			tokens.Output += relEnv.Usage.CompletionTokens
+		}
+		if relErr == nil && relEnv != nil && relEnv.Result != nil {
+			relations = relEnv.Result.Relationships
+		}
+	}
+
+	relCandidates := make([]*model.Relationship, 0, len(relations))
+	for _, rel := range relations {
 		srcCanonical := strings.ToLower(strings.TrimSpace(rel.Source))
 		tgtCanonical := strings.ToLower(strings.TrimSpace(rel.Target))
 

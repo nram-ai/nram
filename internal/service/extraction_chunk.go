@@ -314,7 +314,7 @@ func continueEntitiesOnce(
 	}
 	user := RenderExtractionUser(content) +
 		"\n\nYou already extracted these entities:\n" + sb.String() +
-		"\nReturn ONLY additional entities not already listed (and any relationships among the full set), in the same JSON object format. If there are none, return {\"entities\":[],\"relationships\":[]}."
+		"\nReturn ONLY additional entities not already listed, in the same JSON object format. If there are none, return {\"entities\":[]}."
 	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
 	req := buildExtractionRequest(messages, opts)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), req)

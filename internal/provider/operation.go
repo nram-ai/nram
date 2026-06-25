@@ -72,6 +72,7 @@ func EnrichmentPhaseOperations() []Operation {
 		OperationFactExtraction,
 		OperationFactGuardEmbedding,
 		OperationEntityExtraction,
+		OperationRelationshipExtraction,
 		OperationQueryAugment,
 		OperationEmbedding,
 		OperationFacetEmbedding,

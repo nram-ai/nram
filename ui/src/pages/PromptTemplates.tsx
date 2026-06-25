@@ -19,6 +19,7 @@ import { faCheck, faXmark, faSpinner } from "../lib/icons";
 // code template into the user message and is not editable here.
 const FACT_SYSTEM_PROMPT_KEY = "enrichment.fact_system_prompt";
 const ENTITY_SYSTEM_PROMPT_KEY = "enrichment.entity_system_prompt";
+const RELATIONSHIP_SYSTEM_PROMPT_KEY = "enrichment.relationship_system_prompt";
 const AUGMENT_SYSTEM_PROMPT_KEY = "enrichment.query_augment.system_prompt";
 const INGESTION_SYSTEM_PROMPT_KEY = "enrichment.ingestion_decision.system_prompt";
 
@@ -551,11 +552,14 @@ export default function PromptTemplates() {
 
   const [factSampleInput, setFactSampleInput] = useState("");
   const [entitySampleInput, setEntitySampleInput] = useState("");
+  const [relationshipSampleInput, setRelationshipSampleInput] = useState("");
   const [augmentSampleInput, setAugmentSampleInput] = useState("");
   const [ingestionSampleInput, setIngestionSampleInput] = useState("");
   const [factTestResult, setFactTestResult] =
     useState<ExtractionTestResult | null>(null);
   const [entityTestResult, setEntityTestResult] =
+    useState<ExtractionTestResult | null>(null);
+  const [relationshipTestResult, setRelationshipTestResult] =
     useState<ExtractionTestResult | null>(null);
   const [augmentTestResult, setAugmentTestResult] =
     useState<ExtractionTestResult | null>(null);
@@ -563,6 +567,7 @@ export default function PromptTemplates() {
     useState<ExtractionTestResult | null>(null);
   const [testingFact, setTestingFact] = useState(false);
   const [testingEntity, setTestingEntity] = useState(false);
+  const [testingRelationship, setTestingRelationship] = useState(false);
   const [testingAugment, setTestingAugment] = useState(false);
   const [testingIngestion, setTestingIngestion] = useState(false);
 
@@ -571,6 +576,7 @@ export default function PromptTemplates() {
   // template server-side, so the test exercises exactly what the runtime sends.
   const factSystemPromptRef = useRef("");
   const entitySystemPromptRef = useRef("");
+  const relationshipSystemPromptRef = useRef("");
   const augmentSystemPromptRef = useRef("");
   const ingestionSystemPromptRef = useRef("");
 
@@ -610,6 +616,7 @@ export default function PromptTemplates() {
   // would itself be a registration bug surfaced at server boot.
   const factSystemPromptData = resolvePromptData([FACT_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
   const entitySystemPromptData = resolvePromptData([ENTITY_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
+  const relationshipSystemPromptData = resolvePromptData([RELATIONSHIP_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
   const augmentSystemPromptData = resolvePromptData([AUGMENT_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
   const ingestionSystemPromptData = resolvePromptData([INGESTION_SYSTEM_PROMPT_KEY], schemas, settingsMap, "");
 
@@ -626,6 +633,7 @@ export default function PromptTemplates() {
   // Keep refs updated for test calls.
   factSystemPromptRef.current = factSystemPromptData.currentValue;
   entitySystemPromptRef.current = entitySystemPromptData.currentValue;
+  relationshipSystemPromptRef.current = relationshipSystemPromptData.currentValue;
   augmentSystemPromptRef.current = augmentSystemPromptData.currentValue;
   ingestionSystemPromptRef.current = ingestionSystemPromptData.currentValue;
 
@@ -744,6 +752,34 @@ export default function PromptTemplates() {
     );
   }, [entitySampleInput, testMutation]);
 
+  const handleTestRelationship = useCallback(() => {
+    if (!relationshipSampleInput.trim()) return;
+    setTestingRelationship(true);
+    setRelationshipTestResult(null);
+    testMutation.mutate(
+      {
+        type: "relationship",
+        systemPrompt: relationshipSystemPromptRef.current,
+        sampleInput: relationshipSampleInput,
+      },
+      {
+        onSuccess: (data) => {
+          setRelationshipTestResult(data);
+          setTestingRelationship(false);
+        },
+        onError: (err) => {
+          setRelationshipTestResult({
+            output: "",
+            parsed: null,
+            error: err.message,
+            latency_ms: 0,
+          });
+          setTestingRelationship(false);
+        },
+      },
+    );
+  }, [relationshipSampleInput, testMutation]);
+
   return (
     <div>
       {/* Page header */}
@@ -804,6 +840,20 @@ export default function PromptTemplates() {
             testResult={entityTestResult}
             sampleInput={entitySampleInput}
             onSampleInputChange={setEntitySampleInput}
+          />
+
+          {/* Relationship Extraction */}
+          <PromptEditorCard
+            title="Relationship Extraction"
+            description={relationshipSystemPromptData.description}
+            promptData={relationshipSystemPromptData}
+            onSave={handleSave}
+            saving={updateMutation.isPending}
+            onTest={handleTestRelationship}
+            testing={testingRelationship}
+            testResult={relationshipTestResult}
+            sampleInput={relationshipSampleInput}
+            onSampleInputChange={setRelationshipSampleInput}
           />
 
           {/* Query Augmentation */}
