@@ -388,9 +388,21 @@ func main() {
 				TTL:        time.Duration(settingsSvc.ResolveIntWithDefault(ctx, service.SettingEmbeddingCacheTTLSeconds, "global")) * time.Second,
 			}
 		})
+		// Install the shared host-keyed concurrency gate. The limits are read
+		// live from settings before every gated call (served from the settings
+		// cache), so an admin raising or lowering them takes effect within the
+		// cache TTL with no restart. Bounds aggregate in-flight requests per
+		// upstream host across every worker slot and subsystem, so a saturated
+		// worker pool cannot overwhelm a single shared model/embed host.
+		registry.WithHostConcurrency(func(ctx context.Context) provider.HostConcurrency {
+			return provider.HostConcurrency{
+				LLM:   settingsSvc.ResolveIntWithDefault(ctx, service.SettingProviderLLMHostConcurrency, "global"),
+				Embed: settingsSvc.ResolveIntWithDefault(ctx, service.SettingProviderEmbedHostConcurrency, "global"),
+			}
+		})
 		// Reload so the embedding provider already wrapped by NewRegistry
-		// picks up the freshly-installed embed wrapper and cache. On configs
-		// with no embedding slot this is a no-op.
+		// picks up the freshly-installed embed wrapper, cache, and host gate.
+		// On configs with no embedding slot this is a no-op.
 		if rerr := registry.Reload(regCfg); rerr != nil {
 			slog.Warn("boot: registry reload to install metrics hooks failed", "err", rerr)
 		}

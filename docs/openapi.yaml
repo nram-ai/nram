@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.11.6
+  version: 0.11.7
   license:
     name: MIT
 
@@ -6255,9 +6255,11 @@ components:
         - "memory.default_importance"
         - "memory.soft_delete_retention_days"
         - "provider.anthropic.json_tool_use.enabled"
+        - "provider.embed.host_concurrency"
         - "provider.embedding_cache.enabled"
         - "provider.embedding_cache.max_entries"
         - "provider.embedding_cache.ttl_seconds"
+        - "provider.llm.host_concurrency"
         - "provider.prompt_cache.enabled"
         - "qdrant.addr"
         - "qdrant.api_key"

@@ -736,6 +736,19 @@ const (
 	// Off by default — the native api.anthropic.com path does not need it; enable
 	// only for Anthropic-compatible proxies that drop response formatting.
 	SettingProviderAnthropicJSONToolUse = "provider.anthropic.json_tool_use.enabled"
+
+	// SettingProviderLLMHostConcurrency bounds how many LLM completion requests
+	// may be in flight against a single upstream host at once, aggregated across
+	// every worker slot and subsystem (enrichment, dreaming, ask) that targets
+	// that host. Default 1 so a fresh install cannot stampede a single-GPU local
+	// model; raise it per the host's capacity. A value <= 0 disables the gate.
+	SettingProviderLLMHostConcurrency = "provider.llm.host_concurrency"
+
+	// SettingProviderEmbedHostConcurrency is the embedding counterpart: max
+	// in-flight embedding requests per host, aggregated across every slot and
+	// subsystem. Default 1 for the same reason; raise per the embedder's
+	// capacity. A value <= 0 disables the gate.
+	SettingProviderEmbedHostConcurrency = "provider.embed.host_concurrency"
 )
 
 // Default system-prompt text for each phase: the full static instruction (role,
@@ -1079,6 +1092,9 @@ var settingDefaults = map[string]string{
 	SettingProviderPromptCacheEnabled: "true",
 
 	SettingProviderAnthropicJSONToolUse: "false",
+
+	SettingProviderLLMHostConcurrency:   "1",
+	SettingProviderEmbedHostConcurrency: "1",
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the

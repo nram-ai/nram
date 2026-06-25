@@ -60,6 +60,16 @@ var providerLoadKnobs = []providerLoadKnob{
 		SafeDefault: 1,
 		Why:         "fans out each dream phase's per-item LLM/embedding calls; a cycle runs alone, so this is its whole provider concurrency. Raise only with a multi-GPU or hosted provider",
 	},
+	{
+		Key:         SettingProviderLLMHostConcurrency,
+		SafeDefault: 1,
+		Why:         "max LLM completion requests in flight to one host across all slots and subsystems; this is the aggregate cap, so raise only when the model host can sustain that many parallel generations",
+	},
+	{
+		Key:         SettingProviderEmbedHostConcurrency,
+		SafeDefault: 1,
+		Why:         "max embedding requests in flight to one host across all slots and subsystems; raise only when the embedder can sustain that many parallel calls",
+	},
 }
 
 // CheckProviderLoadDefaults inspects every knob in providerLoadKnobs against

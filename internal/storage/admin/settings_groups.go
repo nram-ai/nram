@@ -216,8 +216,13 @@ var settingsGroups = []api.SettingGroup{
 	{
 		ID:          "providers",
 		Label:       "Providers",
-		Description: "Runtime controls for how prompts are delivered to LLM providers. Provider endpoints and credentials are configured on the Providers page; these are global delivery toggles.",
+		Description: "Runtime controls for how requests are delivered to LLM and embedding providers. Provider endpoints and credentials are configured on the Providers page; these are global delivery and load controls.",
 		SubSections: []api.SettingSubSection{
+			{
+				Category:    "provider_concurrency",
+				Label:       "Concurrency Limits",
+				Description: "Maximum requests in flight to a single provider host at once, capped per host and shared across every enrichment worker, dreaming, and ask. This is an aggregate ceiling, not a per-slot one: many workers pointed at the same model or embedding host cannot exceed it together. Defaults are 1 to protect a single-GPU local host; raise each to match your hardware. Hot-reloads within the settings-cache TTL, no restart.",
+			},
 			{
 				Category:    "provider_prompt_delivery",
 				Label:       "Prompt Delivery",

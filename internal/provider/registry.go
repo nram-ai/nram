@@ -172,6 +172,19 @@ type Registry struct {
 	llm    map[string]LLMProvider
 	config RegistryConfig
 
+	// Host-keyed concurrency gates shared across all slots and subsystems that
+	// target the same host, so an upstream host sees an aggregate in-flight cap
+	// rather than a per-slot one. Keyed by hostKey(slot); separate maps give LLM
+	// and embedding traffic independent limits even when they share a host.
+	// Rebuilt on every Reload, reusing the existing gate for a host (keeping its
+	// in-flight count) and only resizing when the limit changed.
+	llmGates   map[string]*hostGate
+	embedGates map[string]*hostGate
+	// hostConcurrencyCfg resolves the live per-host limits at build time.
+	// Injected (not read directly) so the provider package stays free of a
+	// dependency on the settings service. nil → gating disabled (unlimited).
+	hostConcurrencyCfg atomic.Pointer[func(context.Context) HostConcurrency]
+
 	// Wrapping infrastructure. Both may be nil; when nil, providers are
 	// returned without the usage-recording middleware (e.g., in tests that
 	// don't care about token_usage rows). Captured at construction time and
@@ -329,6 +342,8 @@ func (r *Registry) Reload(config RegistryConfig) error {
 
 	r.embedding = built.embedding
 	r.llm = built.llm
+	r.llmGates = built.llmGates
+	r.embedGates = built.embedGates
 	r.config = config
 	r.embDim = 0
 	r.probeGroup = &singleflight.Group{}
@@ -454,6 +469,8 @@ func (r *Registry) load(config RegistryConfig) error {
 	}
 	r.embedding = built.embedding
 	r.llm = built.llm
+	r.llmGates = built.llmGates
+	r.embedGates = built.embedGates
 	r.config = config
 	return nil
 }
@@ -464,6 +481,10 @@ func (r *Registry) load(config RegistryConfig) error {
 type builtProviders struct {
 	embedding EmbeddingProvider
 	llm       map[string]LLMProvider // LLM-kind slots keyed by slot name
+	// Host-keyed gates built for this config, installed on r alongside the
+	// providers. nil maps when host gating is disabled.
+	llmGates   map[string]*hostGate
+	embedGates map[string]*hostGate
 }
 
 // buildProviders constructs each configured slot by iterating the canonical
@@ -485,18 +506,65 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 		return c
 	}
 
-	built := builtProviders{llm: make(map[string]LLMProvider)}
+	// Host gating is active whenever a concurrency resolver is installed (the
+	// server always installs one; tests that don't get the pre-gate behavior).
+	// The per-role limit is read live on every call via these closures, so a
+	// settings change takes effect within the settings-cache TTL without a
+	// restart or a registry reload.
+	gatingOn := r.hostConcurrencyCfg.Load() != nil
+	// roleLimit builds a live resolver for one role's per-host limit, reading the
+	// injected config atomically on each call (0 when no resolver is installed).
+	roleLimit := func(pick func(HostConcurrency) int) func(context.Context) int {
+		return func(ctx context.Context) int {
+			if ptr := r.hostConcurrencyCfg.Load(); ptr != nil {
+				return pick((*ptr)(ctx))
+			}
+			return 0
+		}
+	}
+	llmLimit := roleLimit(func(h HostConcurrency) int { return h.LLM })
+	embedLimit := roleLimit(func(h HostConcurrency) int { return h.Embed })
+	llmGates := make(map[string]*hostGate)
+	embedGates := make(map[string]*hostGate)
+	// gateFor returns the gate for host in target, reusing one already built
+	// this pass, then the existing gate carried over from the prior config
+	// (resized to the new limit so its in-flight count is preserved), else a
+	// fresh gate. existing is r's current map for the role, read under the
+	// caller's lock.
+	gateFor := func(target, existing map[string]*hostGate, host string, lim int) *hostGate {
+		if g := target[host]; g != nil {
+			return g
+		}
+		if g := existing[host]; g != nil {
+			g.setLimit(lim)
+			target[host] = g
+			return g
+		}
+		g := newHostGate(lim)
+		target[host] = g
+		return g
+	}
+
+	built := builtProviders{llm: make(map[string]LLMProvider), llmGates: llmGates, embedGates: embedGates}
 	for _, def := range Slots {
 		slot := config.slotConfig(def.Name)
 		if slot.Type == "" {
 			continue // unconfigured
 		}
+		host := hostKey(slot)
 		if def.Kind == KindEmbedding {
 			ep, err := createEmbeddingProvider(slot)
 			if err != nil {
 				return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
 			}
 			embedder := r.wrapEmbedding(NewCircuitBreakerEmbedding(ep, breakerCfgFor(slot.Type, "embed")))
+			// Host gate sits inside the cache but outside the usage recorder, so
+			// a cache hit consumes no permit while a real upstream Embed is
+			// bracketed by one. The gate's limit is re-resolved live per call.
+			if gatingOn {
+				gate := gateFor(embedGates, r.embedGates, host, normHostLimit(embedLimit(context.Background())))
+				embedder = newGatedEmbedding(embedder, gate, embedLimit)
+			}
 			// The cache sits outermost (outside the usage recorder) so a full
 			// hit records no token_usage row. Keyed on slot.Model so a model
 			// change across Reload cannot return a stale vector.
@@ -510,7 +578,14 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 		if err != nil {
 			return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
 		}
-		built.llm[def.Name] = r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(slot.Type, def.Name)))
+		llmProv := r.wrapLLM(NewCircuitBreakerLLM(lp, breakerCfgFor(slot.Type, def.Name)))
+		// Host gate is the outermost wrapper so the permit brackets only the
+		// real upstream call and its breaker/recorder chain. Limit is live.
+		if gatingOn {
+			gate := gateFor(llmGates, r.llmGates, host, normHostLimit(llmLimit(context.Background())))
+			llmProv = newGatedLLM(llmProv, gate, llmLimit)
+		}
+		built.llm[def.Name] = llmProv
 	}
 	return built, nil
 }
@@ -620,6 +695,20 @@ func (r *Registry) WithEmbeddingWrapper(w EmbeddingProviderWrapper) *Registry {
 		r.embedWrapper.Store(nil)
 	} else {
 		r.embedWrapper.Store(&w)
+	}
+	return r
+}
+
+// WithHostConcurrency installs the callback that resolves the live per-host
+// in-flight limits for LLM and embedding traffic. Read once per buildProviders
+// (construction and every Reload), so changing the underlying settings takes
+// effect on the next registry reload, which the settings save path already
+// triggers. Passing nil disables gating. Returns the receiver for chaining.
+func (r *Registry) WithHostConcurrency(fn func(context.Context) HostConcurrency) *Registry {
+	if fn == nil {
+		r.hostConcurrencyCfg.Store(nil)
+	} else {
+		r.hostConcurrencyCfg.Store(&fn)
 	}
 	return r
 }
