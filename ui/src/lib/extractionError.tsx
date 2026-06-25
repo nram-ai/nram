@@ -23,8 +23,8 @@ export interface PartialRecoveryLeg {
   model?: string;
   provider?: string;
   facts_recovered?: number;
-  entities_rec?: number;
-  relations_rec?: number;
+  entities_recovered?: number;
+  relationships_recovered?: number;
 }
 
 export interface PartialRecoveryWarning {
@@ -58,6 +58,17 @@ function parse(raw: string): Parsed {
   return { kind: "raw", value: raw };
 }
 
+// isPartialRecoveryError reports whether a serialized last_error is a
+// partial-recovery warning payload (parse() classifies it as the "warnings"
+// kind). Used to gate the queue's per-row re-extract selection structurally,
+// instead of a brittle substring match on the JSON.
+export function isPartialRecoveryError(
+  value: string | null | undefined,
+): boolean {
+  if (!value) return false;
+  return parse(value).kind === "warnings";
+}
+
 function phaseLabel(phase: string): string {
   switch (phase) {
     case "fact_extraction":
@@ -76,8 +87,10 @@ function reasonLabel(reason: string): string {
 function legSummary(leg: PartialRecoveryLeg): string {
   const parts: string[] = [phaseLabel(leg.phase)];
   if (leg.facts_recovered != null) parts.push(`${leg.facts_recovered} facts`);
-  if (leg.entities_rec != null) parts.push(`${leg.entities_rec} entities`);
-  if (leg.relations_rec != null) parts.push(`${leg.relations_rec} relations`);
+  if (leg.entities_recovered != null)
+    parts.push(`${leg.entities_recovered} entities`);
+  if (leg.relationships_recovered != null)
+    parts.push(`${leg.relationships_recovered} relations`);
   return parts.length > 1
     ? `${parts[0]} (${parts.slice(1).join(", ")})`
     : parts[0];
@@ -147,11 +160,11 @@ function WarningsDiagnostics({ value }: { value: PartialRecoveryWarning }) {
                   leg.facts_recovered != null
                     ? `${leg.facts_recovered} facts`
                     : null,
-                  leg.entities_rec != null
-                    ? `${leg.entities_rec} entities`
+                  leg.entities_recovered != null
+                    ? `${leg.entities_recovered} entities`
                     : null,
-                  leg.relations_rec != null
-                    ? `${leg.relations_rec} relations`
+                  leg.relationships_recovered != null
+                    ? `${leg.relationships_recovered} relations`
                     : null,
                 ]
                   .filter(Boolean)
@@ -280,4 +293,4 @@ export function ExtractionErrorView({
   );
 }
 
-export const __test = { parse };
+export const __test = { parse, legSummary };

@@ -2223,6 +2223,14 @@ export const adminAPI = {
     limit?: number;
   }) => request<ReExtractResponse>("POST", "/admin/enrichment/re-extract", req),
 
+  // Per-memory re-extract: re-extract an explicit set of memories (the queue
+  // per-row action), unscoped (admin/global). memoryIds are memory IDs, not
+  // queue job IDs.
+  reExtractMemories: (memoryIds: string[]) =>
+    request<ReExtractResponse>("POST", "/admin/enrichment/re-extract-memories", {
+      memory_ids: memoryIds,
+    }),
+
   // Per-memory preview of the augmentation phase. Project-scoped, does not
   // persist; used by the MemoryDetailPanel Preview button.
   previewMemoryAugmentation: (projectId: string, memoryId: string) =>
@@ -2689,6 +2697,13 @@ export const meAPI = {
     ),
   retryEnrichment: (ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", "/me/enrichment/retry", { ids: ids ?? [] }),
+
+  // Per-memory re-extract of the caller's own memories, scoped server-side to
+  // the caller's namespace. memoryIds are memory IDs, not queue job IDs.
+  reExtractMemories: (memoryIds: string[]) =>
+    request<ReExtractResponse>("POST", "/me/enrichment/re-extract", {
+      memory_ids: memoryIds,
+    }),
   abandonDreamCycle: (cycleId: string) =>
     request<DreamAbandonResponse>("POST", `/me/dreaming/cycles/${cycleId}/abandon`),
   rollbackDreamCycle: (cycleId: string) =>
@@ -2795,6 +2810,13 @@ export const orgAPI = {
     ),
   retryEnrichment: (orgId: string, ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", `/orgs/${orgId}/enrichment/retry`, { ids: ids ?? [] }),
+
+  // Per-memory re-extract within the org, scoped server-side to the org's
+  // namespace subtree. memoryIds are memory IDs, not queue job IDs.
+  reExtractMemories: (orgId: string, memoryIds: string[]) =>
+    request<ReExtractResponse>("POST", `/orgs/${orgId}/enrichment/re-extract`, {
+      memory_ids: memoryIds,
+    }),
 
   listOrgIdPs: (orgId: string) =>
     request<IdPConfig[]>("GET", `/orgs/${orgId}/idp`),

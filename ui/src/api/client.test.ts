@@ -1609,6 +1609,17 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("adminAPI.reExtractMemories posts memory ids", async () => {
+      try {
+        const res = await adminAPI.reExtractMemories([
+          "00000000-0000-0000-0000-000000000001",
+        ]);
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("backfillMissingEmbeddings() dry run returns candidate counts or errors", async () => {
       try {
         const res = await adminAPI.backfillMissingEmbeddings({
@@ -2376,10 +2387,31 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("meAPI.reExtractMemories posts memory ids", async () => {
+      try {
+        const r = await meAPI.reExtractMemories([
+          "00000000-0000-0000-0000-000000000001",
+        ]);
+        expect(r).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("orgAPI.getUsage with success_only=true and retryEnrichment without ids", async () => {
       expect(await orgAPI.getUsage(orgId, { success_only: true })).toBeDefined();
       try {
         await orgAPI.retryEnrichment(orgId);
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("orgAPI.reExtractMemories posts memory ids", async () => {
+      try {
+        await orgAPI.reExtractMemories(orgId, [
+          "00000000-0000-0000-0000-000000000001",
+        ]);
       } catch (e) {
         expect(e).toBeInstanceOf(APIError);
       }

@@ -14,11 +14,17 @@ import (
 type OrgEnrichmentStore interface {
 	OrgQueueStatus(ctx context.Context, orgID uuid.UUID, params QueueListParams) (*EnrichmentQueueStatus, error)
 	OrgRetryFailed(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, error)
+	// OrgNamespacePath returns the org's root namespace path, used as the
+	// path-prefix scope for the per-memory re-extract.
+	OrgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error)
 }
 
 // OrgEnrichmentConfig wires NewOrgEnrichmentHandler.
 type OrgEnrichmentConfig struct {
 	Store OrgEnrichmentStore
+	// ReExtractMemories re-extracts an explicit set of memories in the org,
+	// scoped to the org's namespace prefix. Nil disables the endpoint.
+	ReExtractMemories func(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) (EnrichmentReExtractResult, error)
 }
 
 // NewOrgEnrichmentHandler returns the org-tier enrichment handler at
@@ -47,6 +53,8 @@ func NewOrgEnrichmentHandler(cfg OrgEnrichmentConfig) http.HandlerFunc {
 			handleOrgEnrichmentQueue(w, r, cfg, *orgID)
 		case "retry":
 			handleOrgEnrichmentRetry(w, r, cfg, *orgID)
+		case "re-extract":
+			handleOrgEnrichmentReExtract(w, r, cfg, *orgID)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -85,4 +93,16 @@ func handleOrgEnrichmentRetry(w http.ResponseWriter, r *http.Request, cfg OrgEnr
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"retried": retried})
+}
+
+// handleOrgEnrichmentReExtract handles POST /orgs/{orgId}/enrichment/re-extract:
+// re-extract an explicit set of memories in the org, scoped to the org's
+// namespace path prefix so IDs outside the org are silently dropped.
+func handleOrgEnrichmentReExtract(w http.ResponseWriter, r *http.Request, cfg OrgEnrichmentConfig, orgID uuid.UUID) {
+	orgPath, err := cfg.Store.OrgNamespacePath(r.Context(), orgID)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to resolve org namespace"))
+		return
+	}
+	reExtractMemoriesHandler(w, r, orgPath, cfg.ReExtractMemories)
 }

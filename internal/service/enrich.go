@@ -86,6 +86,7 @@ type DreamEntityCandidateLister interface {
 // can be wired without widening MemoryReader.
 type ReExtractStore interface {
 	ListReExtractCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+	ListReExtractCandidatesByIDs(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) ([]storage.BackfillCandidate, error)
 	ResetEnriched(ctx context.Context, id, namespaceID uuid.UUID) error
 	SoftDelete(ctx context.Context, id, namespaceID uuid.UUID) error
 }
@@ -117,10 +118,18 @@ func (s *EnrichService) AttachReExtract(store ReExtractStore, reaper GraphReaper
 // deployment when ProjectID is zero). DryRun returns the candidate count and
 // writes nothing. Limit caps how many memories one call processes (0 = no cap);
 // re-extraction over a large deployment is run in pages.
+//
+// MemoryIDs selects an explicit set of memories to re-extract (the per-memory
+// path used by the queue UI). When non-empty it takes precedence over the
+// project/limit candidate listing: only those IDs are considered, filtered to
+// the eligibility rules and to NamespacePrefix (path-prefix scope; empty means
+// global, the admin path). IDs outside scope or ineligible are silently dropped.
 type ReExtractRequest struct {
-	ProjectID uuid.UUID `json:"project_id,omitempty"`
-	DryRun    bool      `json:"dry_run,omitempty"`
-	Limit     int       `json:"limit,omitempty"`
+	ProjectID       uuid.UUID   `json:"project_id,omitempty"`
+	DryRun          bool        `json:"dry_run,omitempty"`
+	Limit           int         `json:"limit,omitempty"`
+	MemoryIDs       []uuid.UUID `json:"memory_ids,omitempty"`
+	NamespacePrefix string      `json:"-"`
 }
 
 // ReExtractResponse reports the outcome of one re-extraction call.
@@ -147,18 +156,28 @@ func (s *EnrichService) ReExtract(ctx context.Context, req *ReExtractRequest) (*
 		return nil, fmt.Errorf("re-extraction not configured (call AttachReExtract)")
 	}
 
-	var namespaceIDs []uuid.UUID
-	if req.ProjectID != uuid.Nil {
-		project, perr := s.projects.GetByID(ctx, req.ProjectID)
-		if perr != nil {
-			return nil, fmt.Errorf("project not found: %w", perr)
+	var candidates []storage.BackfillCandidate
+	var err error
+	if len(req.MemoryIDs) > 0 {
+		// Per-memory path: the caller selected explicit memories (the queue UI).
+		// Scope is the namespace path prefix, not a project.
+		candidates, err = s.reExtractStore.ListReExtractCandidatesByIDs(ctx, req.NamespacePrefix, req.MemoryIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list re-extract candidates by ids: %w", err)
 		}
-		namespaceIDs = []uuid.UUID{project.NamespaceID}
-	}
-
-	candidates, err := s.reExtractStore.ListReExtractCandidates(ctx, namespaceIDs, req.Limit)
-	if err != nil {
-		return nil, fmt.Errorf("list re-extract candidates: %w", err)
+	} else {
+		var namespaceIDs []uuid.UUID
+		if req.ProjectID != uuid.Nil {
+			project, perr := s.projects.GetByID(ctx, req.ProjectID)
+			if perr != nil {
+				return nil, fmt.Errorf("project not found: %w", perr)
+			}
+			namespaceIDs = []uuid.UUID{project.NamespaceID}
+		}
+		candidates, err = s.reExtractStore.ListReExtractCandidates(ctx, namespaceIDs, req.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("list re-extract candidates: %w", err)
+		}
 	}
 	resp := &ReExtractResponse{CandidateCount: len(candidates), DryRun: req.DryRun}
 	if req.DryRun || len(candidates) == 0 {

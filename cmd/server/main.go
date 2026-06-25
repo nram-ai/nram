@@ -1008,6 +1008,26 @@ func main() {
 		Users:      userRepo,
 	}
 
+	// Per-memory re-extract (queue UI per-row action), shared across the
+	// admin/org/self enrichment surfaces. namespacePrefix is the path-prefix
+	// scope ("" = global, the admin path); the tier handlers supply the caller's
+	// scope so out-of-scope IDs are silently dropped.
+	reExtractMemoriesFn := func(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) (api.EnrichmentReExtractResult, error) {
+		resp, err := enrichSvc.ReExtract(ctx, &service.ReExtractRequest{
+			NamespacePrefix: namespacePrefix,
+			MemoryIDs:       memoryIDs,
+		})
+		if err != nil {
+			return api.EnrichmentReExtractResult{}, err
+		}
+		return api.EnrichmentReExtractResult{
+			CandidateCount:      resp.CandidateCount,
+			Enqueued:            resp.Enqueued,
+			EntitiesRecomputed:  resp.EntitiesRecomputed,
+			FactChildrenRemoved: resp.FactChildrenRemoved,
+		}, nil
+	}
+
 	// Assemble handlers.
 	handlers := server.Handlers{
 		// Health
@@ -1084,9 +1104,10 @@ func main() {
 			Rollback:   dreamRollback,
 		}),
 		MeEnrichment: api.NewSelfEnrichmentHandler(api.MeEnrichmentConfig{
-			Store:      enrichmentAdminStore,
-			Users:      userRepo,
-			Namespaces: namespaceRepo,
+			Store:             enrichmentAdminStore,
+			Users:             userRepo,
+			Namespaces:        namespaceRepo,
+			ReExtractMemories: reExtractMemoriesFn,
 		}),
 		MeCapabilities: api.NewMeCapabilitiesHandler(api.MeCapabilitiesConfig{
 			EnrichmentAvailable: enrichmentAvailable,
@@ -1275,6 +1296,7 @@ func main() {
 					FactChildrenRemoved: resp.FactChildrenRemoved,
 				}, nil
 			},
+			ReExtractMemories: reExtractMemoriesFn,
 			BackfillMissingEmbeddings: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillMissingEmbeddings(ctx, &service.BackfillMissingEmbeddingsRequest{
 					ProjectID: projectID,
@@ -1350,7 +1372,8 @@ func main() {
 			Rollback: dreamRollback,
 		}),
 		OrgEnrichment: api.NewOrgEnrichmentHandler(api.OrgEnrichmentConfig{
-			Store: enrichmentAdminStore,
+			Store:             enrichmentAdminStore,
+			ReExtractMemories: reExtractMemoriesFn,
 		}),
 
 		// Tier-C (system-aggregate) handlers: RoleAdministrator only via

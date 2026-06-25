@@ -1360,6 +1360,76 @@ ORDER BY m.id ASC`
 	return scanBackfillCandidates(rows)
 }
 
+// ListReExtractCandidatesByIDs returns the subset of the given memory IDs that
+// are eligible for re-extraction, applying the same eligibility filter as
+// ListReExtractCandidates (enriched, live, non-dream, not a derived
+// extracted-fact child). When namespacePrefix is non-empty the result is
+// restricted to memories whose namespace path equals or descends from it,
+// mirroring the path-prefix scoping the retry path uses (an empty prefix means
+// global, the admin path). IDs outside scope or ineligible are silently
+// dropped, so the caller can compare the returned count to the requested count.
+func (r *MemoryRepo) ListReExtractCandidatesByIDs(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) ([]BackfillCandidate, error) {
+	if len(memoryIDs) == 0 {
+		return nil, nil
+	}
+	pg := r.db.Backend() == BackendPostgres
+	args := []any{}
+	ph := func() string {
+		if pg {
+			return fmt.Sprintf("$%d", len(args)+1)
+		}
+		return "?"
+	}
+
+	enrichedPH := ph()
+	args = append(args, EncodeBool(r.db.Backend(), true))
+	dreamPH := ph()
+	args = append(args, string(model.OriginDream))
+
+	relPHs := make([]string, len(ExtractedChildRelations))
+	for i, rel := range ExtractedChildRelations {
+		relPHs[i] = ph()
+		args = append(args, rel)
+	}
+
+	idPHs := make([]string, len(memoryIDs))
+	for i, id := range memoryIDs {
+		idPHs[i] = ph()
+		args = append(args, id.String())
+	}
+
+	nsClause := ""
+	if namespacePrefix != "" {
+		exactPH := ph()
+		args = append(args, namespacePrefix)
+		prefixPH := ph()
+		args = append(args, namespacePrefix+"/%")
+		nsClause = " AND (n.path = " + exactPH + " OR n.path LIKE " + prefixPH + ")"
+	}
+
+	query := `SELECT m.id, m.namespace_id
+FROM memories m
+JOIN namespaces n ON n.id = m.namespace_id
+WHERE m.enriched = ` + enrichedPH + `
+  AND m.deleted_at IS NULL
+  AND m.superseded_by IS NULL
+  AND m.origin <> ` + dreamPH + `
+  AND NOT EXISTS (
+    SELECT 1 FROM memory_lineage l
+    WHERE l.memory_id = m.id AND l.namespace_id = m.namespace_id
+      AND l.relation IN (` + strings.Join(relPHs, ", ") + `)
+  )
+  AND m.id IN (` + strings.Join(idPHs, ", ") + `)` + nsClause + `
+ORDER BY m.id ASC`
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list re-extract candidates by ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanBackfillCandidates(rows)
+}
+
 // ListDreamEntityBackfillCandidates returns active CONSOLIDATION dreams that
 // still lack entity-graph coverage: origin=dream, live (not deleted/superseded),
 // carrying a non-empty source_memory_ids metadata array (the discriminator that

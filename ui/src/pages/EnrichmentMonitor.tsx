@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import {
   useEnrichmentStatusInfinite,
   useRetryEnrichment,
+  useReExtractMemories,
   usePauseEnrichment,
   enrichmentTotalForFilter,
 } from "../hooks/useApi";
@@ -21,7 +22,10 @@ import {
 } from "../hooks/useElapsedTicker";
 import { useAuth, type Tier } from "../context/AuthContext";
 import { TierTabs } from "../components/TierTabs";
-import { ExtractionErrorView } from "../lib/extractionError";
+import {
+  ExtractionErrorView,
+  isPartialRecoveryError,
+} from "../lib/extractionError";
 import { MemoryAugmentPreviewBlock } from "../components/MemoryAugmentPreviewBlock";
 import { StatusNode } from "../components/StatusNode/StatusNode";
 import { firePulse } from "../components/NeuralNetwork/networkBus";
@@ -44,6 +48,23 @@ import type {
 } from "../api/client";
 import { formatLatencyMs, truncateId } from "../lib/formatters";
 import { memoryFocusHref } from "../lib/dreaming";
+
+// isPartialRecovery is true for a completed job whose last_error is a
+// partial_recovery warning (the extraction truncated/loop-recovered). These are
+// the rows the per-memory "Re-extract" action targets: the memory is enriched,
+// so a plain retry is a no-op (the worker skips enriched memories) and only a
+// re-extract (which tombstones the footprint and clears the enriched flag) reruns
+// extraction. Detection delegates to the shared structured parser rather than a
+// substring match.
+function isPartialRecovery(item: EnrichmentQueueItem): boolean {
+  return item.status === "completed" && isPartialRecoveryError(item.last_error);
+}
+
+// isRowSelectable gates the per-row checkbox: failed rows (retry target) and
+// partial-recovery rows (re-extract target) can be selected.
+function isRowSelectable(item: EnrichmentQueueItem): boolean {
+  return item.status === "failed" || isPartialRecovery(item);
+}
 
 // Live SSE state for the enrichment worker pool. liveJobs is keyed by
 // queue job id (the EnrichmentQueueItem.id, identical to the worker's
@@ -803,14 +824,14 @@ function QueueTable({
     });
   }, []);
 
-  const failedIds = useMemo(
-    () => new Set(items.filter((i) => i.status === "failed").map((i) => i.id)),
+  const selectableIds = useMemo(
+    () => new Set(items.filter(isRowSelectable).map((i) => i.id)),
     [items],
   );
 
-  const allFailedSelected =
-    failedIds.size > 0 &&
-    [...failedIds].every((id) => selectedIds.has(id));
+  const allSelectableSelected =
+    selectableIds.size > 0 &&
+    [...selectableIds].every((id) => selectedIds.has(id));
 
   if (items.length === 0) {
     return (
@@ -836,11 +857,11 @@ function QueueTable({
               <th className="w-10 px-3 py-2.5 text-left">
                 <input
                   type="checkbox"
-                  checked={allFailedSelected && failedIds.size > 0}
+                  checked={allSelectableSelected && selectableIds.size > 0}
                   onChange={onToggleSelectAll}
-                  disabled={failedIds.size === 0}
+                  disabled={selectableIds.size === 0}
                   className="h-4 w-4 rounded border-input text-primary focus:ring-primary disabled:opacity-30"
-                  title="Select all failed items"
+                  title="Select all failed / partial-recovery items"
                 />
               </th>
             )}
@@ -935,7 +956,7 @@ function QueueTable({
                       type="checkbox"
                       checked={selectedIds.has(item.id)}
                       onChange={() => onToggleSelect(item.id)}
-                      disabled={!isFailed}
+                      disabled={!isRowSelectable(item)}
                       className="h-4 w-4 rounded border-input text-primary focus:ring-primary disabled:opacity-30"
                     />
                   </td>
@@ -1100,6 +1121,7 @@ function EnrichmentMonitor() {
     status: statusFilter,
   });
   const retryMutation = useRetryEnrichment({ tier, orgId });
+  const reExtractMutation = useReExtractMemories({ tier, orgId });
   const pauseMutation = usePauseEnrichment();
   const showWriteActions =
     (tier === "self") ||
@@ -1147,12 +1169,28 @@ function EnrichmentMonitor() {
     [],
   );
 
-  // failedItems is the failed subset currently loaded; used to drive the
-  // select-all checkbox over visible rows. The "Retry All Failed" action below
-  // uses counts.failed (the true total) since it retries server-side.
-  const failedItems = useMemo(
-    () => items.filter((i) => i.status === "failed"),
+  // selectableItems is the failed + partial-recovery subset currently loaded;
+  // used to drive the select-all checkbox over visible rows. The "Retry All
+  // Failed" action below uses counts.failed (the true total) since it retries
+  // server-side. The two selected-* subsets feed the per-action bulk buttons so
+  // each targets only the rows it applies to.
+  const selectableItems = useMemo(
+    () => items.filter(isRowSelectable),
     [items],
+  );
+  const selectedFailedIds = useMemo(
+    () =>
+      items
+        .filter((i) => selectedIds.has(i.id) && i.status === "failed")
+        .map((i) => i.id),
+    [items, selectedIds],
+  );
+  const selectedReExtractMemoryIds = useMemo(
+    () =>
+      items
+        .filter((i) => selectedIds.has(i.id) && isPartialRecovery(i))
+        .map((i) => i.memory_id),
+    [items, selectedIds],
   );
 
   const handleToggleSelect = useCallback((id: string) => {
@@ -1169,14 +1207,14 @@ function EnrichmentMonitor() {
 
   const handleToggleSelectAll = useCallback(() => {
     setSelectedIds((prev) => {
-      const failedIds = failedItems.map((i) => i.id);
-      const allSelected = failedIds.every((id) => prev.has(id));
+      const ids = selectableItems.map((i) => i.id);
+      const allSelected = ids.every((id) => prev.has(id));
       if (allSelected) {
         return new Set();
       }
-      return new Set(failedIds);
+      return new Set(ids);
     });
-  }, [failedItems]);
+  }, [selectableItems]);
 
   const handleRetryOne = useCallback(
     (id: string) => {
@@ -1194,14 +1232,22 @@ function EnrichmentMonitor() {
   );
 
   const handleRetrySelected = useCallback(() => {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    retryMutation.mutate(ids, {
+    if (selectedFailedIds.length === 0) return;
+    retryMutation.mutate(selectedFailedIds, {
       onSuccess: () => {
         setSelectedIds(new Set());
       },
     });
-  }, [selectedIds, retryMutation]);
+  }, [selectedFailedIds, retryMutation]);
+
+  const handleReExtractSelected = useCallback(() => {
+    if (selectedReExtractMemoryIds.length === 0) return;
+    reExtractMutation.mutate(selectedReExtractMemoryIds, {
+      onSuccess: () => {
+        setSelectedIds(new Set());
+      },
+    });
+  }, [selectedReExtractMemoryIds, reExtractMutation]);
 
   const handleRetryAllFailed = useCallback(() => {
     retryMutation.mutate(undefined, {
@@ -1334,8 +1380,11 @@ function EnrichmentMonitor() {
 
             <div className="flex-1" />
 
-            {/* Bulk actions */}
-            {selectedIds.size > 0 && (
+            {/* Bulk actions. Retry targets the selected failed rows; Re-extract
+                targets the selected partial-recovery rows (tombstones each
+                memory's graph footprint and re-runs extraction, since a plain
+                retry on an already-enriched memory is skipped by the worker). */}
+            {selectedFailedIds.length > 0 && (
               <button
                 type="button"
                 onClick={handleRetrySelected}
@@ -1343,7 +1392,20 @@ function EnrichmentMonitor() {
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {retryMutation.isPending && <Spinner />}
-                Retry Selected ({selectedIds.size})
+                Retry Selected ({selectedFailedIds.length})
+              </button>
+            )}
+
+            {selectedReExtractMemoryIds.length > 0 && (
+              <button
+                type="button"
+                onClick={handleReExtractSelected}
+                disabled={reExtractMutation.isPending}
+                title="Re-extract: tombstone the prior graph footprint and re-run extraction for the selected partial-recovery memories under the current prompt"
+                className="inline-flex items-center gap-1.5 rounded-md bg-warning px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-warning/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {reExtractMutation.isPending && <Spinner />}
+                Re-extract Selected ({selectedReExtractMemoryIds.length})
               </button>
             )}
 

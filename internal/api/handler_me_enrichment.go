@@ -21,6 +21,9 @@ type MeEnrichmentConfig struct {
 	Store      MeEnrichmentStore
 	Users      UserGetter
 	Namespaces MeDreamNamespaceLookup
+	// ReExtractMemories re-extracts an explicit set of the caller's memories,
+	// scoped to the caller's namespace prefix. Nil disables the endpoint.
+	ReExtractMemories func(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) (EnrichmentReExtractResult, error)
 }
 
 // NewSelfEnrichmentHandler returns the self-tier enrichment handler at
@@ -51,6 +54,8 @@ func NewSelfEnrichmentHandler(cfg MeEnrichmentConfig) http.HandlerFunc {
 			handleMeEnrichmentQueue(w, r, cfg, user.NamespaceID)
 		case "retry":
 			handleMeEnrichmentRetry(w, r, cfg, user.NamespaceID)
+		case "re-extract":
+			handleMeEnrichmentReExtract(w, r, cfg, user.NamespaceID)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -98,4 +103,20 @@ func handleMeEnrichmentRetry(w http.ResponseWriter, r *http.Request, cfg MeEnric
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"retried": retried})
+}
+
+// handleMeEnrichmentReExtract handles POST /me/enrichment/re-extract: re-extract
+// an explicit set of the caller's memories, scoped to the caller's namespace
+// path prefix so IDs outside the caller's namespace are silently dropped.
+func handleMeEnrichmentReExtract(w http.ResponseWriter, r *http.Request, cfg MeEnrichmentConfig, userNS uuid.UUID) {
+	if cfg.Namespaces == nil {
+		WriteError(w, ErrInternal("namespace lookup unavailable"))
+		return
+	}
+	ns, err := cfg.Namespaces.GetByID(r.Context(), userNS)
+	if err != nil || ns == nil {
+		WriteError(w, ErrInternal("failed to resolve user namespace"))
+		return
+	}
+	reExtractMemoriesHandler(w, r, ns.Path, cfg.ReExtractMemories)
 }

@@ -1297,6 +1297,24 @@ export function useRetryEnrichment(scope: TierWithOrg = { tier: "system" }) {
   });
 }
 
+// useReExtractMemories re-extracts an explicit set of memories (the queue's
+// per-row "Re-extract" action). Unlike retry, this tombstones each memory's
+// prior graph footprint and clears its enriched flag so extraction actually
+// re-runs (a plain retry on an already-enriched memory is skipped by the
+// worker). Takes memory IDs, not queue job IDs.
+export function useReExtractMemories(scope: TierWithOrg = { tier: "system" }) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (memoryIds: string[]) => {
+      if (scope.tier === "org")
+        return orgAPI.reExtractMemories(scope.orgId!, memoryIds);
+      if (scope.tier === "self") return meAPI.reExtractMemories(memoryIds);
+      return adminAPI.reExtractMemories(memoryIds);
+    },
+    onSuccess: () => invalidateAllEnrichmentScopes(qc, scope.orgId),
+  });
+}
+
 export function usePauseEnrichment() {
   const qc = useQueryClient();
   return useMutation({

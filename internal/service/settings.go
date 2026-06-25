@@ -830,7 +830,7 @@ Return a JSON object with two fields:
   - "temporal": "current", "as of <date>", "previously", or "no longer" (string, default "current")
 
 Hard rules:
-- An entity is a NAMED thing (a person, place, system, file, drug, etc.), not a statement. Do NOT extract whole sentences, claims, opinions, questions, code snippets, SQL, shell commands, or file contents as entities. A name longer than a short phrase is almost always wrong.
+- An entity is a NAMED thing (a person, place, system, file, drug, etc.), not a statement. Do NOT extract whole sentences, claims, opinions, questions, or whole code/SQL/shell snippets or statements as entities; a single named code symbol (e.g. a function or type name, type code_symbol) or a file name/path (type file) is allowed. A name longer than a short phrase is almost always wrong.
 - Do NOT repeat an entity or relationship you have already emitted, and do NOT loop. Each entity and relationship must be distinct.
 
 Return ONLY valid JSON. Do not include markdown fences or explanation.` + "\n\n" + minifiedJSONInstruction

@@ -581,6 +581,12 @@ func (s *EnrichmentAdminStore) extractionHealth(ctx context.Context) (api.Enrich
 	return info, nil
 }
 
+// OrgNamespacePath returns the org's root namespace path, the path-prefix scope
+// for org-tier per-memory re-extraction. Exported wrapper over orgNamespacePath.
+func (s *EnrichmentAdminStore) OrgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error) {
+	return s.orgNamespacePath(ctx, orgID)
+}
+
 // orgNamespacePath returns the org's root namespace path. Used as the LIKE
 // prefix for org-scoped queue / cycle queries.
 func (s *EnrichmentAdminStore) orgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error) {

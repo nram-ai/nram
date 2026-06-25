@@ -93,6 +93,12 @@ type EnrichmentAdminConfig struct {
 	// the endpoint with a 503.
 	ReExtract func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (EnrichmentReExtractResult, error)
 
+	// ReExtractMemories runs the same per-memory re-extraction as ReExtract for an
+	// explicit set of memory IDs (the queue UI's per-row "Re-extract" action),
+	// scoped to namespacePrefix (empty = global, the admin path). Nil disables the
+	// endpoint with a 503.
+	ReExtractMemories func(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) (EnrichmentReExtractResult, error)
+
 	// BackfillMissingEmbeddings re-enqueues embedding-stranded memories (no stored
 	// vector) so the worker re-embeds them. DryRun returns the candidate count
 	// only. Nil disables the endpoint with a 503.
@@ -328,6 +334,13 @@ type enrichmentRetryRequest struct {
 	IDs []uuid.UUID `json:"ids"`
 }
 
+// enrichmentReExtractMemoriesRequest is the request body for the per-memory
+// re-extract endpoints (admin/org/self). memory_ids are memory IDs (not queue
+// job IDs), matching EnrichmentQueueItem.MemoryID.
+type enrichmentReExtractMemoriesRequest struct {
+	MemoryIDs []uuid.UUID `json:"memory_ids"`
+}
+
 // enrichmentPauseRequest is the request body for POST /enrichment/pause.
 type enrichmentPauseRequest struct {
 	Paused bool `json:"paused"`
@@ -346,7 +359,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "backfill-consolidation-entities" || sub == "clear-completed-jobs" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "backfill-consolidation-entities" || sub == "clear-completed-jobs" || sub == "re-extract-memories" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -375,6 +388,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentBackfillEmbeddingDims(w, r, cfg)
 		case "re-extract":
 			handleEnrichmentReExtract(w, r, cfg)
+		case "re-extract-memories":
+			handleEnrichmentReExtractMemories(w, r, cfg)
 		case "backfill-missing-embeddings":
 			handleEnrichmentBackfillMissingEmbeddings(w, r, cfg)
 		case "backfill-consolidation-entities":
@@ -1105,5 +1120,48 @@ func handleEnrichmentReExtract(w http.ResponseWriter, r *http.Request, cfg Enric
 		return
 	}
 	result.DryRun = body.DryRun
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleEnrichmentReExtractMemories handles POST /enrichment/re-extract-memories.
+// It re-extracts an explicit set of memory IDs (the queue UI's per-row action)
+// unscoped (admin/global). The shared body+dispatch logic lives in
+// reExtractMemoriesHandler so the org/self tiers reuse it with their namespace
+// prefix.
+func handleEnrichmentReExtractMemories(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	reExtractMemoriesHandler(w, r, "", cfg.ReExtractMemories)
+}
+
+// reExtractMemoriesHandler decodes a {memory_ids} body and invokes fn scoped to
+// namespacePrefix. fn nil yields a 503. Shared by the admin/org/self per-memory
+// re-extract endpoints.
+func reExtractMemoriesHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+	namespacePrefix string,
+	fn func(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) (EnrichmentReExtractResult, error),
+) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if fn == nil {
+		http.Error(w, "re-extract not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentReExtractMemoriesRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	if len(body.MemoryIDs) == 0 {
+		WriteError(w, ErrBadRequest("memory_ids must not be empty"))
+		return
+	}
+	result, err := fn(r.Context(), namespacePrefix, body.MemoryIDs)
+	if err != nil {
+		WriteError(w, ErrInternal("re-extract: "+err.Error()))
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
 }
