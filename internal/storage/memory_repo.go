@@ -1361,13 +1361,21 @@ ORDER BY m.id ASC`
 }
 
 // ListReExtractCandidatesByIDs returns the subset of the given memory IDs that
-// are eligible for re-extraction, applying the same eligibility filter as
-// ListReExtractCandidates (enriched, live, non-dream, not a derived
-// extracted-fact child). When namespacePrefix is non-empty the result is
+// are eligible for re-extraction: enriched, live (not deleted/superseded), and
+// within namespacePrefix. enriched is a precondition, not a discovery filter:
+// re-extraction tombstones a prior graph footprint, so it presumes the memory
+// was already extracted. When namespacePrefix is non-empty the result is
 // restricted to memories whose namespace path equals or descends from it,
 // mirroring the path-prefix scoping the retry path uses (an empty prefix means
 // global, the admin path). IDs outside scope or ineligible are silently
 // dropped, so the caller can compare the returned count to the requested count.
+//
+// Unlike the bulk ListReExtractCandidates, this explicit-ID path deliberately
+// does NOT exclude dreams or derived (extracted/synthesized) children: the bulk
+// sweep skips those to avoid auto-reextracting them, but here the operator
+// selected the IDs by hand, so the choice is honored. Consolidation dreams in
+// particular DO get entity extraction (internal/enrichment/worker.go
+// skipDreamEntity is false for them), so they are legitimate re-extract targets.
 func (r *MemoryRepo) ListReExtractCandidatesByIDs(ctx context.Context, namespacePrefix string, memoryIDs []uuid.UUID) ([]BackfillCandidate, error) {
 	if len(memoryIDs) == 0 {
 		return nil, nil
@@ -1383,14 +1391,6 @@ func (r *MemoryRepo) ListReExtractCandidatesByIDs(ctx context.Context, namespace
 
 	enrichedPH := ph()
 	args = append(args, EncodeBool(r.db.Backend(), true))
-	dreamPH := ph()
-	args = append(args, string(model.OriginDream))
-
-	relPHs := make([]string, len(ExtractedChildRelations))
-	for i, rel := range ExtractedChildRelations {
-		relPHs[i] = ph()
-		args = append(args, rel)
-	}
 
 	idPHs := make([]string, len(memoryIDs))
 	for i, id := range memoryIDs {
@@ -1413,12 +1413,6 @@ JOIN namespaces n ON n.id = m.namespace_id
 WHERE m.enriched = ` + enrichedPH + `
   AND m.deleted_at IS NULL
   AND m.superseded_by IS NULL
-  AND m.origin <> ` + dreamPH + `
-  AND NOT EXISTS (
-    SELECT 1 FROM memory_lineage l
-    WHERE l.memory_id = m.id AND l.namespace_id = m.namespace_id
-      AND l.relation IN (` + strings.Join(relPHs, ", ") + `)
-  )
   AND m.id IN (` + strings.Join(idPHs, ", ") + `)` + nsClause + `
 ORDER BY m.id ASC`
 

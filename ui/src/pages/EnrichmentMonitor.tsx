@@ -1129,6 +1129,11 @@ function EnrichmentMonitor() {
     (tier === "system" && isAdmin);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Last successful re-extract summary, shown in the mutation-feedback banner so
+  // a 0/partial enqueue (rows that were ineligible or out of scope) is visible
+  // instead of looking like a dead button. Errors use reExtractMutation.isError
+  // like the sibling retry/pause banners.
+  const [reExtractMsg, setReExtractMsg] = useState<string | null>(null);
 
   // Counts and paused are queue-wide and identical on every page, so read them
   // off the first page; items concatenate every loaded page in server order.
@@ -1241,10 +1246,18 @@ function EnrichmentMonitor() {
   }, [selectedFailedIds, retryMutation]);
 
   const handleReExtractSelected = useCallback(() => {
-    if (selectedReExtractMemoryIds.length === 0) return;
+    const requested = selectedReExtractMemoryIds.length;
+    if (requested === 0) return;
+    setReExtractMsg(null);
     reExtractMutation.mutate(selectedReExtractMemoryIds, {
-      onSuccess: () => {
+      onSuccess: (res) => {
         setSelectedIds(new Set());
+        const skipped = requested - res.enqueued;
+        setReExtractMsg(
+          skipped > 0
+            ? `Re-extracted ${res.enqueued} of ${requested} selected (${skipped} skipped: ineligible or out of scope).`
+            : `Re-extracted ${res.enqueued} ${res.enqueued === 1 ? "memory" : "memories"}.`,
+        );
       },
     });
   }, [selectedReExtractMemoryIds, reExtractMutation]);
@@ -1482,6 +1495,20 @@ function EnrichmentMonitor() {
               <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
               Failed to update pause state:{" "}
               {(pauseMutation.error as Error).message}
+            </div>
+          )}
+
+          {reExtractMutation.isSuccess && reExtractMsg && (
+            <div className="flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+              <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
+              {reExtractMsg}
+            </div>
+          )}
+
+          {reExtractMutation.isError && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
+              Failed to re-extract: {(reExtractMutation.error as Error).message}
             </div>
           )}
 

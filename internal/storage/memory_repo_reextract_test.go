@@ -86,25 +86,48 @@ func TestMemoryRepo_ListReExtractCandidatesByIDs(t *testing.T) {
 		notEnriched := mk(nsA, false, false)
 		deleted := mk(nsA, true, true)
 
-		all := []uuid.UUID{inA, inSub, inB, notEnriched, deleted}
+		// A consolidation dream in nsA: origin=dream plus a synthesized_from
+		// lineage row. The bulk ListReExtractCandidates excludes both, but the
+		// explicit-ID path must honor an operator's hand-picked dream, since
+		// consolidation dreams do get entity extraction.
+		dream := newTestMemory(nsA)
+		dream.Origin = model.OriginDream
+		if err := repo.Create(ctx, dream); err != nil {
+			t.Fatalf("create dream: %v", err)
+		}
+		if err := repo.MarkEnriched(ctx, dream.ID, nsA, nil, nil, nil, nil, nil); err != nil {
+			t.Fatalf("mark dream enriched: %v", err)
+		}
+		dreamParent := inA
+		lineageRepo := NewMemoryLineageRepo(db)
+		if err := lineageRepo.Create(ctx, &model.MemoryLineage{
+			NamespaceID: nsA,
+			MemoryID:    dream.ID,
+			ParentID:    &dreamParent,
+			Relation:    model.LineageSynthesizedFrom,
+		}); err != nil {
+			t.Fatalf("create dream lineage: %v", err)
+		}
 
-		// Scope "tenantA": inA and its descendant inSub are eligible; inB is
-		// out of scope; notEnriched and deleted are ineligible.
+		all := []uuid.UUID{inA, inSub, inB, notEnriched, deleted, dream.ID}
+
+		// Scope "tenantA": inA, its descendant inSub, and the dream are eligible;
+		// inB is out of scope; notEnriched and deleted are ineligible.
 		got, err := repo.ListReExtractCandidatesByIDs(ctx, "tenantA", all)
 		if err != nil {
 			t.Fatalf("by ids tenantA: %v", err)
 		}
-		if g, w := candidateIDs(got), wantIDs(inA, inSub); !slices.Equal(g, w) {
+		if g, w := candidateIDs(got), wantIDs(inA, inSub, dream.ID); !slices.Equal(g, w) {
 			t.Fatalf("tenantA scope: got %v want %v", g, w)
 		}
 
 		// Global scope (empty prefix): all enriched, live IDs regardless of
-		// namespace; ineligible still dropped.
+		// namespace (the dream included); ineligible still dropped.
 		gotGlobal, err := repo.ListReExtractCandidatesByIDs(ctx, "", all)
 		if err != nil {
 			t.Fatalf("by ids global: %v", err)
 		}
-		if g, w := candidateIDs(gotGlobal), wantIDs(inA, inSub, inB); !slices.Equal(g, w) {
+		if g, w := candidateIDs(gotGlobal), wantIDs(inA, inSub, inB, dream.ID); !slices.Equal(g, w) {
 			t.Fatalf("global scope: got %v want %v", g, w)
 		}
 
