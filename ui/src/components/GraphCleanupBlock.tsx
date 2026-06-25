@@ -115,6 +115,14 @@ function RelabelCard() {
     );
   }
 
+  // A dry-run with no re-types, merges, or row relabels means the graph is
+  // already fully canonical; offer no no-op Apply.
+  const noChanges =
+    !!preview &&
+    preview.retyped === 0 &&
+    preview.merged === 0 &&
+    preview.rows === 0;
+
   return (
     <Card
       title="Relabel graph (deterministic)"
@@ -128,23 +136,29 @@ function RelabelCard() {
       >
         {relabel.isPending ? "Working…" : "Preview (dry run)"}
       </button>
-      {preview && !applied && (
-        <>
+      {preview &&
+        !applied &&
+        (noChanges ? (
           <span className="text-xs text-muted-foreground">
-            {preview.retyped} entities re-typed, {preview.merged} merged;{" "}
-            {preview.rows} relationship rows re-labeled, {preview.before} →{" "}
-            {preview.after} distinct relations.
+            Graph is already canonical; nothing to relabel.
           </span>
-          <button
-            type="button"
-            onClick={() => run(false)}
-            disabled={relabel.isPending}
-            className={btnClass(relabel.isPending)}
-          >
-            Apply
-          </button>
-        </>
-      )}
+        ) : (
+          <>
+            <span className="text-xs text-muted-foreground">
+              {preview.retyped} entities re-typed, {preview.merged} merged;{" "}
+              {preview.rows} relationship rows re-labeled, {preview.before} →{" "}
+              {preview.after} distinct relations.
+            </span>
+            <button
+              type="button"
+              onClick={() => run(false)}
+              disabled={relabel.isPending}
+              className={btnClass(relabel.isPending)}
+            >
+              Apply
+            </button>
+          </>
+        ))}
       {applied && preview && (
         <span className="text-xs text-green-700 dark:text-green-400">
           Applied: {preview.merged} entities merged, {preview.rows} relationships
