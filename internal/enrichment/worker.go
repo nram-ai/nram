@@ -1577,9 +1577,18 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 	cosineEnabled := wp.settings.ResolveBoolWithDefault(ctx, service.SettingEntityResolutionCosineEnabled, "global")
 	cosineThreshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingEntityResolutionCosineThreshold, "global")
 
+	// Entity-name guard thresholds, resolved once. ExtractEntitiesLLM already
+	// scrubs degenerate names; this is the defense-in-depth check at the
+	// persistence boundary, since LLM output is untrusted.
+	nameMaxChars, nameMaxWords, nameMinRatio := wp.settings.ExtractEntityNameLimits(ctx)
+
 	entityNameToID := make(map[string]uuid.UUID)
 	for idx := range entResult.Entities {
 		ent := &entResult.Entities[idx]
+		if service.IsDegenerateEntityName(ent.Name, nameMaxChars, nameMaxWords, nameMinRatio) {
+			slog.Warn("enrichment: dropped degenerate entity name", "job", job.ID, "len", len(ent.Name))
+			continue
+		}
 		canonical := strings.ToLower(ent.Name)
 		coercedType := wp.typeClassifier.Classify(ctx, ent.Type)
 
@@ -1623,6 +1632,12 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 	// one BatchCreate after the entity-resolution loop.
 	relCandidates := make([]*model.Relationship, 0, len(entResult.Relationships))
 	for _, rel := range entResult.Relationships {
+		// Defense in depth: never wire (and never stub-create from) a relationship
+		// whose endpoint name is degenerate. ExtractEntitiesLLM already drops these.
+		if service.IsDegenerateEntityName(rel.Source, nameMaxChars, nameMaxWords, nameMinRatio) ||
+			service.IsDegenerateEntityName(rel.Target, nameMaxChars, nameMaxWords, nameMinRatio) {
+			continue
+		}
 		srcID, srcOK := entityNameToID[rel.Source]
 		tgtID, tgtOK := entityNameToID[rel.Target]
 

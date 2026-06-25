@@ -88,9 +88,10 @@ type EntityReader interface {
 	FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error)
 }
 
-// EntityWriter creates and updates entities.
+// EntityWriter creates, updates, and deletes entities.
 type EntityWriter interface {
 	Upsert(ctx context.Context, entity *model.Entity) error
+	DeleteByIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error)
 }
 
 // EntityAliasWriter creates entity aliases.
@@ -170,6 +171,7 @@ type SettingsResolver interface {
 	ResolveFloat(ctx context.Context, key string, scope string) (float64, error)
 	ResolveInt(ctx context.Context, key string, scope string) (int, error)
 	ResolveBool(ctx context.Context, key string, scope string) bool
+	ResolveBoolWithDefault(ctx context.Context, key, scope string) bool
 	ResolveIntWithDefault(ctx context.Context, key, scope string) int
 	ResolveFloatWithDefault(ctx context.Context, key, scope string) float64
 	ResolveStringWithDefault(ctx context.Context, key, scope string) string

@@ -30,7 +30,8 @@ func (f *fakeStuckSettings) ResolveInt(_ context.Context, key, _ string) (int, e
 	}
 	return 0, nil
 }
-func (f *fakeStuckSettings) ResolveBool(_ context.Context, _, _ string) bool { return false }
+func (f *fakeStuckSettings) ResolveBool(_ context.Context, _, _ string) bool            { return false }
+func (f *fakeStuckSettings) ResolveBoolWithDefault(_ context.Context, _, _ string) bool { return false }
 func (f *fakeStuckSettings) ResolveIntWithDefault(_ context.Context, _, _ string) int {
 	return f.stuckThresholdSecs
 }

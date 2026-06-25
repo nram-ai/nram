@@ -84,6 +84,67 @@ func TestEntityRepo_Create(t *testing.T) {
 	})
 }
 
+func TestEntityRepo_DeleteByIDs_CascadesRelationships(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		relRepo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		src := &model.Entity{NamespaceID: nsID, Name: "Source", Canonical: "source", EntityType: "concept", MentionCount: 1}
+		tgt := &model.Entity{NamespaceID: nsID, Name: "Target", Canonical: "target", EntityType: "concept", MentionCount: 1}
+		if err := repo.Create(ctx, src); err != nil {
+			t.Fatalf("create source: %v", err)
+		}
+		if err := repo.Create(ctx, tgt); err != nil {
+			t.Fatalf("create target: %v", err)
+		}
+		rel := &model.Relationship{NamespaceID: nsID, SourceID: src.ID, TargetID: tgt.ID, Relation: "related_to", Weight: 1}
+		if err := relRepo.Create(ctx, rel); err != nil {
+			t.Fatalf("create relationship: %v", err)
+		}
+
+		deleted, err := repo.DeleteByIDs(ctx, []uuid.UUID{src.ID})
+		if err != nil {
+			t.Fatalf("DeleteByIDs: %v", err)
+		}
+		if len(deleted) != 1 || deleted[0] != src.ID {
+			t.Fatalf("deleted = %v, want [%s]", deleted, src.ID)
+		}
+
+		// Source is gone.
+		if got, _ := repo.GetByID(ctx, src.ID, nsID); got != nil {
+			t.Fatalf("source entity still present after delete")
+		}
+		// Target survives.
+		if got, _ := repo.GetByID(ctx, tgt.ID, nsID); got == nil {
+			t.Fatalf("target entity was unexpectedly removed")
+		}
+		// The relationship cascaded away with its source endpoint.
+		rels, err := relRepo.ListByNamespace(ctx, nsID)
+		if err != nil {
+			t.Fatalf("list relationships: %v", err)
+		}
+		if len(rels) != 0 {
+			t.Fatalf("relationship not cascade-deleted: %d remain", len(rels))
+		}
+	})
+}
+
+func TestEntityRepo_DeleteByIDs_EmptyIsNoop(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		deleted, err := repo.DeleteByIDs(ctx, nil)
+		if err != nil {
+			t.Fatalf("DeleteByIDs(nil): %v", err)
+		}
+		if len(deleted) != 0 {
+			t.Fatalf("expected no deletions, got %v", deleted)
+		}
+	})
+}
+
 func TestEntityRepo_Create_GeneratesID(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()

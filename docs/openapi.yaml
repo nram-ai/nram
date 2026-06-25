@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.12.0
+  version: 0.13.0
   license:
     name: MIT
 
@@ -6199,6 +6199,7 @@ components:
         - "dreaming.embedding_backfill.enabled"
         - "dreaming.enabled"
         - "dreaming.entity_dedup.budget_fraction"
+        - "dreaming.entity_hygiene_enabled"
         - "dreaming.entity_merge.cosine_threshold"
         - "dreaming.heartbeat_interval_seconds"
         - "dreaming.heartbeat_stale_seconds"
@@ -6272,6 +6273,9 @@ components:
         - "enrichment.extraction.chunk_overlap_tokens"
         - "enrichment.extraction.chunk_threshold_tokens"
         - "enrichment.extraction.continuation_max_passes"
+        - "enrichment.extraction.entity_name_max_chars"
+        - "enrichment.extraction.entity_name_max_words"
+        - "enrichment.extraction.entity_name_min_distinct_word_ratio"
         - "enrichment.fact_extraction.async.temperature"
         - "enrichment.fact_extraction.max_tokens"
         - "enrichment.fact_extraction.sync.temperature"

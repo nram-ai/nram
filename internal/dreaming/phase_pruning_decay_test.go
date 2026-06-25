@@ -142,6 +142,13 @@ func (s *staticDreamSettings) ResolveBool(_ context.Context, key string, _ strin
 	v := s.values[key]
 	return v == "true" || v == "1"
 }
+func (s *staticDreamSettings) ResolveBoolWithDefault(_ context.Context, key, _ string) bool {
+	v, ok := s.values[key]
+	if !ok {
+		v = service.GetDefaultString(key)
+	}
+	return v == "true" || v == "1"
+}
 func (s *staticDreamSettings) ResolveIntWithDefault(ctx context.Context, key, scope string) int {
 	if v, ok := s.ints[key]; ok {
 		return v

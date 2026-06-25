@@ -61,6 +61,12 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 		return PhaseResult{}, err
 	}
 
+	// Hygiene first: delete any entity whose name is degenerate (a wall of text,
+	// a whole sentence, or a repetition loop) by the same predicate the
+	// write-path guard uses, so a name created before that guard existed
+	// self-cleans. Dedup then runs over the survivors.
+	entities = p.sweepDegenerateNames(ctx, cycle, entities, logger)
+
 	if len(entities) < 2 {
 		return PhaseResult{}, nil
 	}
@@ -90,6 +96,51 @@ func (p *EntityDedupPhase) Execute(ctx context.Context, cycle *model.DreamCycle,
 	}
 
 	return PhaseResult{}, nil
+}
+
+// sweepDegenerateNames deletes entities whose name fails the entity-name guard
+// predicate and returns the survivors. Gated by dreaming.entity_hygiene_enabled
+// (default on); each deletion cascades to the entity's vectors, relationships,
+// and aliases (FK ON DELETE CASCADE) and is recorded in the dream log. On a
+// delete error the original set is returned unchanged so dedup still runs.
+func (p *EntityDedupPhase) sweepDegenerateNames(ctx context.Context, cycle *model.DreamCycle, entities []model.Entity, logger *DreamLogWriter) []model.Entity {
+	if p.settings == nil || !p.settings.ResolveBoolWithDefault(ctx, service.SettingDreamEntityHygieneEnabled, "global") {
+		return entities
+	}
+	maxChars := p.settings.ResolveIntWithDefault(ctx, service.SettingExtractionEntityNameMaxChars, "global")
+	maxWords := p.settings.ResolveIntWithDefault(ctx, service.SettingExtractionEntityNameMaxWords, "global")
+	minRatio := p.settings.ResolveFloatWithDefault(ctx, service.SettingExtractionEntityNameMinDistinctWordRatio, "global")
+
+	kept := make([]model.Entity, 0, len(entities))
+	var bad []model.Entity
+	var badIDs []uuid.UUID
+	for _, e := range entities {
+		if service.IsDegenerateEntityName(e.Name, maxChars, maxWords, minRatio) {
+			bad = append(bad, e)
+			badIDs = append(badIDs, e.ID)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if len(badIDs) == 0 {
+		return entities
+	}
+
+	deleted, err := p.entityWriter.DeleteByIDs(ctx, badIDs)
+	if err != nil {
+		slog.Warn("dreaming: entity hygiene delete failed",
+			"cycle", cycle.ID, "count", len(badIDs), "err", err)
+		return entities
+	}
+	for i := range bad {
+		if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "entity_hygiene",
+			model.DreamOpEntityDeleted, "entity", bad[i].ID, bad[i], nil); err != nil {
+			slog.Warn("dreaming: log entity hygiene delete failed", "err", err)
+		}
+	}
+	slog.Info("dreaming: entity hygiene removed degenerate names",
+		"cycle", cycle.ID, "deleted", len(deleted))
+	return kept
 }
 
 func (p *EntityDedupPhase) findAndMergeDuplicates(

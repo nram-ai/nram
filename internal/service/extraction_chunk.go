@@ -244,6 +244,8 @@ func extractEntitiesWithContinuation(
 	if err != nil {
 		return nil, err
 	}
+	maxChars, maxWords, minRatio := settings.ExtractEntityNameLimits(ctx)
+	scrubEntityResult(env.Result, maxChars, maxWords, minRatio)
 	maxPasses := settings.ResolveIntWithDefault(ctx, SettingExtractionContinuationMaxPasses, "global")
 	if maxPasses <= 0 || env.Result == nil {
 		return env, nil
@@ -261,6 +263,10 @@ func extractEntitiesWithContinuation(
 		if cerr != nil || more == nil || more.Result == nil {
 			break
 		}
+		// Scrub before counting so a degenerate continuation (a model that has
+		// fallen into a repetition loop) contributes zero new entities and the
+		// added==0 check below breaks the loop instead of feeding it back.
+		scrubEntityResult(more.Result, maxChars, maxWords, minRatio)
 		added := 0
 		for _, e := range more.Result.Entities {
 			k := entityKey(e)
@@ -416,4 +422,35 @@ func relationKey(r ExtractedRelation) string {
 		return ""
 	}
 	return s + "\x00" + strings.ToLower(strings.TrimSpace(r.Relation)) + "\x00" + t
+}
+
+// scrubEntityResult drops entities whose name is degenerate and relationships
+// whose source or target name is degenerate, in place. A degenerate endpoint and
+// its entity fail the same predicate, so dropping such relationships also stops
+// the worker from re-creating the garbage name as a stub from the relationship.
+func scrubEntityResult(res *EntityExtractionResult, maxChars, maxWords int, minRatio float64) {
+	if res == nil {
+		return
+	}
+	if len(res.Entities) > 0 {
+		kept := res.Entities[:0]
+		for _, e := range res.Entities {
+			if IsDegenerateEntityName(e.Name, maxChars, maxWords, minRatio) {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		res.Entities = kept
+	}
+	if len(res.Relationships) > 0 {
+		kept := res.Relationships[:0]
+		for _, r := range res.Relationships {
+			if IsDegenerateEntityName(r.Source, maxChars, maxWords, minRatio) ||
+				IsDegenerateEntityName(r.Target, maxChars, maxWords, minRatio) {
+				continue
+			}
+			kept = append(kept, r)
+		}
+		res.Relationships = kept
+	}
 }

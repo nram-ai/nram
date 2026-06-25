@@ -411,10 +411,22 @@ const (
 	SettingExtractionChunkOverlapTokens    = "enrichment.extraction.chunk_overlap_tokens"
 	SettingExtractionContinuationMaxPasses = "enrichment.extraction.continuation_max_passes"
 
+	// Entity-name guard: reject an extracted entity whose name is degenerate
+	// (a wall of text, a whole sentence, or a repetition loop) before it is
+	// embedded or persisted. Each knob disables its check when set to 0.
+	SettingExtractionEntityNameMaxChars             = "enrichment.extraction.entity_name_max_chars"
+	SettingExtractionEntityNameMaxWords             = "enrichment.extraction.entity_name_max_words"
+	SettingExtractionEntityNameMinDistinctWordRatio = "enrichment.extraction.entity_name_min_distinct_word_ratio"
+
 	// Dreaming worker tuning beyond what the existing dreaming.* keys cover.
 	SettingDreamContradictionNeighbors = "dreaming.contradiction.neighbors_per_anchor"
 	SettingDreamEntityMergeThreshold   = "dreaming.entity_merge.cosine_threshold"
 	SettingDreamSchedulerPollSeconds   = "dreaming.scheduler.poll_interval_seconds"
+
+	// Entity-name hygiene sweep: during the entity-dedup phase, delete any
+	// entity whose name is degenerate by the same predicate the write-path
+	// guard uses, so a straggler created before the guard self-cleans.
+	SettingDreamEntityHygieneEnabled = "dreaming.entity_hygiene_enabled"
 
 	// Stuck-cycle detection and recovery. The runner ticks heartbeat_at every
 	// HeartbeatInterval while a phase is executing; the admin UI surfaces
@@ -1149,6 +1161,12 @@ var settingDefaults = map[string]string{
 	SettingExtractionChunkOverlapTokens:    "200",
 	SettingExtractionContinuationMaxPasses: "2",
 
+	SettingExtractionEntityNameMaxChars:             "120",
+	SettingExtractionEntityNameMaxWords:             "12",
+	SettingExtractionEntityNameMinDistinctWordRatio: "0.5",
+
+	SettingDreamEntityHygieneEnabled: "true",
+
 	SettingDreamContradictionNeighbors: "1",
 	SettingDreamEntityMergeThreshold:   "0.92",
 	SettingDreamSchedulerPollSeconds:   "30",
@@ -1572,6 +1590,22 @@ func (s *SettingsService) ResolveBoolWithDefault(ctx context.Context, key, scope
 		panic("settings: ResolveBoolWithDefault called for key with no registered default: " + key)
 	}
 	return boolish(def)
+}
+
+// ExtractEntityNameLimits resolves the three entity-name guard thresholds in one
+// call. A zero value disables the corresponding check (see
+// IsDegenerateEntityName). A nil receiver returns the registered defaults so the
+// guard still applies when settings are unavailable.
+func (s *SettingsService) ExtractEntityNameLimits(ctx context.Context) (maxChars, maxWords int, minRatio float64) {
+	if s == nil {
+		return GetDefaultInt(SettingExtractionEntityNameMaxChars),
+			GetDefaultInt(SettingExtractionEntityNameMaxWords),
+			GetDefaultFloat(SettingExtractionEntityNameMinDistinctWordRatio)
+	}
+	maxChars = s.ResolveIntWithDefault(ctx, SettingExtractionEntityNameMaxChars, "global")
+	maxWords = s.ResolveIntWithDefault(ctx, SettingExtractionEntityNameMaxWords, "global")
+	minRatio = s.ResolveFloatWithDefault(ctx, SettingExtractionEntityNameMinDistinctWordRatio, "global")
+	return
 }
 
 // ResolveIntWithDefault resolves an int setting, falling back to the value

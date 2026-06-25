@@ -1000,6 +1000,24 @@ func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([
 	return scanReturnedUUIDs(rows, "entity delete orphaned")
 }
 
+// DeleteByIDs deletes the named entities and returns the IDs actually removed.
+// The entity table's foreign keys are ON DELETE CASCADE, so each removed row
+// also drops its entity vectors, relationships, and aliases. A nil or empty
+// slice is a no-op.
+func (r *EntityRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders, args := uuidInPlaceholders(r.db, ids, 1)
+	query := `DELETE FROM entities WHERE id IN (` + strings.Join(placeholders, ",") + `) RETURNING id`
+	rows, err := r.db.WriteQuery(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entity delete by ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanReturnedUUIDs(rows, "entity delete by ids")
+}
+
 // RecomputeMentionCounts (re)derives mention_count as the number of distinct
 // live (non-deleted, non-superseded) memories that source an edge touching the
 // entity. This REDEFINES mention_count as a live-edge-provenance count rather

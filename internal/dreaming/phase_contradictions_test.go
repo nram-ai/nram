@@ -70,7 +70,8 @@ func (stubSettings) ResolveFloat(_ context.Context, _ string, _ string) (float64
 func (stubSettings) ResolveInt(_ context.Context, _ string, _ string) (int, error) {
 	return 0, nil
 }
-func (stubSettings) ResolveBool(_ context.Context, _ string, _ string) bool { return false }
+func (stubSettings) ResolveBool(_ context.Context, _ string, _ string) bool     { return false }
+func (stubSettings) ResolveBoolWithDefault(_ context.Context, _, _ string) bool { return false }
 
 // ResolveIntWithDefault returns the registered default for the few keys this
 // test stub is asked about. Keep the values in sync with service.settingDefaults

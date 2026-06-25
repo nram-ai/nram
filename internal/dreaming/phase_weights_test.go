@@ -166,6 +166,9 @@ func (f *fakeEntityReader) FindBySimilarity(_ context.Context, _ uuid.UUID, _, _
 type noopEntityWriter struct{}
 
 func (noopEntityWriter) Upsert(_ context.Context, _ *model.Entity) error { return nil }
+func (noopEntityWriter) DeleteByIDs(_ context.Context, _ []uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 

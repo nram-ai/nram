@@ -63,6 +63,7 @@ const DreamSource = "dream"
 // DreamOp constants define the operation types logged during dream cycles.
 const (
 	DreamOpEntityMerged          = "entity_merged"
+	DreamOpEntityDeleted         = "entity_deleted"
 	DreamOpRelationshipCreated   = "relationship_created"
 	DreamOpRelationshipUpdated   = "relationship_updated"
 	DreamOpEntityUpdated         = "entity_updated"
