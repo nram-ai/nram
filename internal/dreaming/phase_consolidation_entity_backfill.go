@@ -25,8 +25,10 @@ import (
 // memories). Enqueue dedups against the partial unique index
 // idx_enrichment_queue_pending_memory, so re-running across cycles while the
 // worker drains never piles up duplicate pending jobs, and the candidate query
-// drops a dream once it has a sourced relationship, so a completed backfill
-// stops re-selecting it.
+// drops a dream once entity extraction has run (the entity_extracted_at stamp;
+// see ListDreamEntityBackfillCandidates), so a completed backfill stops
+// re-selecting it even for an entity-only synthesis that produced no
+// relationships.
 //
 // It runs after the multi-vector backfill phase and BEFORE consolidation, the
 // same placement as the augmentation backfill: it sweeps dreams stranded by

@@ -277,6 +277,11 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 		t.Fatalf("query relationships: %v", err)
 	}
 
+	stamped, err := memoryRepo.GetByID(ctx, dreamMem.ID, ns.ID)
+	if err != nil {
+		t.Fatalf("reload dream for entity_extracted_at: %v", err)
+	}
+
 	if consolidation {
 		// 4a. Entity extraction MUST run for a consolidation synthesis and
 		//     persist graph rows sourced from the dream.
@@ -289,10 +294,18 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 		if !hasRels {
 			t.Errorf("no relationship rows sourced from the consolidation dream; entity extraction must persist relationships.")
 		}
+		// entity_extracted_at MUST be stamped so the backfill candidate query
+		// drops this dream and never re-extracts it (the convergence gate).
+		if stamped.EntityExtractedAt == nil {
+			t.Errorf("entity_extracted_at was not stamped after entity extraction ran on a consolidation dream; the backfill would re-extract it every cycle.")
+		}
 	} else {
 		// 4b. A non-consolidation dream extracts nothing.
 		if calls := entityCalls.Load(); calls != 0 {
 			t.Errorf("entity extraction LLM was called %d time(s) for a non-consolidation dream; contract violated. Likely cause: skipEntity predicate lost its isDream/Enriched clause.", calls)
+		}
+		if stamped.EntityExtractedAt != nil {
+			t.Errorf("entity_extracted_at was stamped for a non-consolidation dream that never ran entity extraction.")
 		}
 		if len(entities) != 0 {
 			names := make([]string, 0, len(entities))

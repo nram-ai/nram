@@ -51,6 +51,14 @@ type Memory struct {
 	FacetedAt  *time.Time `json:"faceted_at,omitempty"`
 	FacetCount *int       `json:"facet_count,omitempty"`
 
+	// EntityExtractedAt records when entity extraction last ran for this memory
+	// (NULL = never). Stamped at enrichment finalize whenever extraction was
+	// performed, even when it produced zero entities/relationships. The
+	// consolidation-entity backfill candidate query uses EntityExtractedAt IS
+	// NULL so an entity-only synthesis (entities but no relationships) stops
+	// being re-selected once extraction has run.
+	EntityExtractedAt *time.Time `json:"entity_extracted_at,omitempty"`
+
 	// Derived from lineage table at read time; not persisted in memories table.
 	ParentID *uuid.UUID `json:"parent_id,omitempty"`
 

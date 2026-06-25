@@ -813,7 +813,7 @@ func TestEnrichmentQueueRepo_RetryAllFailedScoped_DedupAndAttempts(t *testing.T)
 		if err := repo.Fail(ctx, newer.ID, "", "boom-new"); err != nil {
 			t.Fatalf("fail A newer: %v", err)
 		}
-		if err := memRepo.MarkEnriched(ctx, memA, nsA, nil, nil, nil, nil); err != nil {
+		if err := memRepo.MarkEnriched(ctx, memA, nsA, nil, nil, nil, nil, nil); err != nil {
 			t.Fatalf("mark A enriched: %v", err)
 		}
 
@@ -832,7 +832,7 @@ func TestEnrichmentQueueRepo_RetryAllFailedScoped_DedupAndAttempts(t *testing.T)
 		if _, err := repo.Enqueue(ctx, pendingB); err != nil {
 			t.Fatalf("enqueue B pending: %v", err)
 		}
-		if err := memRepo.MarkEnriched(ctx, memB, nsB, nil, nil, nil, nil); err != nil {
+		if err := memRepo.MarkEnriched(ctx, memB, nsB, nil, nil, nil, nil, nil); err != nil {
 			t.Fatalf("mark B enriched: %v", err)
 		}
 

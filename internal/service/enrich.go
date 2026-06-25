@@ -477,9 +477,9 @@ func (s *EnrichService) BackfillMultiVector(ctx context.Context, req *BackfillMu
 // rows only, never memories). The on-demand counterpart to the
 // ConsolidationEntityBackfill dream phase; both select the same candidates and
 // enqueue the same job shape. Enqueue dedups against the pending-job unique
-// index, and a dream drops out of the candidate set once it has a sourced
-// relationship (see ListDreamEntityBackfillCandidates for the one edge — an
-// entity-only synthesis — where that gate does not converge).
+// index, and a dream drops out of the candidate set once entity extraction has
+// run (the entity_extracted_at stamp), so the backfill converges even for an
+// entity-only synthesis that produces no relationships.
 func (s *EnrichService) BackfillConsolidationEntities(ctx context.Context, req *BackfillConsolidationEntitiesRequest) (*BackfillConsolidationEntitiesResponse, error) {
 	start := time.Now()
 	if s.dreamEntityLister == nil {

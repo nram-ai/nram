@@ -856,6 +856,7 @@ func memoryColumnsAliased(alias string) string {
 		"superseded_by", "superseded_at", "enriched", "metadata", "content_hash",
 		"created_at", "updated_at", "deleted_at", "purge_after",
 		"augmented_queries", "augmented_embedding_at", "origin", "faceted_at", "facet_count",
+		"entity_extracted_at",
 	}
 	parts := make([]string, len(cols))
 	for i, c := range cols {
@@ -1032,7 +1033,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 		var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 		var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 		var enrichedBool bool
-		var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr sql.NullString
+		var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, entityExtractedAtStr sql.NullString
 		var facetCountVal sql.NullInt64
 		var parentIDStr string
 
@@ -1042,6 +1043,7 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 			&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 			&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 			&augmentedQueriesStr, &augmentedEmbeddingAtStr, &originStr, &facetedAtStr, &facetCountVal,
+			&entityExtractedAtStr,
 			&parentIDStr,
 		)
 		if err != nil {
@@ -1052,7 +1054,8 @@ func (r *MemoryRepo) FindChildrenByParents(ctx context.Context, namespaceID uuid
 			createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 			expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
 			enrichedBool, deletedAtStr, purgeAfterStr,
-			augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal)
+			augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal,
+			entityExtractedAtStr)
 		if err != nil {
 			return nil, err
 		}
@@ -1361,18 +1364,21 @@ ORDER BY m.id ASC`
 // still lack entity-graph coverage: origin=dream, live (not deleted/superseded),
 // carrying a non-empty source_memory_ids metadata array (the discriminator that
 // excludes project-description and other dream types — see
-// model.Memory.IsConsolidationDream), and with no relationship yet sourced by
-// the memory. The "no relationship sourced by m" predicate is the extract-once
-// gate: it mirrors the worker's HasBySourceMemory probe, so a dream drops out of
-// the candidate set once it has produced a sourced relationship. Caveat: a
-// synthesis that extracts entities but NO relationships (e.g. a single-entity
-// dream, or one whose relations the vocabulary classifier drops) never gains a
-// sourced relationship and so stays a candidate, re-extracting each cycle
-// without persisting anything new. Tolerated for now (rare, and the upsert is
-// cheap/idempotent); a memory-level "entity extraction ran" stamp would close it
-// (see the consolidation-entity-coverage follow-up). Drives both the on-demand
-// admin backfill and the ConsolidationEntityBackfill dream phase. Scoped to
-// namespaces when non-empty; ordered by id for stable paging.
+// model.Memory.IsConsolidationDream). A dream is a candidate only if it has
+// NEITHER an entity_extracted_at stamp NOR a relationship sourced by it:
+//   - entity_extracted_at IS NULL: entity extraction has never run for this
+//     memory. The worker stamps it at finalize whenever extraction is performed,
+//     even when it produced zero entities/relationships, so an entity-only
+//     synthesis (entities but no relationships) drops out after one extraction
+//     instead of re-extracting every cycle. This is the convergence gate.
+//   - NOT EXISTS (relationship sourced by m): excludes dreams whose coverage
+//     predates the stamp column (e.g. the manual-runbook recoveries), which have
+//     relationships but a NULL stamp; without this they would be re-extracted
+//     once after the column is added.
+//
+// Drives both the on-demand admin backfill and the ConsolidationEntityBackfill
+// dream phase. Scoped to namespaces when non-empty; ordered by id for stable
+// paging.
 func (r *MemoryRepo) ListDreamEntityBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
 	pg := r.db.Backend() == BackendPostgres
 	args := []any{}
@@ -1411,6 +1417,7 @@ FROM memories m
 WHERE m.origin = ` + dreamPH + `
   AND m.deleted_at IS NULL
   AND m.superseded_by IS NULL
+  AND m.entity_extracted_at IS NULL
   AND ` + sourceIDsClause + `
   AND NOT EXISTS (
     SELECT 1 FROM relationships rel WHERE rel.source_memory = m.id
@@ -1826,6 +1833,7 @@ func (r *MemoryRepo) MarkEnriched(
 	metadata json.RawMessage,
 	augmentedQueries []string,
 	augmentedEmbeddingAt *time.Time,
+	entityExtractedAt *time.Time,
 ) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	pg := r.db.Backend() == BackendPostgres
@@ -1851,6 +1859,10 @@ func (r *MemoryRepo) MarkEnriched(
 	if augmentedEmbeddingAt != nil {
 		setClauses = append(setClauses, "augmented_embedding_at = ")
 		args = append(args, augmentedEmbeddingAt.UTC().Format(time.RFC3339))
+	}
+	if entityExtractedAt != nil {
+		setClauses = append(setClauses, "entity_extracted_at = ")
+		args = append(args, entityExtractedAt.UTC().Format(time.RFC3339))
 	}
 	setClauses = append(setClauses, "updated_at = ")
 	args = append(args, now)
@@ -2554,7 +2566,7 @@ func (r *MemoryRepo) SearchByText(ctx context.Context, namespaceID uuid.UUID, qu
 const selectMemoryColumns = `SELECT id, namespace_id, content, embedding_dim, source, tags,
 	confidence, importance, access_count, last_accessed, expires_at, superseded_by,
 	superseded_at, enriched, metadata, content_hash, created_at, updated_at, deleted_at, purge_after,
-	augmented_queries, augmented_embedding_at, origin, faceted_at, facet_count`
+	augmented_queries, augmented_embedding_at, origin, faceted_at, facet_count, entity_extracted_at`
 
 func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var mem model.Memory
@@ -2566,7 +2578,7 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
-	var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr sql.NullString
+	var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, entityExtractedAtStr sql.NullString
 	var facetCountVal sql.NullInt64
 
 	err := row.Scan(
@@ -2575,6 +2587,7 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 		&augmentedQueriesStr, &augmentedEmbeddingAtStr, &originStr, &facetedAtStr, &facetCountVal,
+		&entityExtractedAtStr,
 	)
 	if err != nil {
 		return nil, err
@@ -2584,7 +2597,8 @@ func (r *MemoryRepo) scanMemory(row *sql.Row) (*model.Memory, error) {
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
 		enrichedBool, deletedAtStr, purgeAfterStr,
-		augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal)
+		augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal,
+		entityExtractedAtStr)
 }
 
 func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
@@ -2597,7 +2611,7 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 	var lastAccessedStr, expiresAtStr, deletedAtStr, purgeAfterStr sql.NullString
 	var supersededByStr, supersededAtStr, contentHashStr sql.NullString
 	var enrichedBool bool
-	var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr sql.NullString
+	var augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, entityExtractedAtStr sql.NullString
 	var facetCountVal sql.NullInt64
 
 	err := rows.Scan(
@@ -2606,6 +2620,7 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 		&expiresAtStr, &supersededByStr, &supersededAtStr, &enrichedBool, &metadataStr,
 		&contentHashStr, &createdAtStr, &updatedAtStr, &deletedAtStr, &purgeAfterStr,
 		&augmentedQueriesStr, &augmentedEmbeddingAtStr, &originStr, &facetedAtStr, &facetCountVal,
+		&entityExtractedAtStr,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("memory scan rows: %w", err)
@@ -2615,7 +2630,8 @@ func (r *MemoryRepo) scanMemoryFromRows(rows *sql.Rows) (*model.Memory, error) {
 		createdAtStr, updatedAtStr, embeddingDim, source, lastAccessedStr,
 		expiresAtStr, supersededByStr, supersededAtStr, contentHashStr,
 		enrichedBool, deletedAtStr, purgeAfterStr,
-		augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal)
+		augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr, facetCountVal,
+		entityExtractedAtStr)
 }
 
 func (r *MemoryRepo) populateMemory(
@@ -2627,6 +2643,7 @@ func (r *MemoryRepo) populateMemory(
 	deletedAtStr, purgeAfterStr sql.NullString,
 	augmentedQueriesStr, augmentedEmbeddingAtStr, originStr, facetedAtStr sql.NullString,
 	facetCountVal sql.NullInt64,
+	entityExtractedAtStr sql.NullString,
 ) (*model.Memory, error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -2756,6 +2773,14 @@ func (r *MemoryRepo) populateMemory(
 	if facetCountVal.Valid {
 		n := int(facetCountVal.Int64)
 		mem.FacetCount = &n
+	}
+
+	if entityExtractedAtStr.Valid && entityExtractedAtStr.String != "" {
+		t, err := time.Parse(time.RFC3339, entityExtractedAtStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("memory parse entity_extracted_at: %w", err)
+		}
+		mem.EntityExtractedAt = &t
 	}
 
 	return mem, nil

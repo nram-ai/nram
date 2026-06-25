@@ -101,6 +101,7 @@ type enrichedMark struct {
 	metadata             json.RawMessage
 	augmentedQueries     []string
 	augmentedEmbeddingAt *time.Time
+	entityExtractedAt    *time.Time
 }
 
 func (m *mockMemoryUpdater) Update(_ context.Context, mem *model.Memory) error {
@@ -134,7 +135,7 @@ func (m *mockMemoryUpdater) UpdateFacetState(_ context.Context, id, namespaceID 
 	return nil
 }
 
-func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error {
+func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time, entityExtractedAt *time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -153,6 +154,11 @@ func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid
 		t := *augmentedEmbeddingAt
 		atCopy = &t
 	}
+	var entCopy *time.Time
+	if entityExtractedAt != nil {
+		t := *entityExtractedAt
+		entCopy = &t
+	}
 	m.enrichedMarks = append(m.enrichedMarks, enrichedMark{
 		id:                   id,
 		namespaceID:          namespaceID,
@@ -160,6 +166,7 @@ func (m *mockMemoryUpdater) MarkEnriched(_ context.Context, id, namespaceID uuid
 		metadata:             metadata,
 		augmentedQueries:     queriesCopy,
 		augmentedEmbeddingAt: atCopy,
+		entityExtractedAt:    entCopy,
 	})
 	return nil
 }
@@ -2003,7 +2010,7 @@ func (s *statefulMemoryStore) UpdateFacetState(_ context.Context, _, _ uuid.UUID
 	return nil
 }
 
-func (s *statefulMemoryStore) MarkEnriched(_ context.Context, _, _ uuid.UUID, _ *int, _ json.RawMessage, _ []string, _ *time.Time) error {
+func (s *statefulMemoryStore) MarkEnriched(_ context.Context, _, _ uuid.UUID, _ *int, _ json.RawMessage, _ []string, _ *time.Time, _ *time.Time) error {
 	return nil
 }
 

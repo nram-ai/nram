@@ -179,7 +179,7 @@ type MemoryUpdater interface {
 	// memory from the facet backfill candidate set and to surface the count on
 	// the enrichment monitor.
 	UpdateFacetState(ctx context.Context, id, namespaceID uuid.UUID, facetCount int) error
-	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time) error
+	MarkEnriched(ctx context.Context, id, namespaceID uuid.UUID, embeddingDim *int, metadata json.RawMessage, augmentedQueries []string, augmentedEmbeddingAt *time.Time, entityExtractedAt *time.Time) error
 	MarkSupersededBy(ctx context.Context, oldID, namespaceID, newID uuid.UUID) error
 }
 
@@ -2184,9 +2184,19 @@ func (wp *WorkerPool) finalizeJob(ctx context.Context, p *pendingJob) error {
 		augmentedQueries = p.augmentedQueries
 		augmentedEmbeddingAt = &now
 	}
+	// Stamp entity_extracted_at whenever entity extraction was performed this
+	// job (p.entityUsage is non-nil iff the extraction call ran, even when it
+	// produced zero entities/relationships). This is the convergence signal for
+	// the consolidation-entity backfill: an entity-only synthesis gets stamped
+	// and drops out of ListDreamEntityBackfillCandidates instead of being
+	// re-extracted every cycle.
+	var entityExtractedAt *time.Time
+	if p.entityUsage != nil {
+		entityExtractedAt = &now
+	}
 	p.mem.Enriched = true
 	p.mem.UpdatedAt = now
-	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata, augmentedQueries, augmentedEmbeddingAt); err != nil {
+	if err := wp.memUpdater.MarkEnriched(ctx, p.mem.ID, p.mem.NamespaceID, p.mem.EmbeddingDim, stampedMetadata, augmentedQueries, augmentedEmbeddingAt, entityExtractedAt); err != nil {
 		if failErr := wp.queue.Fail(ctx, p.job.ID, p.workerID, fmt.Sprintf("update memory enriched: %v", err)); failErr != nil {
 			logClaimLostOr(failErr, "enrichment: fail-mark after memory update", "job", p.job.ID, "worker", p.workerID)
 		}

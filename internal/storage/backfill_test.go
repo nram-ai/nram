@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -396,6 +399,126 @@ func TestEnqueueAllLiveMemories_EnqueuesEveryLiveMemory(t *testing.T) {
 		}
 		if _, ok := got[memD.ID]; ok {
 			t.Errorf("memD soft-deleted must not be enqueued, got %d jobs", got[memD.ID])
+		}
+	})
+}
+
+// TestListDreamEntityBackfillCandidates pins the candidate gate that drives the
+// consolidation-entity backfill: a consolidation dream is a candidate only when
+// it has NEITHER an entity_extracted_at stamp NOR a relationship sourced by it.
+// The stamp is the convergence gate — without it an entity-only synthesis
+// (entities but no relationships) would be re-selected and re-extracted forever.
+func TestListDreamEntityBackfillCandidates(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		memRepo := NewMemoryRepo(db)
+		entityRepo := NewEntityRepo(db)
+		relRepo := NewRelationshipRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		// newConsolidationDream creates an origin=dream memory carrying a
+		// non-empty source_memory_ids metadata array (the discriminator).
+		newConsolidationDream := func(t *testing.T) *model.Memory {
+			t.Helper()
+			m := newTestMemory(nsID)
+			m.Origin = model.OriginDream
+			m.Metadata = json.RawMessage(fmt.Sprintf(`{"%s":["%s"]}`, model.DreamMetaSourceMemoryIDs, uuid.New().String()))
+			if err := memRepo.Create(ctx, m); err != nil {
+				t.Fatalf("create consolidation dream: %v", err)
+			}
+			return m
+		}
+
+		// a. Uncovered consolidation dream: NULL stamp, no relationship → the
+		//    only memory that should be selected.
+		uncovered := newConsolidationDream(t)
+
+		// b. Stamped dream: entity extraction has run (entity_extracted_at set)
+		//    but produced no relationship — the entity-only case. Must NOT be
+		//    selected; this is what closes the re-extraction loop.
+		stampedOnly := newConsolidationDream(t)
+		now := time.Now().UTC()
+		if err := memRepo.MarkEnriched(ctx, stampedOnly.ID, nsID, nil, nil, nil, nil, &now); err != nil {
+			t.Fatalf("stamp entity_extracted_at: %v", err)
+		}
+
+		// c. Covered-by-relationship dream: NULL stamp but a relationship is
+		//    sourced by it (e.g. a manual-runbook recovery predating the column).
+		//    Must NOT be selected.
+		withRel := newConsolidationDream(t)
+		entA := &model.Entity{NamespaceID: nsID, Name: "Alice", Canonical: "alice", EntityType: "person"}
+		if err := entityRepo.Upsert(ctx, entA); err != nil {
+			t.Fatalf("upsert entity A: %v", err)
+		}
+		entB := &model.Entity{NamespaceID: nsID, Name: "Acme", Canonical: "acme", EntityType: "organization"}
+		if err := entityRepo.Upsert(ctx, entB); err != nil {
+			t.Fatalf("upsert entity B: %v", err)
+		}
+		relMemID := withRel.ID
+		if err := relRepo.Create(ctx, &model.Relationship{
+			ID:           uuid.New(),
+			NamespaceID:  nsID,
+			SourceID:     entA.ID,
+			TargetID:     entB.ID,
+			Relation:     "member of",
+			Weight:       1,
+			SourceMemory: &relMemID,
+			ValidFrom:    now,
+			CreatedAt:    now,
+		}); err != nil {
+			t.Fatalf("create relationship: %v", err)
+		}
+
+		// d. Non-consolidation dream: origin=dream but NO source_memory_ids.
+		//    Excluded by the discriminator.
+		plainDream := newTestMemory(nsID)
+		plainDream.Origin = model.OriginDream
+		plainDream.Metadata = json.RawMessage(`{"nram_kind":"project_description"}`)
+		if err := memRepo.Create(ctx, plainDream); err != nil {
+			t.Fatalf("create non-consolidation dream: %v", err)
+		}
+
+		// e. Superseded consolidation dream: live filter excludes it.
+		superseded := newConsolidationDream(t)
+		survivor := newConsolidationDream(t) // also a valid candidate; see assertion
+		if err := memRepo.MarkSupersededBy(ctx, superseded.ID, nsID, survivor.ID); err != nil {
+			t.Fatalf("supersede dream: %v", err)
+		}
+
+		got, err := memRepo.ListDreamEntityBackfillCandidates(ctx, []uuid.UUID{nsID}, 0)
+		if err != nil {
+			t.Fatalf("ListDreamEntityBackfillCandidates: %v", err)
+		}
+
+		gotIDs := make(map[uuid.UUID]bool, len(got))
+		for _, c := range got {
+			gotIDs[c.ID] = true
+		}
+
+		// uncovered and survivor are the two valid candidates; everything else
+		// is excluded by exactly one predicate.
+		want := map[uuid.UUID]string{
+			uncovered.ID: "uncovered",
+			survivor.ID:  "survivor",
+		}
+		exclude := map[uuid.UUID]string{
+			stampedOnly.ID: "stamped (entity_extracted_at set, no rel)",
+			withRel.ID:     "covered by relationship",
+			plainDream.ID:  "non-consolidation dream",
+			superseded.ID:  "superseded",
+		}
+		for id, label := range want {
+			if !gotIDs[id] {
+				t.Errorf("expected %s dream %s to be a candidate, but it was excluded", label, id)
+			}
+		}
+		for id, label := range exclude {
+			if gotIDs[id] {
+				t.Errorf("dream %s (%s) must NOT be a candidate, but it was selected", id, label)
+			}
+		}
+		if len(got) != len(want) {
+			t.Errorf("got %d candidates, want exactly %d (uncovered + survivor)", len(got), len(want))
 		}
 	})
 }
