@@ -109,6 +109,11 @@ var settingsGroups = []api.SettingGroup{
 				Description: "Queues the per-topic facet backfill for vectored memories that have not been faceted yet, so multi-vector recall self-drains each cycle without a manual backfill.",
 			},
 			{
+				Category:    "dreaming_consolidation_entity_backfill",
+				Label:       "Consolidation Entity Backfill",
+				Description: "Queues entity extraction for consolidation dreams that lack entity-graph coverage, so heavily-consolidated projects recover their entities each cycle without a manual backfill.",
+			},
+			{
 				Category:    "dreaming_performance",
 				Label:       "Performance",
 				Description: "How many neighbors to consider, how similar two entities must be to merge, and how often the scheduler wakes up.",

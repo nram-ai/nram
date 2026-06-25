@@ -2,6 +2,7 @@ package dreaming
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync/atomic"
@@ -32,15 +33,22 @@ import (
 //   - internal/enrichment/phase_ingestion.go (runIngestionDecision
 //     Enriched/origin early-return)
 //
-// The contract: a dream-origin memory enrolled in enrichment MUST NOT
-// produce any derivative rows that the next dream cycle could re-cluster:
+// The contract (post consolidation-erases-coverage fix): the cascade vector is
+// a NEW memory, and the only memory-creating extraction phase is FACT
+// extraction. So for EVERY dream:
 //
+//   - zero fact-extraction LLM calls
 //   - zero extracted_fact lineage children
-//   - zero entity upserts sourced from the dream memory
-//   - zero relationship rows sourced from the dream memory
+//   - no new memory rows beyond the dream itself
 //
-// Embedding and the Enriched-flag mark all run normally so the dream
-// memory becomes vector-searchable.
+// ENTITY extraction is a deliberate exception for CONSOLIDATION syntheses
+// (origin=dream WITH a source_memory_ids metadata array): they DO get entity
+// extraction (graph rows only, never memories), recovering the coverage that
+// supersession strips from their sources. Non-consolidation dreams (no
+// source_memory_ids — e.g. project-description blurbs) still extract nothing.
+//
+// Embedding and the Enriched-flag mark all run normally so the dream memory
+// becomes vector-searchable.
 //
 // The test wires the REAL EnrichmentQueueRepo + MemoryRepo + LineageRepo +
 // EntityRepo + RelationshipRepo against an in-memory SQLite DB, enqueues a
@@ -62,32 +70,35 @@ import (
 // bearing on its own.
 func TestDreamRecursionGuard_EndToEnd(t *testing.T) {
 	cases := []struct {
-		name     string
+		name string
+		// enriched is the synthesis-creation flag ConsolidationPhase sets.
 		enriched bool
+		// consolidation seeds a source_memory_ids metadata array, marking the
+		// dream a consolidation synthesis eligible for entity extraction.
+		consolidation bool
 	}{
-		// Production shape: ConsolidationPhase sets Enriched=true at
-		// synthesis-creation time. Both guards (source check and the
-		// Enriched flag) are present, so removing either alone still
-		// passes this sub-test; the COMBINATION is what protects
-		// production. The Enriched=false case below pins the source
-		// check on its own.
-		{"enriched=true (production shape)", true},
-		// Synthetic case: a dream memory with Enriched=false isolates
-		// the Origin==OriginDream clause. If that clause were removed
-		// from worker.go skipFact/skipEntity or from phase_ingestion.go
-		// early-return, this sub-test would proceed to fact extraction
-		// and fail the assertions below.
-		{"enriched=false (source-check only)", false},
+		// Production consolidation shape: ConsolidationPhase sets Enriched=true
+		// and writes source_memory_ids. Entity extraction MUST run (graph rows
+		// only), fact extraction MUST NOT, and no new memory may be created.
+		{"consolidation dream (production shape)", true, true},
+		// Non-consolidation dream (e.g. project-description blurb): origin=dream
+		// but no source_memory_ids. Nothing must be extracted. Enriched=true
+		// exercises the Enriched clause of skipEntity.
+		{"non-consolidation dream (enriched)", true, false},
+		// Same, Enriched=false, to pin that a plain dream WITHOUT the
+		// consolidation metadata never extracts entities via the isDream clause
+		// alone (independent of the Enriched flag).
+		{"non-consolidation dream (source-check only)", false, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runRecursionGuardCase(t, tc.enriched)
+			runRecursionGuardCase(t, tc.enriched, tc.consolidation)
 		})
 	}
 }
 
-func runRecursionGuardCase(t *testing.T, enriched bool) {
+func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 	ctx := context.Background()
 	db := setupRecursionGuardDB(t)
 
@@ -110,17 +121,27 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 	relRepo := storage.NewRelationshipRepo(db)
 	queueRepo := storage.NewEnrichmentQueueRepo(db)
 
-	// Seed a dream-origin synthesis memory. The enriched flag is varied
-	// across sub-cases to pin each clause of the skip predicate
-	// independently.
+	// Seed a dream-origin synthesis memory. The enriched flag and the presence
+	// of source_memory_ids metadata are varied across sub-cases to pin each
+	// branch of the skip predicate independently. A consolidation synthesis
+	// carries source_memory_ids (the entity-extraction discriminator); a
+	// non-consolidation dream does not.
+	var metadata json.RawMessage
+	if consolidation {
+		metadata, _ = json.Marshal(map[string]any{
+			model.DreamMetaCycleID:         uuid.New().String(),
+			model.DreamMetaSourceMemoryIDs: []string{uuid.New().String(), uuid.New().String()},
+		})
+	}
 	dreamMem := &model.Memory{
 		ID:          uuid.New(),
 		NamespaceID: ns.ID,
-		Content:     "Synthesized dream content. Alice works at Acme.",
+		Content:     "Synthesized dream content. Alice is a member of Acme.",
 		Origin:      model.OriginDream,
 		Confidence:  0.5,
 		Importance:  0.5,
 		Enriched:    enriched,
+		Metadata:    metadata,
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
@@ -157,10 +178,15 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		counter: &factCalls,
 		body:    `{"facts":[{"content":"Alice works at Acme.","tags":[]}]}`,
 	}
+	// Two canonical-typed entities plus a canonical relation ("member of") so the
+	// vocabulary classifier hits its static map and never falls to the embed
+	// path, keeping persistence deterministic. For a consolidation dream this
+	// MUST produce entity + relationship rows; for any other dream the entity
+	// LLM is never called, so the body is irrelevant.
 	entityLLM := &recursionGuardLLM{
 		name:    "guard-entity-mock",
 		counter: &entityCalls,
-		body:    `{"entities":[{"name":"Alice","kind":"person"}],"relationships":[]}`,
+		body:    `{"entities":[{"name":"Alice","type":"person","properties":{}},{"name":"Acme","type":"organization","properties":{}}],"relationships":[{"source":"Alice","target":"Acme","relation":"member of","temporal":"current"}]}`,
 	}
 	// Query augmentation runs on dream memories by design (only fact/entity
 	// extraction skip them), so the worker calls this provider. It has its own
@@ -214,19 +240,15 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		t.Fatalf("worker pool did not drain: %v", err)
 	}
 
-	// --- Assertions: every contract guarantee ---
+	// --- Assertions: the contract ---
 
-	// 1. Fact LLM was never invoked.
+	// 1. Fact LLM is NEVER invoked for any dream (facts spawn child memories,
+	//    the only dream-of-dream cascade vector).
 	if calls := factCalls.Load(); calls != 0 {
 		t.Errorf("fact extraction LLM was called %d time(s) for a dream memory; contract violated. Likely cause: skipFact predicate in enrichment/worker.go lost its isDream clause.", calls)
 	}
 
-	// 2. Entity LLM was never invoked.
-	if calls := entityCalls.Load(); calls != 0 {
-		t.Errorf("entity extraction LLM was called %d time(s) for a dream memory; contract violated. Likely cause: skipEntity predicate in enrichment/worker.go lost its isDream clause.", calls)
-	}
-
-	// 3. No extracted_fact lineage children point at the dream memory.
+	// 2. No extracted_fact lineage children point at the dream memory.
 	hasFactChildren, err := lineageRepo.HasExtractedFactChildren(ctx, ns.ID, dreamMem.ID)
 	if err != nil {
 		t.Fatalf("query extracted-fact lineage: %v", err)
@@ -235,26 +257,53 @@ func runRecursionGuardCase(t *testing.T, enriched bool) {
 		t.Errorf("memory_lineage contains extracted_fact rows whose parent is the dream memory; contract violated.")
 	}
 
-	// 4. No new entity rows were created in the namespace.
+	// 3. No new memory rows beyond the dream itself. This is the real cascade
+	//    guard: entity extraction creates graph rows, never memories, so the
+	//    next dream cycle has nothing new to re-cluster.
+	mems, err := memoryRepo.ListByNamespace(ctx, ns.ID, 100, 0)
+	if err != nil {
+		t.Fatalf("list memories: %v", err)
+	}
+	if len(mems) != 1 {
+		t.Errorf("expected exactly 1 memory (the dream) after enrichment; got %d. Contract violated: a derivative memory was created.", len(mems))
+	}
+
 	entities, err := entityRepo.ListByNamespace(ctx, ns.ID)
 	if err != nil {
 		t.Fatalf("list entities: %v", err)
 	}
-	if len(entities) != 0 {
-		names := make([]string, 0, len(entities))
-		for _, e := range entities {
-			names = append(names, e.Name)
-		}
-		t.Errorf("entity table is not empty after processing a dream memory; got %d entities: %v. Contract violated: entity extraction must skip.", len(entities), names)
-	}
-
-	// 5. No relationship rows sourced from the dream memory.
 	hasRels, err := relRepo.HasBySourceMemory(ctx, ns.ID, dreamMem.ID)
 	if err != nil {
 		t.Fatalf("query relationships: %v", err)
 	}
-	if hasRels {
-		t.Errorf("relationship table has rows sourced from the dream memory; contract violated.")
+
+	if consolidation {
+		// 4a. Entity extraction MUST run for a consolidation synthesis and
+		//     persist graph rows sourced from the dream.
+		if calls := entityCalls.Load(); calls == 0 {
+			t.Errorf("entity extraction LLM was NOT called for a consolidation dream; the consolidation-erases-coverage fix requires it to run.")
+		}
+		if len(entities) == 0 {
+			t.Errorf("entity table is empty after processing a consolidation dream; entity extraction must persist entities.")
+		}
+		if !hasRels {
+			t.Errorf("no relationship rows sourced from the consolidation dream; entity extraction must persist relationships.")
+		}
+	} else {
+		// 4b. A non-consolidation dream extracts nothing.
+		if calls := entityCalls.Load(); calls != 0 {
+			t.Errorf("entity extraction LLM was called %d time(s) for a non-consolidation dream; contract violated. Likely cause: skipEntity predicate lost its isDream/Enriched clause.", calls)
+		}
+		if len(entities) != 0 {
+			names := make([]string, 0, len(entities))
+			for _, e := range entities {
+				names = append(names, e.Name)
+			}
+			t.Errorf("entity table is not empty after a non-consolidation dream; got %d entities: %v.", len(entities), names)
+		}
+		if hasRels {
+			t.Errorf("relationship table has rows sourced from a non-consolidation dream; contract violated.")
+		}
 	}
 
 	// 6. Sanity: the dream memory got embedded. Either embedding_dim is

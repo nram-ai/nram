@@ -1141,25 +1141,40 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// than skip on a transient DB hiccup.
 	//
 	// DREAM-RECURSION GUARD: worker-side enforcement of the dream-of-dream
-	// cascade prevention contract. isDream is the explicit signal so the
-	// guard is readable here regardless of whether Enriched ever decouples
-	// from "skip memory-creating phases" in the future. Both clauses are
-	// load-bearing; either alone is sufficient. Symmetric sites:
+	// cascade prevention contract. The vector that could feed a later dream
+	// cycle is a *new memory*, and the only memory-creating extraction phase
+	// is FACT extraction (it spawns extracted_fact child memories). That phase
+	// stays hard-off for every dream: skipFact keeps its isDream clause.
+	//
+	// ENTITY extraction is a deliberate exception for consolidation syntheses
+	// (the consolidation-erases-coverage fix). Entities/relationships/mentions
+	// are graph rows, never memories, so extracting them cannot feed the
+	// consolidation cluster loop — the dream-of-dream guard is untouched. We
+	// scope it to consolidation dreams only (IsConsolidationDream: origin=dream
+	// AND source_memory_ids metadata present) so project-description and any
+	// other dream type stay fully skipped, and rely on the HasBySourceMemory
+	// probe below to keep it extract-once (idempotent against re-enqueue).
+	// Both fact clauses (isDream, Enriched) remain load-bearing. Symmetric
+	// sites:
 	//
 	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
-	//       "DREAM-RECURSION GUARD: first prong")
+	//       "DREAM-RECURSION GUARD: first prong"; pre-stamps fact_extraction)
 	//   - internal/dreaming/phase_consolidation.go (consolidate() candidate
 	//       filter, "DREAM-RECURSION GUARD: second prong")
 	//   - internal/enrichment/phase_ingestion.go (runIngestionDecision
-	//       Enriched/origin early-return)
+	//       Enriched/origin early-return; still skips all dreams)
 	//
-	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go
-	// (TestDreamRecursionGuard_EndToEnd, table-driven across Enriched=true
-	// AND Enriched=false to pin each clause independently).
+	// Contract enforcer: internal/dreaming/dream_recursion_guard_test.go.
 	isDream := mem.IsDream()
+	isConsolidationDream := mem.IsConsolidationDream()
 	stepDone := stepDoneSet(job.StepsCompleted)
 	skipFact := isDream || mem.Enriched || stepDone[model.StepFactExtraction]
-	skipEntity := isDream || mem.Enriched || stepDone[model.StepEntityExtraction]
+	// A consolidation synthesis is the one dream type that DOES get entity
+	// extraction (graph rows only); every other dream is skipped. Non-dream
+	// behavior is unchanged: skipDreamEntity is false (isDream false), leaving
+	// skipEntity = stepDone || mem.Enriched, exactly as before.
+	skipDreamEntity := (isDream || mem.Enriched) && !isConsolidationDream
+	skipEntity := skipDreamEntity || stepDone[model.StepEntityExtraction]
 
 	if !skipFact {
 		if has, probeErr := wp.lineage.HasExtractedFactChildren(ctx, mem.NamespaceID, mem.ID); probeErr != nil {

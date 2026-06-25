@@ -1621,6 +1621,18 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("backfillConsolidationEntities() dry run returns candidate counts or errors", async () => {
+      try {
+        const res = await adminAPI.backfillConsolidationEntities({
+          dry_run: true,
+          limit: 10,
+        });
+        expect(res).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("clearCompletedJobs() returns deleted count or errors", async () => {
       try {
         const res = await adminAPI.clearCompletedJobs({ older_than_days: 0 });

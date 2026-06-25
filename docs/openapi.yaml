@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.11.8
+  version: 0.12.0
   license:
     name: MIT
 
@@ -4096,6 +4096,32 @@ paths:
               schema:
                 $ref: "#/components/schemas/EnrichmentBackfillResponse"
 
+  /v1/admin/enrichment/backfill-consolidation-entities:
+    post:
+      operationId: adminBackfillConsolidationEntities
+      tags: [Enrichment]
+      summary: Extract entities for consolidation dreams lacking coverage (administrator only)
+      description: >
+        Enqueues an entity-only enrichment job (fact extraction skipped, so no
+        child memories spawn) for every active consolidation dream that still has
+        no sourced relationship, recovering entity-graph coverage stranded before
+        dreams were extracted. The dreaming consolidation-entity backfill phase
+        does this automatically each cycle; this is the on-demand path. dry_run
+        returns the candidate count without enqueueing.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichmentBackfillRequest"
+      responses:
+        "200":
+          description: Backfill result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichmentBackfillResponse"
+
   /v1/admin/enrichment/clear-completed-jobs:
     post:
       operationId: adminClearCompletedJobs
@@ -6154,6 +6180,8 @@ components:
         - "dreaming.consolidation.consolidate_budget_fraction"
         - "dreaming.consolidation.reinforce_budget_fraction"
         - "dreaming.consolidation.stale_fetch_max"
+        - "dreaming.consolidation_entity_backfill.budget_fraction"
+        - "dreaming.consolidation_entity_backfill.cap_per_cycle"
         - "dreaming.contradiction.budget_fraction"
         - "dreaming.contradiction.cap_per_cycle"
         - "dreaming.contradiction.loser_haircut"

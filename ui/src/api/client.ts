@@ -1597,6 +1597,15 @@ export interface MultiVectorBackfillResponse {
   dry_run: boolean;
 }
 
+// Response for POST /admin/enrichment/backfill-consolidation-entities. Same shape
+// as the other backfills: enqueued is 0 on a dry run, else the count of
+// consolidation dreams re-enqueued for entity-only extraction.
+export interface ConsolidationEntitiesBackfillResponse {
+  candidate_count: number;
+  enqueued: number;
+  dry_run: boolean;
+}
+
 // Response for POST /admin/enrichment/backfill-missing-embeddings. Same shape as
 // the other backfills: enqueued is 0 on a dry run, else the count of
 // embedding-stranded memories re-enqueued for re-embedding.
@@ -2159,6 +2168,20 @@ export const adminAPI = {
     request<MissingEmbeddingsBackfillResponse>(
       "POST",
       "/admin/enrichment/backfill-missing-embeddings",
+      req,
+    ),
+
+  // Recover entity-graph coverage for consolidation dreams that lack it: enqueue
+  // an entity-only job per active consolidation dream with no sourced
+  // relationship. Dry-run counts them; confirm enqueues.
+  backfillConsolidationEntities: (req: {
+    project_id?: string;
+    dry_run?: boolean;
+    limit?: number;
+  }) =>
+    request<ConsolidationEntitiesBackfillResponse>(
+      "POST",
+      "/admin/enrichment/backfill-consolidation-entities",
       req,
     ),
 

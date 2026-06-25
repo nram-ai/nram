@@ -26,6 +26,7 @@ import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudg
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { MultiVectorBackfillBlock } from "../components/MultiVectorBackfillBlock";
 import { MissingEmbeddingBackfillBlock } from "../components/MissingEmbeddingBackfillBlock";
+import { ConsolidationEntityBackfillBlock } from "../components/ConsolidationEntityBackfillBlock";
 import { ClearCompletedJobsBlock } from "../components/ClearCompletedJobsBlock";
 import { GraphCleanupBlock } from "../components/GraphCleanupBlock";
 import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
@@ -755,6 +756,7 @@ function CategoryTrailingBlock({ category }: { category: string }) {
       <>
         <GraphCleanupBlock />
         <MissingEmbeddingBackfillBlock />
+        <ConsolidationEntityBackfillBlock />
         <ClearCompletedJobsBlock />
       </>
     );

@@ -1357,6 +1357,78 @@ ORDER BY m.id ASC`
 	return scanBackfillCandidates(rows)
 }
 
+// ListDreamEntityBackfillCandidates returns active CONSOLIDATION dreams that
+// still lack entity-graph coverage: origin=dream, live (not deleted/superseded),
+// carrying a non-empty source_memory_ids metadata array (the discriminator that
+// excludes project-description and other dream types — see
+// model.Memory.IsConsolidationDream), and with no relationship yet sourced by
+// the memory. The "no relationship sourced by m" predicate is the extract-once
+// gate: it mirrors the worker's HasBySourceMemory probe, so a dream drops out of
+// the candidate set once it has produced a sourced relationship. Caveat: a
+// synthesis that extracts entities but NO relationships (e.g. a single-entity
+// dream, or one whose relations the vocabulary classifier drops) never gains a
+// sourced relationship and so stays a candidate, re-extracting each cycle
+// without persisting anything new. Tolerated for now (rare, and the upsert is
+// cheap/idempotent); a memory-level "entity extraction ran" stamp would close it
+// (see the consolidation-entity-coverage follow-up). Drives both the on-demand
+// admin backfill and the ConsolidationEntityBackfill dream phase. Scoped to
+// namespaces when non-empty; ordered by id for stable paging.
+func (r *MemoryRepo) ListDreamEntityBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]BackfillCandidate, error) {
+	pg := r.db.Backend() == BackendPostgres
+	args := []any{}
+	ph := func() string {
+		if pg {
+			return fmt.Sprintf("$%d", len(args)+1)
+		}
+		return "?"
+	}
+
+	dreamPH := ph()
+	args = append(args, string(model.OriginDream))
+
+	// Non-empty source_memory_ids array. Postgres metadata is JSONB, SQLite is
+	// TEXT; the key name is a fixed literal, so it is inlined safely. The
+	// Postgres jsonb_typeof guard makes jsonb_array_length non-erroring even if
+	// the value were ever a non-array.
+	sourceIDsClause := "json_array_length(m.metadata, '$.source_memory_ids') > 0"
+	if pg {
+		sourceIDsClause = "jsonb_typeof(m.metadata -> 'source_memory_ids') = 'array' " +
+			"AND jsonb_array_length(m.metadata -> 'source_memory_ids') > 0"
+	}
+
+	nsClause := ""
+	if len(namespaceIDs) > 0 {
+		placeholders := make([]string, len(namespaceIDs))
+		for i, ns := range namespaceIDs {
+			placeholders[i] = ph()
+			args = append(args, ns.String())
+		}
+		nsClause = " AND m.namespace_id IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+
+	query := `SELECT m.id, m.namespace_id
+FROM memories m
+WHERE m.origin = ` + dreamPH + `
+  AND m.deleted_at IS NULL
+  AND m.superseded_by IS NULL
+  AND ` + sourceIDsClause + `
+  AND NOT EXISTS (
+    SELECT 1 FROM relationships rel WHERE rel.source_memory = m.id
+  )` + nsClause + `
+ORDER BY m.id ASC`
+	if limit > 0 {
+		query += " LIMIT " + ph()
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list dream entity backfill candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanBackfillCandidates(rows)
+}
+
 // ListMissingEmbeddingCandidates returns live, embeddable memories that have no
 // stored vector (embedding_dim IS NULL) across the given namespaces, or the whole
 // deployment when namespaceIDs is empty. These are the "embedding-stranded"

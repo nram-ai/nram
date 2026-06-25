@@ -1,5 +1,7 @@
 package model
 
+import "encoding/json"
+
 // MemoryOrigin is the coarse, server-assigned provenance category for a memory.
 // It is the authoritative discriminator that internal logic branches on,
 // replacing the historical practice of overloading the free-form Source string
@@ -36,4 +38,29 @@ func (o MemoryOrigin) OrDefault() MemoryOrigin {
 // the canonical replacement for the old `Source == DreamSource` check.
 func (m *Memory) IsDream() bool {
 	return m.Origin == OriginDream
+}
+
+// IsConsolidationDream reports whether the memory is a consolidation synthesis,
+// as opposed to other dream-origin memories (notably project-description blurbs
+// written by ProjectDescriptionPhase, which carry nram_kind=project_description
+// and no source IDs). Consolidation syntheses are the only dreams whose source
+// memories get superseded and their entities reaped, so they are the only
+// dreams eligible for entity extraction (the consolidation-erases-coverage fix).
+//
+// The discriminator is the DreamMetaSourceMemoryIDs ("source_memory_ids")
+// metadata key: the consolidation phase records the IDs of the source memories
+// it consumed, and no other dream-origin writer sets it. A dream with an empty
+// or absent source_memory_ids list is not treated as a consolidation synthesis.
+func (m *Memory) IsConsolidationDream() bool {
+	if m.Origin != OriginDream || len(m.Metadata) == 0 {
+		return false
+	}
+	var meta struct {
+		// Tag mirrors DreamMetaSourceMemoryIDs (model/dream.go).
+		SourceMemoryIDs []string `json:"source_memory_ids"`
+	}
+	if err := json.Unmarshal(m.Metadata, &meta); err != nil {
+		return false
+	}
+	return len(meta.SourceMemoryIDs) > 0
 }

@@ -98,6 +98,12 @@ type EnrichmentAdminConfig struct {
 	// only. Nil disables the endpoint with a 503.
 	BackfillMissingEmbeddings func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
 
+	// BackfillConsolidationEntities enqueues entity-only jobs for active
+	// consolidation dreams that still lack entity-graph coverage, recovering the
+	// coverage stranded before dreams were extracted. DryRun returns the
+	// candidate count only. Nil disables the endpoint with a 503.
+	BackfillConsolidationEntities func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (candidateCount, enqueued int, err error)
+
 	// CountMissingEmbeddings returns the live embedding-stranded count for the
 	// queue health surface. Nil leaves the count at zero.
 	CountMissingEmbeddings func(ctx context.Context) (int64, error)
@@ -340,7 +346,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "clear-completed-jobs" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "backfill-consolidation-entities" || sub == "clear-completed-jobs" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -371,6 +377,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentReExtract(w, r, cfg)
 		case "backfill-missing-embeddings":
 			handleEnrichmentBackfillMissingEmbeddings(w, r, cfg)
+		case "backfill-consolidation-entities":
+			handleEnrichmentBackfillConsolidationEntities(w, r, cfg)
 		case "clear-completed-jobs":
 			handleEnrichmentClearCompletedJobs(w, r, cfg)
 		default:
@@ -909,6 +917,40 @@ func handleEnrichmentBackfillMissingEmbeddings(w http.ResponseWriter, r *http.Re
 	count, enq, err := cfg.BackfillMissingEmbeddings(r.Context(), projectID, body.DryRun, body.Limit)
 	if err != nil {
 		WriteError(w, ErrInternal("backfill missing embeddings: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         body.DryRun,
+	})
+}
+
+// handleEnrichmentBackfillConsolidationEntities handles
+// POST /enrichment/backfill-consolidation-entities. ProjectID is optional; omit
+// to sweep the whole deployment. DryRun returns the candidate count without
+// enqueueing. Limit caps how many dreams this call enqueues.
+func handleEnrichmentBackfillConsolidationEntities(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.BackfillConsolidationEntities == nil {
+		http.Error(w, "backfill-consolidation-entities not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentBackfillAugmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	var projectID uuid.UUID
+	if body.ProjectID != nil {
+		projectID = *body.ProjectID
+	}
+	count, enq, err := cfg.BackfillConsolidationEntities(r.Context(), projectID, body.DryRun, body.Limit)
+	if err != nil {
+		WriteError(w, ErrInternal("backfill consolidation entities: "+err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, enrichmentBackfillAugmentResponse{

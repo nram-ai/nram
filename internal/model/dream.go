@@ -31,13 +31,18 @@ const (
 	DreamPhaseEmbeddingBackfill    = "embedding_backfill"
 	DreamPhaseAugmentationBackfill = "augmentation_backfill"
 	DreamPhaseMultiVectorBackfill  = "multi_vector_backfill"
-	DreamPhaseParaphraseDedup      = "paraphrase_dedup"
-	DreamPhaseTransitive           = "transitive_discovery"
-	DreamPhaseContradictions       = "contradiction_detection"
-	DreamPhaseConsolidation        = "consolidation"
-	DreamPhasePruning              = "pruning"
-	DreamPhaseWeightAdjust         = "weight_adjustment"
-	DreamPhaseProjectDescSync      = "project_description_sync"
+	// DreamPhaseConsolidationEntityBackfill recovers entity-graph coverage for
+	// existing consolidation syntheses stranded before the fix that extracts
+	// entities from dreams: it enqueues entity-only jobs for active consolidation
+	// dreams that still have no sourced relationship.
+	DreamPhaseConsolidationEntityBackfill = "consolidation_entity_backfill"
+	DreamPhaseParaphraseDedup             = "paraphrase_dedup"
+	DreamPhaseTransitive                  = "transitive_discovery"
+	DreamPhaseContradictions              = "contradiction_detection"
+	DreamPhaseConsolidation               = "consolidation"
+	DreamPhasePruning                     = "pruning"
+	DreamPhaseWeightAdjust                = "weight_adjustment"
+	DreamPhaseProjectDescSync             = "project_description_sync"
 )
 
 // DreamSubPhase constants name the consolidation sub-phases. Mirrors the

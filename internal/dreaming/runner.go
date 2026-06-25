@@ -24,16 +24,17 @@ import (
 // default to a positive fraction so the runner carves them a SubSlice that
 // caps how much of the cycle envelope they can consume.
 var phaseFractionKeys = map[string]string{
-	model.DreamPhaseEntityDedup:          service.SettingDreamEntityDedupFraction,
-	model.DreamPhaseEmbeddingBackfill:    service.SettingDreamEmbeddingBackfillFraction,
-	model.DreamPhaseAugmentationBackfill: service.SettingDreamAugmentationBackfillFraction,
-	model.DreamPhaseMultiVectorBackfill:  service.SettingDreamMultiVectorBackfillFraction,
-	model.DreamPhaseParaphraseDedup:      service.SettingDreamParaphraseFraction,
-	model.DreamPhaseTransitive:           service.SettingDreamTransitiveFraction,
-	model.DreamPhaseContradictions:       service.SettingDreamContradictionFraction,
-	model.DreamPhaseConsolidation:        service.SettingDreamConsolidationFraction,
-	model.DreamPhasePruning:              service.SettingDreamPruningFraction,
-	model.DreamPhaseWeightAdjust:         service.SettingDreamWeightAdjustFraction,
+	model.DreamPhaseEntityDedup:                 service.SettingDreamEntityDedupFraction,
+	model.DreamPhaseEmbeddingBackfill:           service.SettingDreamEmbeddingBackfillFraction,
+	model.DreamPhaseAugmentationBackfill:        service.SettingDreamAugmentationBackfillFraction,
+	model.DreamPhaseMultiVectorBackfill:         service.SettingDreamMultiVectorBackfillFraction,
+	model.DreamPhaseConsolidationEntityBackfill: service.SettingDreamConsolidationEntityBackfillFraction,
+	model.DreamPhaseParaphraseDedup:             service.SettingDreamParaphraseFraction,
+	model.DreamPhaseTransitive:                  service.SettingDreamTransitiveFraction,
+	model.DreamPhaseContradictions:              service.SettingDreamContradictionFraction,
+	model.DreamPhaseConsolidation:               service.SettingDreamConsolidationFraction,
+	model.DreamPhasePruning:                     service.SettingDreamPruningFraction,
+	model.DreamPhaseWeightAdjust:                service.SettingDreamWeightAdjustFraction,
 }
 
 // Heartbeat tick timeout is resolved per-cycle from

@@ -71,6 +71,15 @@ type MissingEmbeddingCandidateLister interface {
 	ListMissingEmbeddingCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
 
+// DreamEntityCandidateLister returns active consolidation dreams lacking
+// entity-graph coverage (origin=dream, live, non-empty source_memory_ids, no
+// sourced relationship). Used by BackfillConsolidationEntities to enqueue
+// entity-only jobs that recover graph coverage stranded before dreams were
+// extracted. Same tiny-interface pattern as the others.
+type DreamEntityCandidateLister interface {
+	ListDreamEntityBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+}
+
 // ReExtractStore is the storage surface the re-extraction path needs beyond the
 // shared queue/lineage deps: candidate listing, enriched reset, and soft-delete
 // of prior extracted-fact children. Kept as a tiny interface so re-extraction
@@ -83,16 +92,17 @@ type ReExtractStore interface {
 
 // EnrichService orchestrates bulk enrichment queueing for memories in a project.
 type EnrichService struct {
-	memories         MemoryReader
-	projects         ProjectRepository
-	enrichmentQueue  EnrichmentQueueRepository
-	lineage          LineageQuerier
-	augLister        AugmentationCandidateLister
-	paraphraseLister ParaphraseCandidateLister
-	mvLister         MultiVectorCandidateLister
-	missingEmbLister MissingEmbeddingCandidateLister
-	reExtractStore   ReExtractStore
-	graphReaper      GraphReaper
+	memories          MemoryReader
+	projects          ProjectRepository
+	enrichmentQueue   EnrichmentQueueRepository
+	lineage           LineageQuerier
+	augLister         AugmentationCandidateLister
+	paraphraseLister  ParaphraseCandidateLister
+	mvLister          MultiVectorCandidateLister
+	missingEmbLister  MissingEmbeddingCandidateLister
+	dreamEntityLister DreamEntityCandidateLister
+	reExtractStore    ReExtractStore
+	graphReaper       GraphReaper
 }
 
 // AttachReExtract wires the dependencies for ReExtract: the candidate/reset/
@@ -225,6 +235,12 @@ func (s *EnrichService) AttachMultiVectorLister(lister MultiVectorCandidateListe
 	s.mvLister = lister
 }
 
+// AttachDreamEntityLister wires the candidate lister used by
+// BackfillConsolidationEntities.
+func (s *EnrichService) AttachDreamEntityLister(lister DreamEntityCandidateLister) {
+	s.dreamEntityLister = lister
+}
+
 // AttachMissingEmbeddingLister wires the candidate lister used by
 // BackfillMissingEmbeddings. Optional: when nil, BackfillMissingEmbeddings
 // returns an explanatory error.
@@ -327,6 +343,23 @@ type BackfillMultiVectorResponse struct {
 	LatencyMs      int64 `json:"latency_ms"`
 }
 
+// BackfillConsolidationEntitiesRequest scopes the consolidation-entity backfill.
+// ProjectID is optional; omit to sweep the whole deployment. Limit caps
+// candidates per call.
+type BackfillConsolidationEntitiesRequest struct {
+	ProjectID uuid.UUID `json:"project_id,omitempty"`
+	DryRun    bool      `json:"dry_run,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+}
+
+// BackfillConsolidationEntitiesResponse reports the backfill outcome.
+type BackfillConsolidationEntitiesResponse struct {
+	CandidateCount int   `json:"candidate_count"`
+	Enqueued       int   `json:"enqueued"`
+	DryRun         bool  `json:"dry_run"`
+	LatencyMs      int64 `json:"latency_ms"`
+}
+
 // BackfillMissingEmbeddingsRequest scopes a missing-embedding repair to a project
 // (or the whole deployment if ProjectID is zero). DryRun returns the candidate
 // count without enqueueing. Limit caps the batch (0 = no cap).
@@ -357,13 +390,16 @@ type candidateLister func(ctx context.Context, namespaceIDs []uuid.UUID, limit i
 
 // runBackfill resolves the optional project scope to a namespace filter, lists
 // candidates, and (unless dryRun) enqueues a re-enrichment job per candidate.
-// Shared by all three backfills (augmentation, multi-vector, extracted-fact
-// paraphrase). When marker is non-empty it is stamped as the job's sole
-// StepsCompleted entry so the worker routes to a lean no-LLM handler (the
-// multi-vector facet sweep or the paraphrase-guard sweep); an empty marker
-// enqueues a plain full-pipeline job (the augmentation path, which wants the
-// re-embed). The candidate's namespace rides along so the enqueue needs no
-// per-id read on the whole-deployment sweep.
+// Shared by every backfill (augmentation, multi-vector, missing-embeddings,
+// extracted-fact paraphrase, consolidation-entities). When marker is non-empty
+// it is stamped as the job's sole StepsCompleted entry. A JobMarkerOnly*
+// sentinel routes the worker to a lean no-LLM handler (the multi-vector facet
+// sweep or the paraphrase-guard sweep); a plain step name (e.g. fact_extraction
+// for the consolidation-entities backfill) instead skips that one step and runs
+// the normal pipeline. An empty marker enqueues a full-pipeline job (the
+// augmentation / missing-embeddings paths, which want the re-embed). The
+// candidate's namespace rides along so the enqueue needs no per-id read on the
+// whole-deployment sweep.
 func (s *EnrichService) runBackfill(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int, marker string, list candidateLister) (candidateCount, enqueued int, err error) {
 	var namespaceIDs []uuid.UUID
 	if projectID != uuid.Nil {
@@ -425,6 +461,35 @@ func (s *EnrichService) BackfillMultiVector(ctx context.Context, req *BackfillMu
 		return nil, err
 	}
 	return &BackfillMultiVectorResponse{
+		CandidateCount: count,
+		Enqueued:       enq,
+		DryRun:         req.DryRun,
+		LatencyMs:      time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// BackfillConsolidationEntities enqueues an entity-only enrichment job for every
+// active consolidation dream that still lacks entity-graph coverage, recovering
+// the coverage stranded before dreams were extracted (the
+// consolidation-erases-coverage fix). Each job pre-stamps fact_extraction so no
+// extracted_fact child memories spawn (also hard-off via the worker's isDream
+// clause), while entity extraction runs for the consolidation synthesis (graph
+// rows only, never memories). The on-demand counterpart to the
+// ConsolidationEntityBackfill dream phase; both select the same candidates and
+// enqueue the same job shape. Enqueue dedups against the pending-job unique
+// index, and a dream drops out of the candidate set once it has a sourced
+// relationship (see ListDreamEntityBackfillCandidates for the one edge — an
+// entity-only synthesis — where that gate does not converge).
+func (s *EnrichService) BackfillConsolidationEntities(ctx context.Context, req *BackfillConsolidationEntitiesRequest) (*BackfillConsolidationEntitiesResponse, error) {
+	start := time.Now()
+	if s.dreamEntityLister == nil {
+		return nil, fmt.Errorf("dream-entity candidate lister not configured (call AttachDreamEntityLister)")
+	}
+	count, enq, err := s.runBackfill(ctx, req.ProjectID, req.DryRun, req.Limit, model.StepFactExtraction, s.dreamEntityLister.ListDreamEntityBackfillCandidates)
+	if err != nil {
+		return nil, err
+	}
+	return &BackfillConsolidationEntitiesResponse{
 		CandidateCount: count,
 		Enqueued:       enq,
 		DryRun:         req.DryRun,

@@ -586,6 +586,7 @@ func main() {
 	enrichSvc.AttachAugmentationLister(memoryRepo)
 	enrichSvc.AttachMultiVectorLister(memoryRepo)
 	enrichSvc.AttachMissingEmbeddingLister(memoryRepo)
+	enrichSvc.AttachDreamEntityLister(memoryRepo)
 	// Procedural tier: verbatim standing instructions. Holds no enrichment,
 	// embedder, or dream dependency by design; that absence keeps it verbatim.
 	proceduralSvc := service.NewProceduralService(proceduralRepo)
@@ -870,6 +871,13 @@ func main() {
 		// self-drains each cycle. Runs after embedding backfill so embedding_dims
 		// restored this cycle are already visible as facet candidates.
 		dreaming.NewMultiVectorBackfillPhase(memoryRepo, enrichmentQueueRepo, settingsSvc),
+		// Consolidation entity backfill enqueues entity-only jobs for active
+		// consolidation dreams that still lack any sourced relationship, recovering
+		// entity-graph coverage stranded before dreams were extracted. Runs before
+		// consolidation (like the augmentation backfill) so it sweeps prior-cycle
+		// dreams, not the fresh syntheses this cycle's consolidation enqueues, which
+		// the worker covers via their own enrichment job.
+		dreaming.NewConsolidationEntityBackfillPhase(memoryRepo, enrichmentQueueRepo, settingsSvc),
 		// Paraphrase dedup runs before contradiction so the LLM-judge pair
 		// walk operates on a deduped memory set.
 		dreaming.NewParaphraseDedupPhase(memoryRepo, memoryRepo, vectorStore, vectorStore, embedProvider, settingsSvc),
@@ -1269,6 +1277,17 @@ func main() {
 			},
 			BackfillMissingEmbeddings: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
 				resp, err := enrichSvc.BackfillMissingEmbeddings(ctx, &service.BackfillMissingEmbeddingsRequest{
+					ProjectID: projectID,
+					DryRun:    dryRun,
+					Limit:     limit,
+				})
+				if err != nil {
+					return 0, 0, err
+				}
+				return resp.CandidateCount, resp.Enqueued, nil
+			},
+			BackfillConsolidationEntities: func(ctx context.Context, projectID uuid.UUID, dryRun bool, limit int) (int, int, error) {
+				resp, err := enrichSvc.BackfillConsolidationEntities(ctx, &service.BackfillConsolidationEntitiesRequest{
 					ProjectID: projectID,
 					DryRun:    dryRun,
 					Limit:     limit,

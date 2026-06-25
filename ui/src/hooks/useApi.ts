@@ -43,6 +43,7 @@ import {
   type AugmentationBackfillResponse,
   type MultiVectorBackfillResponse,
   type MissingEmbeddingsBackfillResponse,
+  type ConsolidationEntitiesBackfillResponse,
   type ClearCompletedJobsResponse,
   type RelabelGraphResponse,
   type ReExtractResponse,
@@ -1384,6 +1385,22 @@ export function useBackfillMissingEmbeddings() {
     { project_id?: string; dry_run?: boolean; limit?: number }
   >({
     mutationFn: (req) => adminAPI.backfillMissingEmbeddings(req),
+    onSuccess: (_, variables) => {
+      if (!variables.dry_run) {
+        qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });
+      }
+    },
+  });
+}
+
+export function useBackfillConsolidationEntities() {
+  const qc = useQueryClient();
+  return useMutation<
+    ConsolidationEntitiesBackfillResponse,
+    Error,
+    { project_id?: string; dry_run?: boolean; limit?: number }
+  >({
+    mutationFn: (req) => adminAPI.backfillConsolidationEntities(req),
     onSuccess: (_, variables) => {
       if (!variables.dry_run) {
         qc.invalidateQueries({ queryKey: ["admin", "enrichment"] });

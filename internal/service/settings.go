@@ -131,16 +131,17 @@ const (
 	// SQL-only phases default to 0.0, which means "no per-phase slice; share
 	// the root budget": they run normally because they don't call WrapLLMCall
 	// and therefore don't consume the budget. Hot-reloadable per cycle.
-	SettingDreamEntityDedupFraction          = "dreaming.entity_dedup.budget_fraction"
-	SettingDreamEmbeddingBackfillFraction    = "dreaming.embedding_backfill.budget_fraction"
-	SettingDreamAugmentationBackfillFraction = "dreaming.augmentation_backfill.budget_fraction"
-	SettingDreamMultiVectorBackfillFraction  = "dreaming.multi_vector_backfill.budget_fraction"
-	SettingDreamParaphraseFraction           = "dreaming.paraphrase_dedup.budget_fraction"
-	SettingDreamTransitiveFraction           = "dreaming.transitive.budget_fraction"
-	SettingDreamContradictionFraction        = "dreaming.contradiction.budget_fraction"
-	SettingDreamConsolidationFraction        = "dreaming.consolidation.budget_fraction"
-	SettingDreamPruningFraction              = "dreaming.pruning.budget_fraction"
-	SettingDreamWeightAdjustFraction         = "dreaming.weight_adjustment.budget_fraction"
+	SettingDreamEntityDedupFraction                 = "dreaming.entity_dedup.budget_fraction"
+	SettingDreamEmbeddingBackfillFraction           = "dreaming.embedding_backfill.budget_fraction"
+	SettingDreamAugmentationBackfillFraction        = "dreaming.augmentation_backfill.budget_fraction"
+	SettingDreamMultiVectorBackfillFraction         = "dreaming.multi_vector_backfill.budget_fraction"
+	SettingDreamConsolidationEntityBackfillFraction = "dreaming.consolidation_entity_backfill.budget_fraction"
+	SettingDreamParaphraseFraction                  = "dreaming.paraphrase_dedup.budget_fraction"
+	SettingDreamTransitiveFraction                  = "dreaming.transitive.budget_fraction"
+	SettingDreamContradictionFraction               = "dreaming.contradiction.budget_fraction"
+	SettingDreamConsolidationFraction               = "dreaming.consolidation.budget_fraction"
+	SettingDreamPruningFraction                     = "dreaming.pruning.budget_fraction"
+	SettingDreamWeightAdjustFraction                = "dreaming.weight_adjustment.budget_fraction"
 
 	// Contradiction-detection cap. Bounds LLM pair-check calls per cycle so
 	// the phase cannot starve the rest of the pipeline. Residual is driven
@@ -214,6 +215,15 @@ const (
 	// LLM calls in the phase), so it carries no budget fraction.
 	SettingDreamMultiVectorBackfillEnabled     = "dreaming.multi_vector_backfill.enabled"
 	SettingDreamMultiVectorBackfillCapPerCycle = "dreaming.multi_vector_backfill.cap_per_cycle"
+
+	// Consolidation-entity-backfill phase. Enqueues entity-only enrichment jobs
+	// for active consolidation dreams that still lack any sourced relationship,
+	// recovering entity-graph coverage stranded before dreams were extracted.
+	// Self-drains each cycle. There is intentionally NO enable toggle: the
+	// extraction is unconditional whenever dreaming runs (a disable switch would
+	// strand heavily-consolidated projects). Only the per-cycle cap is tunable,
+	// to pace the recovery load.
+	SettingDreamConsolidationEntityBackfillCapPerCycle = "dreaming.consolidation_entity_backfill.cap_per_cycle"
 
 	// Weight-adjustment phase tuning. support_gain is the multiplier alpha in
 	// weight *= 1 + alpha * (support - 1) when a relationship's supporting
@@ -983,16 +993,17 @@ var settingDefaults = map[string]string{
 	SettingDreamConsolidationReinforceFraction:   "0.35",
 	SettingDreamConsolidationConsolidateFraction: "0.30",
 
-	SettingDreamEntityDedupFraction:          "0.0",
-	SettingDreamEmbeddingBackfillFraction:    "0.10",
-	SettingDreamAugmentationBackfillFraction: "0.0",
-	SettingDreamMultiVectorBackfillFraction:  "0.0",
-	SettingDreamParaphraseFraction:           "0.05",
-	SettingDreamTransitiveFraction:           "0.0",
-	SettingDreamContradictionFraction:        "0.40",
-	SettingDreamConsolidationFraction:        "0.40",
-	SettingDreamPruningFraction:              "0.0",
-	SettingDreamWeightAdjustFraction:         "0.0",
+	SettingDreamEntityDedupFraction:                 "0.0",
+	SettingDreamEmbeddingBackfillFraction:           "0.10",
+	SettingDreamAugmentationBackfillFraction:        "0.0",
+	SettingDreamMultiVectorBackfillFraction:         "0.0",
+	SettingDreamConsolidationEntityBackfillFraction: "0.0",
+	SettingDreamParaphraseFraction:                  "0.05",
+	SettingDreamTransitiveFraction:                  "0.0",
+	SettingDreamContradictionFraction:               "0.40",
+	SettingDreamConsolidationFraction:               "0.40",
+	SettingDreamPruningFraction:                     "0.0",
+	SettingDreamWeightAdjustFraction:                "0.0",
 
 	SettingDreamContradictionCap:                 "2000",
 	SettingDreamContradictionLoserHaircut:        "0.85",
@@ -1009,6 +1020,8 @@ var settingDefaults = map[string]string{
 
 	SettingDreamMultiVectorBackfillEnabled:     "true",
 	SettingDreamMultiVectorBackfillCapPerCycle: "1000",
+
+	SettingDreamConsolidationEntityBackfillCapPerCycle: "1000",
 
 	SettingDreamParaphraseEnabled:     "true",
 	SettingDreamParaphraseThreshold:   "0.97",

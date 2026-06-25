@@ -1564,10 +1564,11 @@ func (p *ConsolidationPhase) consolidate(
 
 		// DREAM-RECURSION GUARD: first prong (creation side).
 		//
-		// Origin=OriginDream and Enriched=true are both load-bearing for the
-		// dream-of-dream-of-dream cascade prevention contract. The enrichment
-		// worker reads BOTH signals at three skip sites; either alone is
-		// sufficient. Symmetric sites that must stay aligned with this one:
+		// Origin=OriginDream and Enriched=true are load-bearing for the
+		// dream-of-dream-of-dream cascade prevention contract. The cascade
+		// vector is a NEW memory, and the only memory-creating extraction phase
+		// is fact extraction; it stays off for all dreams. Symmetric sites that
+		// must stay aligned with this one:
 		//
 		//   - internal/enrichment/worker.go (WorkerPool.runPreEmbed skipFact / skipEntity)
 		//   - internal/enrichment/phase_ingestion.go (runIngestionDecision early-return)
@@ -1579,12 +1580,15 @@ func (p *ConsolidationPhase) consolidate(
 		// from the source column (Origin is now the authoritative discriminator).
 		//
 		// What runs for the enqueued job below: ingestion-decision short-
-		// circuits (Enriched/origin), fact + entity extraction skip (the only
-		// memory- and graph-node-creating phases), augmentation generates
-		// paraphrase queries (no new rows), embedding writes the vector,
-		// finalize stamps augmented_queries / augmented_embedding_at /
-		// embedding_dim. Nothing in the enrichment pipeline can produce a
-		// derivative row that would feed back into the next dream cycle.
+		// circuits (Enriched/origin); FACT extraction skips (pre-stamped + the
+		// hard isDream clause) so no extracted_fact child memories are spawned;
+		// ENTITY extraction RUNS (entity-only) because this is a consolidation
+		// synthesis carrying source_memory_ids — it writes graph rows, never
+		// memories, so it cannot feed the next dream cycle; augmentation
+		// generates paraphrase queries (no new rows); embedding writes the
+		// vector; finalize stamps augmented_queries / augmented_embedding_at /
+		// embedding_dim. No enrichment phase produces a new MEMORY that could be
+		// re-clustered.
 		//
 		// Contract enforcer:
 		//   internal/dreaming/dream_recursion_guard_test.go
@@ -1617,27 +1621,36 @@ func (p *ConsolidationPhase) consolidate(
 			})
 		}
 
-		// Enqueue for augmentation + embedding. The dream-recursion-guard
-		// comment above explains why this is safe: every phase that could
-		// create derivative rows short-circuits on Source=DreamSource or
-		// Enriched=true. Enqueue failure is non-fatal; the memory still
-		// exists; the admin BackfillAugmentation path in
-		// service.EnrichService remains the recovery route. The cycle
-		// stats counter lets operators distinguish "synthesis created
-		// and scheduled" from "synthesis created but stranded" without
-		// having to grep logs.
+		// Enqueue for entity extraction + augmentation + embedding. FACT
+		// extraction is pre-stamped complete (StepsCompleted below) so it is
+		// skipped: facts spawn extracted_fact child memories, the one path that
+		// could feed a later dream cycle. ENTITY extraction runs (entity-only) —
+		// the worker's skipEntity gate allows it for consolidation syntheses
+		// because graph rows are not memories and cannot be re-clustered (see
+		// the worker-side DREAM-RECURSION GUARD comment). The fact pre-stamp is
+		// belt-and-suspenders with the hard isDream clause on skipFact and
+		// documents the intended single-pass shape. Enqueue failure is
+		// non-fatal; the memory still exists; the admin
+		// BackfillConsolidationEntities path and the ConsolidationEntityBackfill
+		// dream phase remain the recovery routes. The cycle stats counter lets
+		// operators distinguish "synthesis created and scheduled" from
+		// "synthesis created but stranded" without having to grep logs.
 		if p.enrichmentQueue != nil {
 			now := time.Now().UTC()
+			// Skip fact extraction (no child memories); leave entity_extraction
+			// unstamped so the worker runs it for this consolidation synthesis.
+			factDone, _ := json.Marshal([]string{model.StepFactExtraction})
 			job := &model.EnrichmentJob{
-				ID:          uuid.New(),
-				MemoryID:    synthMemory.ID,
-				NamespaceID: cycle.NamespaceID,
-				Status:      model.EnrichmentStatusPending,
-				Priority:    0,
-				Attempts:    0,
-				MaxAttempts: 3,
-				CreatedAt:   now,
-				UpdatedAt:   now,
+				ID:             uuid.New(),
+				MemoryID:       synthMemory.ID,
+				NamespaceID:    cycle.NamespaceID,
+				Status:         model.EnrichmentStatusPending,
+				Priority:       0,
+				Attempts:       0,
+				MaxAttempts:    3,
+				StepsCompleted: factDone,
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			}
 			if _, err := p.enrichmentQueue.Enqueue(ctx, job); err != nil {
 				slog.Warn("dreaming: synthesis enrichment enqueue failed",

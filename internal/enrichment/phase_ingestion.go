@@ -69,7 +69,11 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	// DREAM-RECURSION GUARD: the Origin==OriginDream clause is the
 	// ingestion-side enforcement of the dream-of-dream cascade prevention
 	// contract. Both clauses are load-bearing; either alone is sufficient.
-	// Symmetric sites:
+	// Ingestion-decision skips ALL dreams, including consolidation syntheses
+	// that DO get entity extraction in runPreEmbed: re-judging a synthesis here
+	// could UPDATE/DELETE-supersede it as a near-duplicate, which must never
+	// happen to a dream. The entity-extraction exception is graph-only and does
+	// not extend to this phase. Symmetric sites:
 	//
 	//   - internal/dreaming/phase_consolidation.go (synthMemory creation,
 	//       "DREAM-RECURSION GUARD: first prong"; sets Origin=OriginDream

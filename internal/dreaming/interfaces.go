@@ -228,3 +228,13 @@ type AugmentationBacklogLister interface {
 type MultiVectorBacklogLister interface {
 	ListMultiVectorBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
 }
+
+// DreamEntityBacklogLister lists active consolidation dreams that still lack
+// entity-graph coverage (origin=dream, live, non-empty source_memory_ids, no
+// sourced relationship), scoped to the given namespaces. The
+// consolidation-entity-backfill phase pages through them and enqueues an
+// entity-only enrichment job for each. Satisfied by
+// *storage.MemoryRepo.ListDreamEntityBackfillCandidates.
+type DreamEntityBacklogLister interface {
+	ListDreamEntityBackfillCandidates(ctx context.Context, namespaceIDs []uuid.UUID, limit int) ([]storage.BackfillCandidate, error)
+}
