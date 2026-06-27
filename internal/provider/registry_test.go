@@ -190,6 +190,7 @@ func TestNormalizeProviderType(t *testing.T) {
 		"openai":            ProviderTypeOpenAI,
 		"vllm":              ProviderTypeVLLM,
 		"sglang":            ProviderTypeSGLang,
+		"llama-server":      ProviderTypeLlamaServer,
 		"ollama":            ProviderTypeOllama,
 		"":                  "",
 	}
@@ -197,6 +198,29 @@ func TestNormalizeProviderType(t *testing.T) {
 		if got := NormalizeProviderType(in); got != want {
 			t.Errorf("NormalizeProviderType(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// thinkingDisabled defaults an unset (nil) pointer to true so existing slots and
+// slots that never touch the toggle keep the reasoning pass off; an explicit
+// value passes through.
+func TestThinkingDisabled(t *testing.T) {
+	tr, fa := true, false
+	cases := []struct {
+		name string
+		in   *bool
+		want bool
+	}{
+		{"nil_defaults_disabled", nil, true},
+		{"explicit_true", &tr, true},
+		{"explicit_false", &fa, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := thinkingDisabled(tc.in); got != tc.want {
+				t.Errorf("thinkingDisabled(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -209,6 +233,7 @@ func TestRegistryOpenAICompatibleFamily(t *testing.T) {
 		ProviderTypeOpenAICompatible,
 		ProviderTypeVLLM,
 		ProviderTypeSGLang,
+		ProviderTypeLlamaServer,
 	} {
 		t.Run(ptype, func(t *testing.T) {
 			cfg := RegistryConfig{

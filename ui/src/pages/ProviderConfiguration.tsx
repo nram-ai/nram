@@ -31,6 +31,7 @@ const PROVIDER_TYPES = [
   "openai-compatible",
   "vllm",
   "sglang",
+  "llama-server",
 ] as const;
 
 // Human-facing labels for the type dropdown and badge. The raw type strings
@@ -46,6 +47,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "openai-compatible": "OpenAI-Compatible",
   vllm: "vLLM",
   sglang: "SGLang",
+  "llama-server": "llama.cpp",
 };
 
 function providerDisplayName(type: string): string {
@@ -54,6 +56,12 @@ function providerDisplayName(type: string): string {
     (type ? type.charAt(0).toUpperCase() + type.slice(1) : type)
   );
 }
+
+// Provider types in dropdown order (alphabetical by display label). PROVIDER_TYPES
+// and the labels are static, so sort once at module load rather than per render.
+const SORTED_PROVIDER_TYPES = [...PROVIDER_TYPES].sort((a, b) =>
+  providerDisplayName(a).localeCompare(providerDisplayName(b)),
+);
 
 const PROVIDER_BADGE_COLORS: Record<string, string> = {
   openai:
@@ -69,6 +77,8 @@ const PROVIDER_BADGE_COLORS: Record<string, string> = {
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300",
   sglang:
     "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-300",
+  "llama-server":
+    "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
 };
 
 // Neutral badge for any type without a dedicated color above (e.g.
@@ -85,6 +95,7 @@ const DEFAULT_URLS: Record<string, string> = {
   "openai-compatible": "",
   vllm: "http://localhost:8000",
   sglang: "http://localhost:30000",
+  "llama-server": "http://localhost:8080",
 };
 
 const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"]);
@@ -93,7 +104,21 @@ const CLOUD_PROVIDERS = new Set(["openai", "gemini", "anthropic", "openrouter"])
 // the served id can be detected from GET /v1/models and offered via the picker.
 // Mirrors the CLOUD_PROVIDERS set so adding a new single-model type needs no other
 // edit here.
-const SINGLE_MODEL_PROVIDERS = new Set(["vllm", "sglang"]);
+const SINGLE_MODEL_PROVIDERS = new Set(["vllm", "sglang", "llama-server"]);
+
+// Provider types where the per-slot "Disable Thinking" toggle actually emits a
+// knob (Ollama reasoning_effort, OpenRouter reasoning, vLLM/SGLang/llama-server
+// chat_template_kwargs.enable_thinking, Gemini thinkingConfig.thinkingBudget).
+// openai/anthropic/openai-compatible are omitted: an explicit disable 400s on
+// current OpenAI/Anthropic models, so the toggle would be a dead control there.
+const SUPPORTS_THINKING_TOGGLE = new Set([
+  "ollama",
+  "openrouter",
+  "vllm",
+  "sglang",
+  "llama-server",
+  "gemini",
+]);
 
 // Gemini and Anthropic use non-OpenAI request bodies, so extra_body does not
 // apply to them; every other provider type is served by the OpenAI-compatible
@@ -137,6 +162,11 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     embedding: "served model id, e.g. Qwen/Qwen3-Embedding-0.6B — or click Load Models to detect",
     fact: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
     entity: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
+  },
+  "llama-server": {
+    embedding: "served model id, e.g. Qwen3-Embedding-0.6B-Q8_0 — or click Load Models to detect",
+    fact: "served model id from GET /v1/models — or click Load Models",
+    entity: "served model id from GET /v1/models — or click Load Models",
   },
   "openai-compatible": {
     embedding: "the model id exposed by your endpoint",
@@ -563,6 +593,10 @@ interface EditFormState {
   // request body). Stored as text so an in-progress/invalid edit is preserved
   // and validated on save; blank means "no extra_body".
   extra_body: string;
+  // Whether nram suppresses the model's reasoning pass on completions. Checked
+  // (true) = disable thinking, the default. Only meaningful for the types in
+  // SUPPORTS_THINKING_TOGGLE; sent on save only for those.
+  disable_thinking: boolean;
 }
 
 // parseExtraBody validates the Extra Body textarea. Blank is valid (no body).
@@ -687,6 +721,11 @@ function ProviderSlotEditForm({
     if (extraBodyParse.value && Object.keys(extraBodyParse.value).length > 0) {
       req.extra_body = extraBodyParse.value;
     }
+    // Persist the thinking toggle only for types where it has an effect; for
+    // the others the key is omitted and the slot stays at the server default.
+    if (SUPPORTS_THINKING_TOGGLE.has(form.type)) {
+      req.disable_thinking = form.disable_thinking;
+    }
     onSave(req);
   };
 
@@ -703,7 +742,7 @@ function ProviderSlotEditForm({
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
           <option value="">Select a provider...</option>
-          {PROVIDER_TYPES.map((t) => (
+          {SORTED_PROVIDER_TYPES.map((t) => (
             <option key={t} value={t}>
               {providerDisplayName(t)}
             </option>
@@ -868,9 +907,31 @@ function ProviderSlotEditForm({
             <p className="mt-1 text-xs text-destructive">{extraBodyError}</p>
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
-              Merged onto every request body (OpenAI <code className="rounded bg-muted px-1 py-0.5">extra_body</code>). vLLM and SGLang already send <code className="rounded bg-muted px-1 py-0.5">chat_template_kwargs.enable_thinking=false</code> by default; set it here to override, or add other params.
+              Merged onto every request body (OpenAI <code className="rounded bg-muted px-1 py-0.5">extra_body</code>). vLLM, SGLang, and llama.cpp send <code className="rounded bg-muted px-1 py-0.5">chat_template_kwargs.enable_thinking=false</code> when Disable Thinking is on; set it here to override, or add other params.
             </p>
           )}
+        </div>
+      )}
+
+      {/* Disable Thinking (only for types where the knob has an effect) */}
+      {SUPPORTS_THINKING_TOGGLE.has(form.type) && (
+        <div>
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="checkbox"
+              checked={form.disable_thinking}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, disable_thinking: e.target.checked }))
+              }
+              className="h-4 w-4 rounded border-input text-primary focus:ring-2 focus:ring-ring"
+            />
+            Disable Thinking
+          </label>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {form.type === "gemini"
+              ? "Sends thinkingConfig.thinkingBudget=0 to skip the reasoning pass (Gemini 2.5 Flash family; other models keep their default). Extraction and synthesis calls rarely need it."
+              : "Skips the model's reasoning pass on this slot's calls. On by default — extraction and synthesis calls rarely benefit from a thinking trace. Uncheck to let the model think."}
+          </p>
         </div>
       )}
 
@@ -1079,6 +1140,9 @@ function ProviderSlotCard({
       slot.extra_body && Object.keys(slot.extra_body).length > 0
         ? JSON.stringify(slot.extra_body, null, 2)
         : "",
+    // Default the checkbox checked (disable thinking) unless the slot has
+    // explicitly stored false. nil/undefined resolves to disabled server-side.
+    disable_thinking: slot.disable_thinking ?? true,
   };
 
   return (

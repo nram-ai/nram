@@ -35,6 +35,7 @@ const (
 	ProviderTypeOpenAICompatible = "openai-compatible"
 	ProviderTypeVLLM             = "vllm"
 	ProviderTypeSGLang           = "sglang"
+	ProviderTypeLlamaServer      = "llama-server"
 
 	// ProviderTypeCustomLegacy is the pre-0.5.4 name for the generic
 	// OpenAI-compatible passthrough. It is accepted on read and normalized to
@@ -58,17 +59,27 @@ func NormalizeProviderType(t string) string {
 }
 
 // isOpenAICompatibleType reports whether a (normalized) provider type is served
-// by the shared OpenAI-compatible adapter (NewOpenAIProvider). vLLM and SGLang
-// speak the same /v1 wire format as OpenAI/Ollama/OpenRouter and differ only in
-// the per-type request extensions applied in openai.go.
+// by the shared OpenAI-compatible adapter (NewOpenAIProvider). vLLM, SGLang, and
+// llama.cpp's llama-server speak the same /v1 wire format as
+// OpenAI/Ollama/OpenRouter and differ only in the per-type request extensions
+// applied in openai.go.
 func isOpenAICompatibleType(t string) bool {
 	switch t {
 	case ProviderTypeOpenAI, ProviderTypeOllama, ProviderTypeOpenRouter,
-		ProviderTypeOpenAICompatible, ProviderTypeVLLM, ProviderTypeSGLang:
+		ProviderTypeOpenAICompatible, ProviderTypeVLLM, ProviderTypeSGLang,
+		ProviderTypeLlamaServer:
 		return true
 	default:
 		return false
 	}
+}
+
+// thinkingDisabled resolves the per-slot DisableThinking pointer, defaulting to
+// true (thinking off) when unset. The reasoning pass is dead weight on nram's
+// extraction/decision/synthesis calls, so a slot that has never set the toggle
+// — including every config that predates the field — keeps thinking disabled.
+func thinkingDisabled(p *bool) bool {
+	return p == nil || *p
 }
 
 // SlotConfig represents the configuration for a single provider slot as stored
@@ -99,6 +110,15 @@ type SlotConfig struct {
 	// the enable_thinking=false default the vllm/sglang types set. Ignored by the
 	// Gemini and Anthropic adapters, whose bodies are not OpenAI-shaped.
 	ExtraBody map[string]any `json:"extra_body,omitempty"`
+	// DisableThinking controls whether nram sends the provider-appropriate
+	// "thinking off" knob on completion requests (Ollama reasoning_effort:none,
+	// OpenRouter reasoning.enabled:false, vLLM/SGLang/llama-server
+	// chat_template_kwargs.enable_thinking:false, Gemini thinkingConfig.thinkingBudget:0).
+	// A nil pointer means unset and resolves to disabled (see thinkingDisabled),
+	// so existing slots keep skipping the reasoning pass. OpenAI, Anthropic, and
+	// the generic openai-compatible type never receive a knob (an explicit disable
+	// 400s on current models), so the toggle is inert for them.
+	DisableThinking *bool `json:"disable_thinking,omitempty"`
 }
 
 // RegistryConfig holds the configuration for all provider slots and the shared
@@ -729,22 +749,24 @@ func createLLMProvider(config SlotConfig) (LLMProvider, error) {
 	switch {
 	case isOpenAICompatibleType(ptype):
 		return NewOpenAIProvider(OpenAIConfig{
-			BaseURL:       config.BaseURL,
-			APIKey:        config.APIKey,
-			DefaultModel:  config.Model,
-			Timeout:       slotTimeout(config.Timeout),
-			ProviderType:  ptype,
-			CustomHeaders: config.CustomHeaders,
-			ExtraBody:     config.ExtraBody,
+			BaseURL:         config.BaseURL,
+			APIKey:          config.APIKey,
+			DefaultModel:    config.Model,
+			Timeout:         slotTimeout(config.Timeout),
+			ProviderType:    ptype,
+			CustomHeaders:   config.CustomHeaders,
+			ExtraBody:       config.ExtraBody,
+			DisableThinking: thinkingDisabled(config.DisableThinking),
 		}), nil
 
 	case ptype == ProviderTypeGemini:
 		return NewGeminiProvider(GeminiConfig{
-			APIKey:        config.APIKey,
-			DefaultModel:  config.Model,
-			BaseURL:       config.BaseURL,
-			Timeout:       slotTimeout(config.Timeout),
-			CustomHeaders: config.CustomHeaders,
+			APIKey:          config.APIKey,
+			DefaultModel:    config.Model,
+			BaseURL:         config.BaseURL,
+			Timeout:         slotTimeout(config.Timeout),
+			CustomHeaders:   config.CustomHeaders,
+			DisableThinking: thinkingDisabled(config.DisableThinking),
 		}), nil
 
 	case ptype == ProviderTypeAnthropic:

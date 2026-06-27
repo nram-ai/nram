@@ -107,6 +107,10 @@ type ProviderSlotStatus struct {
 	// headers, these values are not secret (e.g. chat_template_kwargs), so the
 	// full map is returned so the UI can render and re-edit it.
 	ExtraBody map[string]any `json:"extra_body,omitempty"`
+	// DisableThinking echoes the slot's stored toggle so the UI initializes the
+	// checkbox. Nil means unset (resolved to disabled); the UI defaults the
+	// checkbox checked when this is nil or true.
+	DisableThinking *bool `json:"disable_thinking,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.
@@ -139,6 +143,13 @@ type ProviderSlotConfig struct {
 	// map is the new full set (omitted keys are removed); values are not secret
 	// and are returned verbatim on read.
 	ExtraBody map[string]any `json:"extra_body,omitempty"`
+	// DisableThinking toggles whether nram sends the provider-appropriate
+	// "thinking off" knob on completions. A nil pointer means unset and resolves
+	// to true (disabled), so existing slots and slots that never touch the toggle
+	// keep skipping the reasoning pass. Honored for the Ollama/OpenRouter/vLLM/
+	// SGLang/llama-server/Gemini types; inert for openai/anthropic/openai-compatible,
+	// where an explicit disable would 400 on current models.
+	DisableThinking *bool `json:"disable_thinking,omitempty"`
 }
 
 // ProviderTestResult is the response body for POST /providers/test.

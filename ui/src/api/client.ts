@@ -890,6 +890,12 @@ export interface ProviderSlot {
    * and re-edits them.
    */
   extra_body?: Record<string, unknown> | null;
+  /**
+   * The slot's stored "disable thinking" toggle. Null/undefined means unset
+   * (resolved to disabled server-side); the UI defaults the checkbox checked
+   * unless this is explicitly false.
+   */
+  disable_thinking?: boolean | null;
 }
 
 export interface UpdateProviderSlotRequest {
@@ -911,6 +917,13 @@ export interface UpdateProviderSlotRequest {
    * set; omitting it clears any stored value. Ignored for Gemini/Anthropic.
    */
   extra_body?: Record<string, unknown>;
+  /**
+   * Whether nram sends the provider-appropriate "thinking off" knob on this
+   * slot's completions. Sent only for types where it has an effect
+   * (Ollama/OpenRouter/vLLM/SGLang/llama-server/Gemini); omitting it leaves the
+   * stored value untouched.
+   */
+  disable_thinking?: boolean;
   /**
    * Request-only flag: when true, the stored api_key is cleared instead of
    * preserved-on-blank (e.g. switching a slot to header-only auth).

@@ -503,6 +503,42 @@ func TestUpdateProviderSlotRoundTripsExtraBody(t *testing.T) {
 	}
 }
 
+func TestUpdateProviderSlotRoundTripsDisableThinking(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		in   *bool
+	}{
+		{"explicit_false", ptr(false)},
+		{"explicit_true", ptr(true)},
+		{"unset", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+				Type: "vllm", URL: "http://localhost:8000", Model: "Qwen/Qwen3-8B",
+				DisableThinking: tc.in,
+			}, api.UpdateProviderSlotOpts{}); err != nil {
+				t.Fatalf("update: %v", err)
+			}
+
+			stored := readStoredSlot(t, settingsRepo, "fact").DisableThinking
+			switch {
+			case tc.in == nil:
+				if stored != nil {
+					t.Errorf("unset must omit disable_thinking, stored = %v", *stored)
+				}
+			case stored == nil || *stored != *tc.in:
+				t.Errorf("stored disable_thinking = %v, want %v", stored, *tc.in)
+			}
+		})
+	}
+}
+
 func TestGetRegistryConfig(t *testing.T) {
 	cfg := provider.RegistryConfig{
 		Embedding: provider.SlotConfig{

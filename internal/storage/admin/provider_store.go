@@ -165,6 +165,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		APIKeySet:        persisted.APIKey != "",
 		CustomHeaderKeys: sortedHeaderKeys(persisted.CustomHeaders),
 		ExtraBody:        persisted.ExtraBody,
+		DisableThinking:  persisted.DisableThinking,
 	}
 }
 
@@ -258,12 +259,13 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 	}
 
 	slotCfg := provider.SlotConfig{
-		Type:          req.Config.Type,
-		BaseURL:       req.Config.URL,
-		APIKey:        req.Config.APIKey,
-		Model:         req.Config.Model,
-		CustomHeaders: req.Config.CustomHeaders,
-		ExtraBody:     req.Config.ExtraBody,
+		Type:            req.Config.Type,
+		BaseURL:         req.Config.URL,
+		APIKey:          req.Config.APIKey,
+		Model:           req.Config.Model,
+		CustomHeaders:   req.Config.CustomHeaders,
+		ExtraBody:       req.Config.ExtraBody,
+		DisableThinking: req.Config.DisableThinking,
 	}
 	if req.Config.Timeout != nil {
 		slotCfg.Timeout = *req.Config.Timeout
@@ -556,6 +558,7 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			JSONModeToolUse:    anthropicJSONToolUse,
 			CustomHeaders:      apiCfg.CustomHeaders,
 			ExtraBody:          apiCfg.ExtraBody,
+			DisableThinking:    apiCfg.DisableThinking,
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout

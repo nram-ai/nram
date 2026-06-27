@@ -542,6 +542,68 @@ func TestGeminiRequestFormat(t *testing.T) {
 	}
 }
 
+// thinkingBudget:0 is sent only when DisableThinking is on AND the model is in
+// the 2.5 Flash family that accepts a zero budget; otherwise no thinkingConfig
+// is sent so a model that cannot disable thinking keeps its default behavior.
+func TestGeminiComplete_ThinkingBudgetGated(t *testing.T) {
+	cases := []struct {
+		name           string
+		model          string
+		disableThink   bool
+		wantBudgetZero bool // expect thinkingConfig.thinkingBudget == 0
+	}{
+		{"flash25_disabled", "gemini-2.5-flash", true, true},
+		{"flash25_enabled", "gemini-2.5-flash", false, false},
+		{"flash20_disabled_unsupported", "gemini-2.0-flash", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var receivedReq geminiGenerateRequest
+			srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
+				":generateContent": func(w http.ResponseWriter, r *http.Request) {
+					_ = json.NewDecoder(r.Body).Decode(&receivedReq)
+					resp := geminiGenerateResponse{
+						Candidates: []geminiCandidate{{
+							Content:      geminiContent{Role: "model", Parts: []geminiPart{{Text: "ok"}}},
+							FinishReason: "STOP",
+						}},
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(resp)
+				},
+			})
+			defer srv.Close()
+
+			p := NewGeminiProvider(GeminiConfig{
+				BaseURL:         srv.URL,
+				APIKey:          "test-key",
+				DefaultModel:    tc.model,
+				DisableThinking: tc.disableThink,
+			})
+			if _, err := p.Complete(context.Background(), &CompletionRequest{
+				Messages: []Message{{Role: "user", Content: "ping"}},
+			}); err != nil {
+				t.Fatalf("Complete() error: %v", err)
+			}
+
+			var tcfg *geminiThinkingConfig
+			if receivedReq.GenerationConfig != nil {
+				tcfg = receivedReq.GenerationConfig.ThinkingConfig
+			}
+			if tc.wantBudgetZero {
+				if tcfg == nil || tcfg.ThinkingBudget == nil {
+					t.Fatalf("expected thinkingConfig.thinkingBudget=0, got %+v", receivedReq.GenerationConfig)
+				}
+				if *tcfg.ThinkingBudget != 0 {
+					t.Errorf("thinkingBudget = %d, want 0", *tcfg.ThinkingBudget)
+				}
+			} else if tcfg != nil {
+				t.Errorf("expected no thinkingConfig, got %+v", tcfg)
+			}
+		})
+	}
+}
+
 func TestGeminiEmbedRequestFormat(t *testing.T) {
 	var receivedReq geminiEmbedRequest
 	var receivedPath string

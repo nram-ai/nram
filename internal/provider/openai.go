@@ -31,11 +31,12 @@ type OpenAIConfig struct {
 	Timeout time.Duration
 
 	// ProviderType is the canonical type from registry.go ("openai", "ollama",
-	// "openrouter", "openai-compatible", "vllm", "sglang"). Gates provider-specific
-	// request extensions (reasoning_effort for Ollama, the reasoning field for
-	// OpenRouter, chat_template_kwargs.enable_thinking=false for vLLM/SGLang) so
-	// they do not leak to strict OpenAI endpoints that reject unknown fields.
-	// Empty = treat as standard OpenAI-compatible (extensions omitted).
+	// "openrouter", "openai-compatible", "vllm", "sglang", "llama-server"). Gates
+	// provider-specific request extensions (reasoning_effort for Ollama, the
+	// reasoning field for OpenRouter, chat_template_kwargs.enable_thinking=false
+	// for vLLM/SGLang/llama-server) so they do not leak to strict OpenAI endpoints
+	// that reject unknown fields. Empty = treat as standard OpenAI-compatible
+	// (extensions omitted).
 	ProviderType string
 
 	// CustomHeaders are user-configured headers applied to every outbound
@@ -47,6 +48,14 @@ type OpenAIConfig struct {
 	// Its keys win over anything nram set, so a user-supplied chat_template_kwargs
 	// replaces the vllm/sglang enable_thinking default. Empty = nothing merged.
 	ExtraBody map[string]any
+
+	// DisableThinking, when true, emits the per-type "thinking off" knob on
+	// completions (reasoning_effort:none for Ollama, reasoning.enabled:false for
+	// OpenRouter, chat_template_kwargs.enable_thinking:false for
+	// vLLM/SGLang/llama-server). The strict openai and generic openai-compatible
+	// types never get a knob in either state. Already resolved from the slot's
+	// pointer (nil defaults to true) by the registry.
+	DisableThinking bool
 }
 
 // OpenAIProvider implements both LLMProvider and EmbeddingProvider using any
@@ -235,24 +244,29 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	if req.JSONMode {
 		body.ResponseFormat = &openaiResponseFormat{Type: "json_object"}
 	}
-	if p.config.ProviderType == ProviderTypeOllama {
-		// Force thinking off (see ReasoningEffort field doc). These are
-		// extraction/decision/synthesis calls that never benefit from a reasoning
-		// trace, and recent Ollama defaults it on, adding tens of seconds per call.
-		body.ReasoningEffort = &ollamaReasoningEffortOff
-	}
-	if p.config.ProviderType == ProviderTypeOpenRouter {
-		// Force reasoning off for the same reason; OpenRouter's unified `reasoning`
-		// field disables it across the models that support toggling.
-		body.Reasoning = &openrouterReasoning{Enabled: false}
-	}
-	if p.config.ProviderType == ProviderTypeVLLM || p.config.ProviderType == ProviderTypeSGLang {
-		// vLLM and SGLang ignore reasoning_effort; on their OpenAI-compatible
-		// endpoints the documented knob to disable a Qwen3 thinking pass is the
-		// chat-template kwarg enable_thinking=false. This is the analog of
-		// reasoning_effort:none on Ollama. A user-supplied extra_body
-		// chat_template_kwargs replaces this whole map at marshal time.
-		body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+	if p.config.DisableThinking {
+		// Emit the per-type knob that suppresses the model's reasoning pass. These
+		// are extraction/decision/synthesis calls that never benefit from a
+		// reasoning trace. Gated per type so a knob never leaks to a strict
+		// endpoint that would reject it: the openai and generic openai-compatible
+		// types get nothing here (an explicit reasoning_effort 400s on
+		// non-reasoning OpenAI models). A user-supplied extra_body wins at marshal
+		// time, so a configured chat_template_kwargs replaces the map below.
+		switch p.config.ProviderType {
+		case ProviderTypeOllama:
+			// Recent Ollama defaults thinking on, adding tens of seconds per call;
+			// reasoning_effort:none turns it off (see ReasoningEffort field doc).
+			body.ReasoningEffort = &ollamaReasoningEffortOff
+		case ProviderTypeOpenRouter:
+			// OpenRouter's unified `reasoning` field disables it across the models
+			// that support toggling.
+			body.Reasoning = &openrouterReasoning{Enabled: false}
+		case ProviderTypeVLLM, ProviderTypeSGLang, ProviderTypeLlamaServer:
+			// vLLM, SGLang, and llama.cpp's llama-server ignore reasoning_effort; on
+			// their OpenAI-compatible endpoints the documented knob to disable a
+			// Qwen3 thinking pass is the chat-template kwarg enable_thinking=false.
+			body.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+		}
 	}
 
 	var chatResp openaiChatResponse

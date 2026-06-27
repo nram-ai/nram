@@ -33,6 +33,13 @@ type GeminiConfig struct {
 	// in a query parameter, so these are typically proxy headers. Intended for
 	// proxies/gateways between nram and the provider.
 	CustomHeaders map[string]string
+
+	// DisableThinking, when true, sends thinkingConfig.thinkingBudget:0 to turn
+	// off the reasoning pass on models that accept it (the Gemini 2.5 Flash
+	// family; see geminiThinkingOffSupported). Already resolved from the slot's
+	// pointer (nil defaults to true) by the registry. When false, no thinkingConfig
+	// is sent and the model keeps its default behavior.
+	DisableThinking bool
 }
 
 // setHeaders sets the standard headers on an outbound request, then applies any
@@ -237,7 +244,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		SystemInstruction: systemInstruction,
 	}
 
-	disableThinking := geminiThinkingOffSupported(model)
+	disableThinking := p.config.DisableThinking && geminiThinkingOffSupported(model)
 	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 || req.JSONMode || disableThinking {
 		gc := &geminiGenerationConfig{}
 		if req.MaxTokens > 0 {

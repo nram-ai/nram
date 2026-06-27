@@ -573,10 +573,11 @@ func TestOpenAIComplete_OllamaExtensionsGated_Ollama(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAIProvider(OpenAIConfig{
-		BaseURL:      srv.URL,
-		DefaultModel: "qwen3:8b-extract",
-		ProviderType: ProviderTypeOllama,
-		Timeout:      5 * time.Second,
+		BaseURL:         srv.URL,
+		DefaultModel:    "qwen3:8b-extract",
+		ProviderType:    ProviderTypeOllama,
+		Timeout:         5 * time.Second,
+		DisableThinking: true,
 	})
 
 	_, err := p.Complete(context.Background(), &CompletionRequest{
@@ -623,6 +624,9 @@ func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 		DefaultModel: "gpt-4",
 		ProviderType: ProviderTypeOpenAI,
 		Timeout:      5 * time.Second,
+		// Even with thinking explicitly disabled, the strict openai type gets no
+		// knob: reasoning_effort 400s on non-reasoning models like gpt-4o.
+		DisableThinking: true,
 	})
 
 	_, err := p.Complete(context.Background(), &CompletionRequest{
@@ -675,17 +679,18 @@ func nestedBool(body map[string]any, outer, inner string) (val, ok bool) {
 // chat_template_kwargs:{enable_thinking:false} (reasoning_effort is ignored by
 // those engines). This is the analog of the Ollama gating above.
 func TestOpenAIComplete_ChatTemplateKwargsGated(t *testing.T) {
-	for _, ptype := range []string{ProviderTypeVLLM, ProviderTypeSGLang} {
+	for _, ptype := range []string{ProviderTypeVLLM, ProviderTypeSGLang, ProviderTypeLlamaServer} {
 		t.Run(ptype, func(t *testing.T) {
 			var got map[string]any
 			srv := chatCaptureServer(t, &got)
 			defer srv.Close()
 
 			p := NewOpenAIProvider(OpenAIConfig{
-				BaseURL:      srv.URL,
-				DefaultModel: "qwen3",
-				ProviderType: ptype,
-				Timeout:      5 * time.Second,
+				BaseURL:         srv.URL,
+				DefaultModel:    "qwen3",
+				ProviderType:    ptype,
+				Timeout:         5 * time.Second,
+				DisableThinking: true,
 			})
 			if _, err := p.Complete(context.Background(), &CompletionRequest{
 				Messages: []Message{{Role: "user", Content: "ping"}},
@@ -713,10 +718,11 @@ func TestOpenAIComplete_ChatTemplateKwargsNotSentForOpenAI(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAIProvider(OpenAIConfig{
-		BaseURL:      srv.URL,
-		DefaultModel: "gpt-4o-mini",
-		ProviderType: ProviderTypeOpenAI,
-		Timeout:      5 * time.Second,
+		BaseURL:         srv.URL,
+		DefaultModel:    "gpt-4o-mini",
+		ProviderType:    ProviderTypeOpenAI,
+		Timeout:         5 * time.Second,
+		DisableThinking: true,
 	})
 	if _, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages: []Message{{Role: "user", Content: "ping"}},
@@ -725,6 +731,44 @@ func TestOpenAIComplete_ChatTemplateKwargsNotSentForOpenAI(t *testing.T) {
 	}
 	if _, present := got["chat_template_kwargs"]; present {
 		t.Errorf("OpenAI provider must not send chat_template_kwargs; body had it")
+	}
+}
+
+// When thinking is enabled (DisableThinking=false), no provider sends a "thinking
+// off" knob — the model keeps its own default. Covers the OpenAI-adapter family
+// that would otherwise emit one.
+func TestOpenAIComplete_ThinkingEnabled_NoKnob(t *testing.T) {
+	for _, ptype := range []string{
+		ProviderTypeOllama, ProviderTypeOpenRouter,
+		ProviderTypeVLLM, ProviderTypeSGLang, ProviderTypeLlamaServer,
+	} {
+		t.Run(ptype, func(t *testing.T) {
+			var got map[string]any
+			srv := chatCaptureServer(t, &got)
+			defer srv.Close()
+
+			p := NewOpenAIProvider(OpenAIConfig{
+				BaseURL:         srv.URL,
+				DefaultModel:    "qwen3",
+				ProviderType:    ptype,
+				Timeout:         5 * time.Second,
+				DisableThinking: false,
+			})
+			if _, err := p.Complete(context.Background(), &CompletionRequest{
+				Messages: []Message{{Role: "user", Content: "ping"}},
+			}); err != nil {
+				t.Fatalf("complete: %v", err)
+			}
+			if _, present := got["reasoning_effort"]; present {
+				t.Errorf("%s: reasoning_effort sent with thinking enabled", ptype)
+			}
+			if _, present := got["reasoning"]; present {
+				t.Errorf("%s: reasoning sent with thinking enabled", ptype)
+			}
+			if _, present := got["chat_template_kwargs"]; present {
+				t.Errorf("%s: chat_template_kwargs sent with thinking enabled", ptype)
+			}
+		})
 	}
 }
 
@@ -737,10 +781,11 @@ func TestOpenAIComplete_ExtraBodyOverlay(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAIProvider(OpenAIConfig{
-		BaseURL:      srv.URL,
-		DefaultModel: "qwen3",
-		ProviderType: ProviderTypeVLLM,
-		Timeout:      5 * time.Second,
+		BaseURL:         srv.URL,
+		DefaultModel:    "qwen3",
+		ProviderType:    ProviderTypeVLLM,
+		Timeout:         5 * time.Second,
+		DisableThinking: true,
 		ExtraBody: map[string]any{
 			"chat_template_kwargs": map[string]any{"enable_thinking": true},
 			"top_k":                20,
