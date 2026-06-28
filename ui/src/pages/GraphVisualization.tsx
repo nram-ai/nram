@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import ForceGraph3D, { ForceGraphMethods } from "react-force-graph-3d";
 import * as THREE from "three";
+import { Text as TroikaText } from "troika-three-text";
 import {
   useMeProjects,
   useGraph,
@@ -380,36 +381,76 @@ function LayoutDrawer({ sliders, onReset, onClose }: LayoutDrawerProps) {
   );
 }
 
-// Create a text sprite for node labels
-function createTextSprite(text: string, color: string): THREE.Sprite {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d")!;
-  const fontSize = 48;
-  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
-  const metrics = ctx.measureText(text);
-  const textWidth = metrics.width;
+// Unit-radius geometries reused by every node, scaled per node via the mesh
+// transform, replacing the per-node SphereGeometry allocation that was a
+// dominant render cost at thousands of nodes. The 20-segment core sphere and
+// 16-segment glow shell match the original tessellation.
+const SHARED_NODE_GEOMETRY = new THREE.SphereGeometry(1, 20, 20);
+const SHARED_GLOW_GEOMETRY = new THREE.SphereGeometry(1, 16, 16);
 
-  canvas.width = textWidth + 20;
-  canvas.height = fontSize + 16;
+// Materials cached per entity type (color/emissive depend only on type, not on
+// node size), so we hold ~one material per type instead of one per node.
+const NODE_MATERIAL_CACHE = new Map<string, THREE.MeshPhongMaterial>();
+const GLOW_MATERIAL_CACHE = new Map<string, THREE.MeshBasicMaterial>();
 
-  ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
-  ctx.fillStyle = color;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+function getOrCreateMaterial<T extends THREE.Material>(
+  cache: Map<string, T>,
+  entityType: string,
+  make: (colors: { color: string; emissive: string }) => T,
+): T {
+  const key = entityType.toLowerCase();
+  let material = cache.get(key);
+  if (!material) {
+    material = make(getTypeColor(entityType));
+    cache.set(key, material);
+  }
+  return material;
+}
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
+const getNodeMaterial = (entityType: string) =>
+  getOrCreateMaterial(
+    NODE_MATERIAL_CACHE,
+    entityType,
+    (colors) =>
+      new THREE.MeshPhongMaterial({
+        color: new THREE.Color(colors.color),
+        emissive: new THREE.Color(colors.emissive),
+        emissiveIntensity: 0.6,
+        shininess: 80,
+        transparent: true,
+        opacity: 0.9,
+      }),
+  );
 
-  const spriteMaterial = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false,
-  });
-  const sprite = new THREE.Sprite(spriteMaterial);
-  sprite.scale.set(canvas.width / 12, canvas.height / 12, 1);
+// Faint outer glow shell, the same subtle halo the original per-node shell drew.
+const getGlowMaterial = (entityType: string) =>
+  getOrCreateMaterial(
+    GLOW_MATERIAL_CACHE,
+    entityType,
+    (colors) =>
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(colors.color),
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.BackSide,
+      }),
+  );
 
-  return sprite;
+// Node label as troika SDF text. All labels share one glyph atlas, replacing the
+// per-node canvas texture (one GPU texture per label) the original sprite drew.
+// troika Text does not billboard on its own; the billboard effect in the
+// component orients every label (userData.isNodeLabel) toward the camera so they
+// stay readable while the camera orbits.
+function createTextLabel(text: string, color: string): TroikaText {
+  const label = new TroikaText();
+  label.text = text;
+  label.fontSize = 5;
+  label.color = color;
+  label.anchorX = "center";
+  label.anchorY = "middle";
+  label.userData.isNodeLabel = true;
+  label.sync();
+  return label;
 }
 
 function GraphVisualization() {
@@ -773,39 +814,24 @@ function GraphVisualization() {
     return { nodes, links };
   }, [graphData]);
 
-  // Custom node rendering: glowing sphere with label
+  // Custom node rendering: a glowing sphere + faint glow shell + label. Geometry
+  // and materials are shared (SHARED_NODE_GEOMETRY / getNodeMaterial,
+  // SHARED_GLOW_GEOMETRY / getGlowMaterial), scaled per node, instead of a fresh
+  // geometry+material per node. Same look as before, far less allocation.
   const nodeThreeObject = useCallback((node: GraphNode) => {
-    const colors = getTypeColor(node.entityType);
     const size = 3 + Math.min(node.mentionCount, 10) * 0.5;
 
     const group = new THREE.Group();
 
-    // Core sphere
-    const geometry = new THREE.SphereGeometry(size, 20, 20);
-    const material = new THREE.MeshPhongMaterial({
-      color: new THREE.Color(colors.color),
-      emissive: new THREE.Color(colors.emissive),
-      emissiveIntensity: 0.6,
-      shininess: 80,
-      transparent: true,
-      opacity: 0.9,
-    });
-    const sphere = new THREE.Mesh(geometry, material);
+    const sphere = new THREE.Mesh(SHARED_NODE_GEOMETRY, getNodeMaterial(node.entityType));
+    sphere.scale.setScalar(size);
     group.add(sphere);
 
-    // Outer glow shell
-    const glowGeometry = new THREE.SphereGeometry(size * 1.4, 16, 16);
-    const glowMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(colors.color),
-      transparent: true,
-      opacity: 0.12,
-      side: THREE.BackSide,
-    });
-    const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+    const glow = new THREE.Mesh(SHARED_GLOW_GEOMETRY, getGlowMaterial(node.entityType));
+    glow.scale.setScalar(size * 1.4);
     group.add(glow);
 
-    // Text label
-    const label = createTextSprite(node.name, colors.color);
+    const label = createTextLabel(node.name, getTypeColor(node.entityType).color);
     label.position.set(0, size + 4, 0);
     group.add(label);
 
@@ -854,6 +880,37 @@ function GraphVisualization() {
     applyLayoutForces,
     requestReheat,
   ]);
+
+  // Billboard the troika labels toward the camera. THREE.Sprite (the old label)
+  // auto-faced the camera; troika Text does not. Labels only need reorienting
+  // when the camera moves, so hook the controls' "change" event (fires during
+  // orbit/pan/zoom) rather than spinning a per-frame loop. A quaternion copy per
+  // label is far cheaper than the per-node canvas texture the sprites required.
+  // The mocked test graph exposes no controls, so this safely no-ops there.
+  useEffect(() => {
+    const fg = graphRef.current;
+    // camera()/scene() are typed by ForceGraphMethods; controls() returns a bare
+    // `object`, so narrow only that one to the EventDispatcher surface we use.
+    // The inner optional calls keep the mocked test graph (no such methods) a
+    // safe no-op.
+    const controls = fg?.controls?.() as
+      | {
+          addEventListener: (type: string, listener: () => void) => void;
+          removeEventListener: (type: string, listener: () => void) => void;
+        }
+      | undefined;
+    const camera = fg?.camera?.();
+    const scene = fg?.scene?.();
+    if (!controls || !camera || !scene) return;
+    const billboard = () => {
+      scene.traverse((obj) => {
+        if (obj.userData?.isNodeLabel) obj.quaternion.copy(camera.quaternion);
+      });
+    };
+    billboard(); // initial orientation before the first camera move
+    controls.addEventListener("change", billboard);
+    return () => controls.removeEventListener("change", billboard);
+  }, [selectedProjectId, containerSize, graph3dData]);
 
   const isLoading = projectsLoading || (selectedProjectId && graphLoading);
 

@@ -67,9 +67,10 @@ export default defineConfig({
           if (/[\\/]node_modules[\\/]d3-[^\\/]+[\\/]/.test(id) || /[\\/]node_modules[\\/]internmap[\\/]/.test(id)) {
             return "d3";
           }
-          // Heavy 3D graph stack, only loaded by GraphVisualization.
+          // Heavy 3D graph stack, only loaded by GraphVisualization. troika
+          // (SDF labels) and its sdf/bidi helpers bundle here too.
           if (
-            /[\\/]node_modules[\\/](three|react-force-graph-3d|three-forcegraph|three-render-objects)[\\/]/.test(
+            /[\\/]node_modules[\\/](three|react-force-graph-3d|three-forcegraph|three-render-objects|troika-[^\\/]+|bidi-js|webgl-sdf-generator)[\\/]/.test(
               id,
             )
           ) {
