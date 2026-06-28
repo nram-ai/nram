@@ -18,6 +18,7 @@ import {
   healthAPI,
   type SetupRequest,
   type SetupResponse,
+  type OnboardingProgressRequest,
   type CreateOrgRequest,
   type UpdateOrgRequest,
   type CreateUserRequest,
@@ -110,6 +111,11 @@ export function useSetupStatus() {
   return useQuery({
     queryKey: ["admin", "setup-status"],
     queryFn: adminAPI.getSetupStatus,
+    // Status only flips on setup completion and onboarding progress, both of
+    // which invalidate this key explicitly (useCompleteSetup, useUpdateOnboarding).
+    // A stale window avoids refetching on every window-focus and remount; the
+    // SetupGuard and the AppLayout resume guard both read this shared query.
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -117,6 +123,19 @@ export function useCompleteSetup() {
   const qc = useQueryClient();
   return useMutation<SetupResponse, Error, SetupRequest>({
     mutationFn: (data: SetupRequest) => adminAPI.completeSetup(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "setup-status"] });
+    },
+  });
+}
+
+// useUpdateOnboarding persists the guided wizard's step cursor and/or marks
+// onboarding complete. Invalidates setup-status so the route guard re-evaluates.
+export function useUpdateOnboarding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: OnboardingProgressRequest) =>
+      adminAPI.updateOnboarding(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "setup-status"] });
     },

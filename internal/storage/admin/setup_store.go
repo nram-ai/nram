@@ -58,6 +58,54 @@ func (s *SetupStore) IsSetupComplete(ctx context.Context) (bool, error) {
 	return count > 0, nil
 }
 
+// IsOnboardingComplete reports whether the guided first-run onboarding flow has
+// been finished (or opted out of). The flag is written explicitly by
+// CompleteSetup ("false") and by SetOnboardingProgress ("true"). When the key
+// is entirely absent the install predates this feature, so it falls back to
+// IsSetupComplete: an already-set-up legacy instance is treated as onboarded
+// and never sees the wizard.
+func (s *SetupStore) IsOnboardingComplete(ctx context.Context) (bool, error) {
+	val, err := storage.GetSystemMeta(ctx, s.db, "onboarding_complete")
+	if err != nil {
+		return false, fmt.Errorf("check onboarding complete: %w", err)
+	}
+	switch val {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		// Unset: legacy install. Mirror setup completion.
+		return s.IsSetupComplete(ctx)
+	}
+}
+
+// OnboardingStep returns the persisted step cursor for the onboarding wizard
+// (empty string when never written).
+func (s *SetupStore) OnboardingStep(ctx context.Context) (string, error) {
+	val, err := storage.GetSystemMeta(ctx, s.db, "onboarding_step")
+	if err != nil {
+		return "", fmt.Errorf("read onboarding step: %w", err)
+	}
+	return val, nil
+}
+
+// SetOnboardingProgress persists the wizard's step cursor and, when complete is
+// true, marks onboarding finished. An empty step leaves the cursor untouched.
+func (s *SetupStore) SetOnboardingProgress(ctx context.Context, step string, complete bool) error {
+	if step != "" {
+		if err := storage.SetSystemMeta(ctx, s.db, "onboarding_step", step); err != nil {
+			return fmt.Errorf("set onboarding step: %w", err)
+		}
+	}
+	if complete {
+		if err := storage.SetSystemMeta(ctx, s.db, "onboarding_complete", "true"); err != nil {
+			return fmt.Errorf("set onboarding complete: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *SetupStore) CompleteSetup(ctx context.Context, email, password string) (*model.User, string, error) {
 	// Hash password.
 	hash, err := storage.HashPassword(password)
@@ -136,6 +184,12 @@ func (s *SetupStore) CompleteSetup(ctx context.Context, email, password string) 
 	}
 	if err := storage.SetSystemMeta(ctx, s.db, "storage_backend", s.db.Backend()); err != nil {
 		return nil, "", fmt.Errorf("setup set storage_backend: %w", err)
+	}
+	// Mark onboarding as NOT complete so the freshly created admin enters the
+	// guided first-run wizard. Legacy installs never get this key written and
+	// are treated as already onboarded (see IsOnboardingComplete).
+	if err := storage.SetSystemMeta(ctx, s.db, "onboarding_complete", "false"); err != nil {
+		return nil, "", fmt.Errorf("setup set onboarding_complete flag: %w", err)
 	}
 
 	return user, rawKey, nil

@@ -394,6 +394,22 @@ describe("API Client E2E", () => {
       expect(typeof adminApiKey).toBe("string");
       expect(adminApiKey.length).toBeGreaterThan(0);
     });
+
+    it("updateOnboarding() persists the step cursor and completion", async () => {
+      // CompleteSetup seeds onboarding_complete=false on a fresh install.
+      const before = await adminAPI.getSetupStatus();
+      expect(before.onboarding_complete).toBe(false);
+
+      const stepRes = await adminAPI.updateOnboarding({ step: "settings" });
+      expect(stepRes.status).toBe("ok");
+      const afterStep = await adminAPI.getSetupStatus();
+      expect(afterStep.onboarding_step).toBe("settings");
+      expect(afterStep.onboarding_complete).toBe(false);
+
+      await adminAPI.updateOnboarding({ complete: true });
+      const done = await adminAPI.getSetupStatus();
+      expect(done.onboarding_complete).toBe(true);
+    });
   });
 
   // -----------------------------------------------------------------------

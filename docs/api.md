@@ -28,6 +28,7 @@ Setup-guarded routes return 503 until the initial admin has been created via the
 |---|---|---|
 | `GET` | `/v1/admin/setup/status` | Whether the initial admin has been provisioned |
 | `POST` | `/v1/admin/setup` | Complete first-run setup (creates the administrator) |
+| `PUT` | `/v1/admin/setup/onboarding` | Persist guided onboarding progress (administrator) |
 | `POST` | `/v1/auth/lookup` | Resolve an email to its available login methods |
 | `POST` | `/v1/auth/login` | Password login, returns a JWT |
 | `POST` | `/v1/auth/passkey/begin` and `/finish` | WebAuthn login challenge and completion |

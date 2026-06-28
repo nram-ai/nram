@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.15.1
+  version: 0.15.2
   license:
     name: MIT
 
@@ -191,6 +191,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/admin/setup/onboarding:
+    put:
+      operationId: updateOnboardingProgress
+      tags: [Setup]
+      summary: Persist guided onboarding wizard progress
+      description: >-
+        Saves the onboarding wizard's step cursor and, when complete is true,
+        marks the guided first-run flow finished. Administrator only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingProgressRequest"
+      responses:
+        "200":
+          description: Progress saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   # ── Auth ────────────────────────────────────────────────────────────────
   /v1/auth/login:
@@ -4758,6 +4786,25 @@ components:
         backend:
           type: string
           enum: [sqlite, postgres]
+        onboarding_complete:
+          type: boolean
+          description: >-
+            Whether the guided first-run onboarding wizard has been finished or
+            opted out of. False only between account creation and wizard
+            completion on a fresh install; legacy installs report true.
+        onboarding_step:
+          type: string
+          description: Persisted onboarding wizard step cursor ("" when never advanced).
+
+    OnboardingProgressRequest:
+      type: object
+      properties:
+        step:
+          type: string
+          description: The wizard step cursor to persist.
+        complete:
+          type: boolean
+          description: When true, marks onboarding finished.
 
     SetupRequest:
       type: object
@@ -5289,7 +5336,7 @@ components:
             Derived from the calibrated vector cosines of the recall sources the
             answer actually cited, scaled by how many it corroborated against
             (not the model's self-assessment). Zero when the answer cited no
-            recall source — i.e. it was ungrounded, said "Not in neighborhood.",
+            recall source: it was ungrounded, said "Not in neighborhood.",
             or synthesis failed.
         synthesis_meta:
           type: object

@@ -38,13 +38,13 @@ Defaults: port **8674**, **SQLite** (`nram.db` in the working directory). For Po
 DATABASE_URL=postgres://user:pass@localhost:5432/nram ./nram
 ```
 
-## 4. Open the setup wizard
+## 4. Create your administrator account and run guided setup
 
-Navigate to `http://localhost:8674`, create the initial admin account, and **save the API key shown on the completion screen; it is shown only once.**
+Navigate to `http://localhost:8674` and create the initial admin account. **Save the API key shown right after; it is displayed only once.** You are then taken into a short guided setup that walks you, one step at a time, through the three required providers, the optional providers, and the high-level feature toggles (enrichment, dreaming, ask synthesis, reranking), finishing with the MCP-connect details. Each provider step has a **Test Connection** check that must pass before its config is saved (a failed test still offers a "Save anyway" escape). You can skip any step and configure it later under **Settings**; the section below is the same configuration the wizard walks you through.
 
 ## 5. Configure an LLM provider (required)
 
-Open **Settings → Providers** and configure the three required slots: **Embedding** (semantic search), **Fact Extraction**, and **Entity Extraction** (the knowledge graph and dreaming). The optional slots (Query Augmentation, Ingestion Decision, Ask Synthesis, and a relevance Reranker) can be left unset: the first two fall back to Fact Extraction, and the last two stay inert until configured.
+The guided setup walks you through these slots; afterward they live under **Settings → Providers**, where you can edit them anytime. The three required slots are **Embedding** (semantic search), **Fact Extraction**, and **Entity Extraction** (the knowledge graph and dreaming). The optional slots (Query Augmentation, Ingestion Decision, Ask Synthesis, and a relevance Reranker) can be left unset: the first two fall back to Fact Extraction, and the last two stay inert until configured.
 
 Any of OpenAI, Anthropic (chat slots only; it has no embeddings API), Google Gemini, Ollama, OpenRouter, vLLM, SGLang, llama.cpp's llama-server, or an OpenAI-compatible endpoint works. Changes hot-reload; no restart needed.
 

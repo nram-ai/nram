@@ -64,6 +64,7 @@ import SetupWizard from "./pages/SetupWizard";
 // redirects the browser to /authorize or a recipient opens a share
 // magic-link at /share/accept. Lazy-loaded so they do not weigh on the
 // admin-UI entry chunk.
+const OnboardingWizard = React.lazy(() => import("./pages/OnboardingWizard"));
 const Authorize = React.lazy(() => import("./pages/Authorize"));
 const ShareAccept = React.lazy(() => import("./pages/ShareAccept"));
 
@@ -257,6 +258,11 @@ function AppLayout() {
   const askEnabled = capabilities?.ask_enabled === true;
   const { data: health } = useHealth();
   const buildCommit = health ? formatCommit(health.build) : null;
+  // Resume the guided first-run wizard: an administrator who finished account
+  // creation but not onboarding is sent to /onboarding on every app load until
+  // they finish or opt out. /onboarding is a sibling route (AppLayout does not
+  // mount there), so this never loops.
+  const { data: setupStatus } = useSetupStatus();
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -275,6 +281,10 @@ function AppLayout() {
       document.documentElement.style.removeProperty("--network-opacity");
     }
   }, [location.pathname]);
+
+  if (auth.isAdmin && setupStatus && setupStatus.onboarding_complete === false) {
+    return <Navigate to="/onboarding" replace />;
+  }
 
   const filteredItems = navItems.filter((item) => {
     if (item.minRole && !auth.hasMinRole(item.minRole)) {
@@ -489,6 +499,7 @@ function App() {
             <Suspense fallback={<RouteFallback />}>
               <Routes>
                 <Route path="/setup" element={<SetupWizard />} />
+                <Route path="/onboarding" element={<AuthGuard><OnboardingWizard /></AuthGuard>} />
                 <Route path="/login" element={<Login />} />
                 {/*
                   /authorize and /share/accept must work for unauthenticated

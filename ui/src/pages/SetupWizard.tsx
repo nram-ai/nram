@@ -4,163 +4,62 @@ import { useSetupStatus, useCompleteSetup } from "../hooks/useApi";
 import type { SetupResponse } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCircleInfo, faTriangleExclamation, faCircleCheck } from "../lib/icons";
+import { faTriangleExclamation, faCircleCheck } from "../lib/icons";
 import { CopyButton } from "../components/CopyButton";
 
 // Shared styling for the wizard's copy buttons (icon + label card style).
 const WIZARD_COPY_CLASS =
   "inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
 
-function CodeBlock({ code, label }: { code: string; label?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-muted/50">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        {label && <span className="text-xs font-medium text-muted-foreground">{label}</span>}
-        <CopyButton text={code} withIcon className={WIZARD_COPY_CLASS} />
-      </div>
-      <pre className="overflow-x-auto p-4 text-sm leading-relaxed text-foreground">
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
-
-function BackendBanners({ backend }: { backend: string }) {
-  const backendLabel = backend === "sqlite" ? "SQLite" : "Postgres";
-  const backendBlurb =
-    backend === "sqlite"
-      ? "SQLite supports the full feature set: vector search (pure-Go HNSW), hybrid recall (FTS5), enrichment, dreaming, knowledge graph, and every MCP tool. Upgrade to Postgres only if you need multiple nram instances against one database with cross-instance event propagation."
-      : "Vector search via pgvector, hybrid recall, multi-instance event propagation via LISTEN/NOTIFY, and the full feature set are active.";
-
-  return (
-    <div className="space-y-3">
-      <div className="rounded-lg border border-info/40 bg-info/10 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <FontAwesomeIcon icon={faCircleInfo} className="mt-0.5 h-5 w-5 shrink-0 text-info" />
-          <div>
-            <p className="text-sm font-medium text-info">Running on {backendLabel}</p>
-            <p className="mt-1 text-sm text-info">{backendBlurb}</p>
-            <a href="/database" className="mt-1 inline-block text-sm font-medium text-info underline hover:no-underline">
-              Settings &rarr; Database
-            </a>
-          </div>
-        </div>
-      </div>
-      <div className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-          <div>
-            <p className="text-sm font-medium text-warning">LLM providers not configured</p>
-            <p className="mt-1 text-sm text-warning">
-              Memories are stored as raw text only. Configure an <strong>embedding</strong> provider for semantic recall and a <strong>fact</strong> + <strong>entity</strong> provider for enrichment, dreaming, and the knowledge graph. Provider changes hot-reload, no restart. <strong>New users:</strong> see the project README's <em>Recommended Models</em> section for a 60-second starter pick (and to avoid the <code>nomic-embed-text</code> 2048-token-context truncation trap).
-            </p>
-            <a href="/providers" className="mt-1 inline-block text-sm font-medium text-warning underline hover:no-underline">
-              Settings &rarr; Providers
-            </a>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CompletionScreen({
-  result,
-  backend,
-}: {
-  result: SetupResponse;
-  backend: string;
-}) {
+function CompletionScreen({ result }: { result: SetupResponse }) {
   const navigate = useNavigate();
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8674";
-
-  const claudeCodeCmd = `claude mcp add --transport http nram ${origin}/mcp`;
-
-  const curlStore = `curl -X POST ${origin}/v1/memories \\
-  -H "Authorization: Bearer ${result.api_key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "content": "The user prefers dark mode.",
-    "tags": ["preferences", "ui"]
-  }'`;
-
-  const curlRecall = `curl "${origin}/v1/memories/recall?q=user+preferences" \\
-  -H "Authorization: Bearer ${result.api_key}"`;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8">
-      <div className="text-center">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/20">
-          <FontAwesomeIcon icon={faCircleCheck} className="h-8 w-8 text-success" />
+    <div className="app-shell flex min-h-[80vh] items-center justify-center p-6">
+      <div className="mx-auto w-full max-w-xl space-y-6">
+        <div className="text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/20">
+            <FontAwesomeIcon icon={faCircleCheck} className="h-8 w-8 text-success" />
+          </div>
+          <h1 className="mt-4 font-display text-3xl text-foreground">Administrator created</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Save your API key below, then continue to the guided setup to configure
+            providers and turn on the features you want.
+          </p>
         </div>
-        <h1 className="mt-4 font-display text-3xl text-foreground">Setup Complete</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Your nram instance is ready. Review the information below to get started.
-        </p>
-      </div>
 
-      {/* MCP Connection */}
-      <div className="space-y-3">
-        <h2 className="text-lg font-semibold">Connect an MCP Client</h2>
-        <p className="text-sm text-muted-foreground">
-          nram supports OAuth auto-discovery. Most MCP clients connect with just the server URL, no API key needed.
-        </p>
-        <CodeBlock code={claudeCodeCmd} label="Claude Code" />
-        <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-          <p className="text-sm font-medium">Claude Desktop / Claude.ai</p>
-          <p className="text-sm text-muted-foreground">Customize &rarr; Connectors &rarr; Add custom connector:</p>
-          <code className="block rounded-md bg-muted px-3 py-2 text-sm font-mono">{origin}/mcp</code>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-          <p className="text-sm font-medium">Cursor</p>
-          <p className="text-sm text-muted-foreground">Settings &rarr; MCP &rarr; Add &rarr; URL type:</p>
-          <code className="block rounded-md bg-muted px-3 py-2 text-sm font-mono">{origin}/mcp</code>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          For more options including ChatGPT and API key fallback, visit the <a href="/mcp-config" className="text-primary hover:underline">MCP Config</a> page.
-        </p>
-      </div>
-
-      {/* API Key */}
-      <div className="rounded-lg border-2 border-warning/40 bg-warning/10 p-5">
-        <div className="flex items-start gap-3">
-          <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-warning">
-              API Key (fallback): save this now, it will not be shown again
-            </p>
-            <p className="mt-1 text-xs text-warning">
-              Use this for tools that don&apos;t support OAuth, or for direct API access.
-            </p>
-            <div className="mt-3 flex items-center gap-2">
-              <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
-                {result.api_key}
-              </code>
-              <CopyButton text={result.api_key} label="Copy Key" withIcon className={WIZARD_COPY_CLASS} />
+        {/* API Key: one-time reveal. Shown here because it is never returned again;
+            the rest of setup (providers, features, MCP connect) follows in the
+            guided wizard. */}
+        <div className="rounded-lg border-2 border-warning/40 bg-warning/10 p-5">
+          <div className="flex items-start gap-3">
+            <FontAwesomeIcon icon={faTriangleExclamation} className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-warning">
+                API Key (fallback): save this now, it will not be shown again
+              </p>
+              <p className="mt-1 text-xs text-warning">
+                Use this for tools that don&apos;t support OAuth, or for direct API access.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <code className="flex-1 rounded-md border border-warning/40 bg-white px-3 py-2 text-sm font-mono break-all dark:bg-warning/15">
+                  {result.api_key}
+                </code>
+                <CopyButton text={result.api_key} label="Copy Key" withIcon className={WIZARD_COPY_CLASS} />
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* curl examples */}
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Quick Start</h2>
-        <CodeBlock code={curlStore} label="Store a memory" />
-        <CodeBlock code={curlRecall} label="Recall memories" />
-      </div>
-
-      {/* Backend banners */}
-      <BackendBanners backend={backend} />
-
-      {/* Go to Dashboard */}
-      <div className="flex justify-center pt-2 pb-8">
-        <button
-          type="button"
-          onClick={() => navigate("/")}
-          className="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-        >
-          Go to Dashboard
-        </button>
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            onClick={() => navigate("/onboarding")}
+            className="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          >
+            Continue to guided setup
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -195,7 +94,7 @@ function SetupWizard() {
 
   // Show completion screen after successful setup
   if (setupResult) {
-    return <CompletionScreen result={setupResult} backend={status?.backend ?? "sqlite"} />;
+    return <CompletionScreen result={setupResult} />;
   }
 
   function validate(): string[] {

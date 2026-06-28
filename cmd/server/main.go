@@ -1216,6 +1216,7 @@ func main() {
 			OnComplete: setupChecker.MarkComplete,
 			Audit:      auditStore,
 		}),
+		AdminOnboarding:    api.NewAdminOnboardingHandler(api.SetupConfig{Store: setupStore}),
 		AdminDashboard:     api.NewAdminDashboardHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminActivity:      api.NewAdminActivityHandler(api.DashboardConfig{Store: dashboardStore}),
 		AdminOrgs:          api.NewAdminOrgsHandler(api.OrgAdminConfig{Store: orgAdminStore, Audit: auditStore}),

@@ -188,6 +188,7 @@ type Handlers struct {
 	// leak fix); admin sees own data only on these surfaces.
 	AdminSetupStatus      http.HandlerFunc
 	AdminSetup            http.HandlerFunc
+	AdminOnboarding       http.HandlerFunc
 	AdminDashboard        http.HandlerFunc
 	AdminActivity         http.HandlerFunc
 	AdminOrgs             http.HandlerFunc
@@ -627,6 +628,10 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.HandleFunc("/providers/*", handler(handlers.AdminProviders))
 			r.HandleFunc("/settings", handler(handlers.AdminSettings))
 			r.HandleFunc("/settings/reset", handler(handlers.AdminSettingsReset))
+			// Onboarding progress (authenticated administrator). The public
+			// setup status/complete routes live outside this group near the
+			// top of the router; this one mutates instance state.
+			r.Put("/setup/onboarding", handler(handlers.AdminOnboarding))
 			r.HandleFunc("/oauth", handler(handlers.AdminOAuth))
 			r.HandleFunc("/oauth/*", handler(handlers.AdminOAuth))
 			r.HandleFunc("/webhooks", handler(handlers.AdminWebhooks))

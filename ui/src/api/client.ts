@@ -174,6 +174,18 @@ export function getInstructions(format: InstructionsFormat): Promise<string> {
 export interface SetupStatus {
   setup_complete: boolean;
   backend: "sqlite" | "postgres";
+  // Whether the guided first-run onboarding wizard has been finished or opted
+  // out of. False only on a brand-new install between account creation and
+  // wizard completion; legacy installs (set up before onboarding existed)
+  // report true.
+  onboarding_complete: boolean;
+  // Persisted wizard step cursor ("" when never advanced).
+  onboarding_step: string;
+}
+
+export interface OnboardingProgressRequest {
+  step?: string;
+  complete?: boolean;
 }
 
 export interface SetupRequest {
@@ -1536,7 +1548,7 @@ export interface EnrichmentExtractionHealth {
   length_no_recovery: number;
   empty_response: number;
   llm_call_failed: number;
-  // Live, embeddable memories with no stored vector — invisible to vector
+  // Live, embeddable memories with no stored vector: invisible to vector
   // recall until re-embedded by the Backfill Missing Embeddings action.
   missing_embeddings: number;
 }
@@ -1923,6 +1935,8 @@ export const adminAPI = {
   getSetupStatus: () => request<SetupStatus>("GET", "/admin/setup/status"),
   completeSetup: (data: SetupRequest) =>
     request<SetupResponse>("POST", "/admin/setup", data),
+  updateOnboarding: (data: OnboardingProgressRequest) =>
+    request<{ status: string }>("PUT", "/admin/setup/onboarding", data),
 
   // Dashboard
   getDashboard: () => request<DashboardData>("GET", "/dashboard"),

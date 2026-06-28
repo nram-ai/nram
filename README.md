@@ -110,7 +110,7 @@ make build      # builds the UI and compiles a single ./nram binary
 ./nram
 ```
 
-Either way, open `http://localhost:8674`, create the admin account, and **save the API key, it is shown only once.** Then configure an LLM provider under **Settings → Providers** (nram falls back to keyword-only recall until you do).
+Either way, open `http://localhost:8674`, create the admin account, and **save the API key, it is shown only once.** A short guided setup then walks you through the required providers, the optional ones, and the high-level feature toggles, one step at a time (nram falls back to keyword-only recall until an embedding provider is configured). You can skip any step and revisit it later under **Settings → Providers**.
 
 - Per-OS download and checksum steps: **[docs/install.md](docs/install.md)**
 - Full setup walkthrough, providers, and connecting Claude / ChatGPT / Cursor: **[docs/quickstart.md](docs/quickstart.md)**

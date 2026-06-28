@@ -17,12 +17,18 @@ import (
 // --- mock SetupStore ---
 
 type mockSetupStore struct {
-	complete    bool
-	completeErr error
-	setupUser   *model.User
-	setupKey    string
-	setupErr    error
-	backend     string
+	complete           bool
+	completeErr        error
+	setupUser          *model.User
+	setupKey           string
+	setupErr           error
+	backend            string
+	onboardingComplete bool
+	onboardingStep     string
+	onboardingErr      error
+	setProgressStep    string
+	setProgressDone    bool
+	setProgressCalled  bool
 }
 
 func (m *mockSetupStore) IsSetupComplete(_ context.Context) (bool, error) {
@@ -34,6 +40,21 @@ func (m *mockSetupStore) CompleteSetup(_ context.Context, _, _ string) (*model.U
 }
 
 func (m *mockSetupStore) Backend() string { return m.backend }
+
+func (m *mockSetupStore) IsOnboardingComplete(_ context.Context) (bool, error) {
+	return m.onboardingComplete, m.onboardingErr
+}
+
+func (m *mockSetupStore) OnboardingStep(_ context.Context) (string, error) {
+	return m.onboardingStep, m.onboardingErr
+}
+
+func (m *mockSetupStore) SetOnboardingProgress(_ context.Context, step string, complete bool) error {
+	m.setProgressCalled = true
+	m.setProgressStep = step
+	m.setProgressDone = complete
+	return m.onboardingErr
+}
 
 // --- tests ---
 

@@ -19,6 +19,14 @@ type SetupStore interface {
 	CompleteSetup(ctx context.Context, email, password string) (*model.User, string, error)
 	// Backend returns "sqlite" or "postgres".
 	Backend() string
+	// IsOnboardingComplete reports whether the guided first-run wizard has been
+	// finished (or opted out of).
+	IsOnboardingComplete(ctx context.Context) (bool, error)
+	// OnboardingStep returns the persisted wizard step cursor ("" when unset).
+	OnboardingStep(ctx context.Context) (string, error)
+	// SetOnboardingProgress persists the wizard step cursor and, when complete
+	// is true, marks onboarding finished.
+	SetOnboardingProgress(ctx context.Context, step string, complete bool) error
 }
 
 // SetupConfig holds dependencies for setup handlers.
@@ -35,8 +43,15 @@ type SetupConfig struct {
 }
 
 type setupStatusResponse struct {
-	SetupComplete bool   `json:"setup_complete"`
-	Backend       string `json:"backend"`
+	SetupComplete      bool   `json:"setup_complete"`
+	Backend            string `json:"backend"`
+	OnboardingComplete bool   `json:"onboarding_complete"`
+	OnboardingStep     string `json:"onboarding_step"`
+}
+
+type onboardingRequest struct {
+	Step     string `json:"step"`
+	Complete bool   `json:"complete"`
 }
 
 type setupRequest struct {
@@ -61,10 +76,48 @@ func NewAdminSetupStatusHandler(cfg SetupConfig) http.HandlerFunc {
 			return
 		}
 
+		onboardingComplete, err := cfg.Store.IsOnboardingComplete(r.Context())
+		if err != nil {
+			WriteError(w, ErrInternal("failed to check setup status"))
+			return
+		}
+		onboardingStep, err := cfg.Store.OnboardingStep(r.Context())
+		if err != nil {
+			WriteError(w, ErrInternal("failed to check setup status"))
+			return
+		}
+
 		writeJSON(w, http.StatusOK, setupStatusResponse{
-			SetupComplete: complete,
-			Backend:       cfg.Store.Backend(),
+			SetupComplete:      complete,
+			Backend:            cfg.Store.Backend(),
+			OnboardingComplete: onboardingComplete,
+			OnboardingStep:     onboardingStep,
 		})
+	}
+}
+
+// NewAdminOnboardingHandler returns an http.HandlerFunc that persists the
+// guided onboarding wizard's step cursor and, when complete is set, marks
+// onboarding finished. Unlike the public setup status/complete handlers this is
+// mounted behind the authenticated administrator route group, since it mutates
+// instance state.
+func NewAdminOnboardingHandler(cfg SetupConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req onboardingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, ErrBadRequest("invalid JSON body"))
+			return
+		}
+		req.Step = strings.TrimSpace(req.Step)
+		if req.Step == "" && !req.Complete {
+			WriteError(w, ErrBadRequest("step or complete is required"))
+			return
+		}
+		if err := cfg.Store.SetOnboardingProgress(r.Context(), req.Step, req.Complete); err != nil {
+			WriteError(w, ErrInternal("failed to save onboarding progress"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 
