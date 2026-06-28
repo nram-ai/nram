@@ -612,6 +612,15 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		}
 	}
 
+	// Stamp ownership/correlation on the pipeline context once, now that the
+	// namespace and project are resolved, so every provider call this recall
+	// makes (embedding AND the rerank stage) attributes its token_usage row to
+	// the right org/user/project/namespace and correlates it to the API key.
+	// The per-call sites then only add their own Operation.
+	ctx = provider.WithUsageContext(ctx, model.NewUsageContext(req.UserID, projectID, req.OrgID))
+	ctx = provider.WithNamespaceID(ctx, namespaceID)
+	ctx = provider.WithAPIKeyID(ctx, req.APIKeyID)
+
 	// projectByNamespace maps each namespace this recall touches to the project
 	// that owns it. Without this, every candidate gets stamped with the primary
 	// project's slug: globals fetched alongside primary results would be
@@ -705,23 +714,10 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 				Dimension: dim,
 			}
 
-			// Stamp ownership/correlation context for the
-			// UsageRecordingProvider middleware to attribute the embedding
-			// token_usage row to the right org/user/project/namespace and
-			// correlate it back to the API key.
-			projectIDForCtx := projectID
-			recallUC := &model.UsageContext{
-				UserID:    req.UserID,
-				ProjectID: &projectIDForCtx,
-			}
-			if req.OrgID != uuid.Nil {
-				org := req.OrgID
-				recallUC.OrgID = &org
-			}
-			recallCtx := provider.WithUsageContext(ctx, recallUC)
-			recallCtx = provider.WithNamespaceID(recallCtx, namespaceID)
-			recallCtx = provider.WithAPIKeyID(recallCtx, req.APIKeyID)
-			recallCtx = provider.WithOperation(recallCtx, provider.OperationEmbedding)
+			// Ownership/correlation already rides on ctx (stamped once after
+			// namespace/project resolution); add only this call's Operation so
+			// the embedding token_usage row attributes correctly.
+			recallCtx := provider.WithOperation(ctx, provider.OperationEmbedding)
 
 			resp, err := ep.Embed(recallCtx, embReq)
 			if err == nil && len(resp.Embeddings) > 0 {

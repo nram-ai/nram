@@ -292,6 +292,98 @@ func TestRecall_SuccessWithVectorSearch(t *testing.T) {
 	}
 }
 
+// ctxCapturingReranker records the context it is invoked with so a test can
+// assert the pipeline stamped ownership before the rerank stage runs.
+type ctxCapturingReranker struct {
+	ctx   context.Context
+	calls int
+}
+
+func (c *ctxCapturingReranker) Name() string { return "ctx-capturing-reranker" }
+
+func (c *ctxCapturingReranker) Rerank(ctx context.Context, _ string, docs []string) (*provider.RerankResponse, error) {
+	c.ctx = ctx
+	c.calls++
+	return &provider.RerankResponse{Scores: make([]float64, len(docs)), Model: "fake"}, nil
+}
+
+// TestRecall_RerankReceivesOwnershipContext proves the Recall method stamps
+// org/user/project/namespace on the pipeline context before the rerank stage,
+// so the usage-recording reranker writes an attributable (non-NULL-ownership)
+// token_usage row. Without the stamp the rerank row is dropped from the
+// caller-scoped analytics view; this guards that regression.
+func TestRecall_RerankReceivesOwnershipContext(t *testing.T) {
+	projectID, nsID, projects, namespaces := setupTestFixtures()
+
+	mem1ID, mem2ID := uuid.New(), uuid.New()
+	now := time.Now()
+	memReader := &mockMemoryReader{
+		memories: map[uuid.UUID]*model.Memory{
+			mem1ID: makeTestMemory(mem1ID, nsID, "first memory", []string{"go"}, 0.8, 5, now.Add(-1*time.Hour)),
+			mem2ID: makeTestMemory(mem2ID, nsID, "second memory", []string{"rust"}, 0.6, 2, now.Add(-24*time.Hour)),
+		},
+	}
+	vectorSearcher := &mockVectorSearcher{
+		results: []storage.VectorSearchResult{
+			{ID: mem1ID, Score: 0.95, NamespaceID: nsID},
+			{ID: mem2ID, Score: 0.80, NamespaceID: nsID},
+		},
+	}
+	embProvider := &mockEmbeddingProvider{
+		name:       "test-embed",
+		dimensions: []int{384},
+		resp: &provider.EmbeddingResponse{
+			Embeddings: [][]float32{make([]float32, 384)},
+			Model:      "test-model",
+		},
+	}
+	svc, _ := newRecallService(memReader, projects, namespaces, vectorSearcher, nil, nil, func() provider.EmbeddingProvider { return embProvider })
+
+	// Enable the recall rerank stage with a non-zero blend weight so it fires.
+	repo := newMockSettingsRepo()
+	repo.put(SettingRerankEnabled, "global", "true")
+	repo.put(SettingRankWeightRerank, "global", "0.5")
+	svc.SetSettings(NewSettingsService(repo))
+
+	capt := &ctxCapturingReranker{}
+	svc.SetReranker(func() provider.RerankProvider { return capt })
+
+	userID, orgID, apiKeyID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := svc.Recall(context.Background(), &RecallRequest{
+		ProjectID: projectID,
+		Query:     "find something",
+		Limit:     10,
+		UserID:    &userID,
+		OrgID:     orgID,
+		APIKeyID:  &apiKeyID,
+	}); err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+
+	if capt.calls != 1 {
+		t.Fatalf("rerank stage should fire once, got %d calls", capt.calls)
+	}
+	uc := provider.UsageContextFromContext(capt.ctx)
+	if uc == nil {
+		t.Fatal("rerank ctx carries no UsageContext: ownership was not stamped (the analytics bug)")
+	}
+	if uc.OrgID == nil || *uc.OrgID != orgID {
+		t.Errorf("org_id on rerank ctx: got %v want %v", uc.OrgID, orgID)
+	}
+	if uc.UserID == nil || *uc.UserID != userID {
+		t.Errorf("user_id on rerank ctx: got %v want %v", uc.UserID, userID)
+	}
+	if uc.ProjectID == nil || *uc.ProjectID != projectID {
+		t.Errorf("project_id on rerank ctx: got %v want %v", uc.ProjectID, projectID)
+	}
+	if got := provider.NamespaceIDFromContext(capt.ctx); got != nsID {
+		t.Errorf("namespace_id on rerank ctx: got %v want %v", got, nsID)
+	}
+	if op, ok := provider.OperationFromContext(capt.ctx); !ok || op != provider.OperationRerank {
+		t.Errorf("operation on rerank ctx: got %v ok=%v want %v", op, ok, provider.OperationRerank)
+	}
+}
+
 func TestRecall_WithoutEmbeddingProvider(t *testing.T) {
 	projectID, nsID, projects, namespaces := setupTestFixtures()
 

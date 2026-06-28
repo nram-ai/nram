@@ -393,6 +393,16 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 		return nil, fmt.Errorf("ask: could not resolve a recall aperture")
 	}
 
+	// Stamp ownership/correlation on the pipeline context once, now that the
+	// primary project/namespace are resolved, so every provider call this ask
+	// makes (the neighborhood rerank stage and synthesis) attributes its
+	// token_usage row to the right org/user/project/namespace and correlates it
+	// to the API key. Downstream sites then only add their own Operation. The
+	// nested Recall re-stamps from its own request, which is correct.
+	ctx = provider.WithUsageContext(ctx, model.NewUsageContext(req.UserID, primaryProjectID, req.OrgID))
+	ctx = provider.WithNamespaceID(ctx, primaryNS)
+	ctx = provider.WithAPIKeyID(ctx, req.APIKeyID)
+
 	// --- Recall over the aperture --------------------------------------------
 	candidates := s.settings.ResolveIntWithDefault(ctx, SettingAskRecallCandidates, "global")
 	graphDepth := s.settings.ResolveIntWithDefault(ctx, SettingAskGraphDepth, "global")
@@ -639,7 +649,7 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 	}
 
 	// --- Synthesize -----------------------------------------------------------
-	answer, ok := s.synthesize(ctx, llm, req, primaryProjectID, primaryNS, neighborhood)
+	answer, ok := s.synthesize(ctx, llm, req, neighborhood)
 	meta.LatencyMs = time.Since(start).Milliseconds()
 	if !ok {
 		meta.SynthesisFailed = true
@@ -798,7 +808,6 @@ func (s *AskService) synthesize(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	req *AskRequest,
-	primaryProjectID, primaryNS uuid.UUID,
 	neighborhood []neighborMemory,
 ) (string, bool) {
 	system := s.settings.ResolveStringWithDefault(ctx, SettingAskSynthesisSystemPrompt, "global")
@@ -817,19 +826,10 @@ func (s *AskService) synthesize(
 	user := provider.Fence("neighborhood", strings.TrimRight(nb.String(), "\n")) +
 		"\n\n" + provider.Fence("question", strings.TrimSpace(req.Query))
 
-	pid := primaryProjectID
-	uc := &model.UsageContext{
-		UserID:    req.UserID,
-		ProjectID: &pid,
-	}
-	if req.OrgID != uuid.Nil {
-		org := req.OrgID
-		uc.OrgID = &org
-	}
-	usageCtx := provider.WithUsageContext(ctx, uc)
-	usageCtx = provider.WithNamespaceID(usageCtx, primaryNS)
-	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)
-	usageCtx = provider.WithOperation(usageCtx, provider.OperationAskSynthesis)
+	// Ownership/correlation already rides on ctx (stamped once in Ask after
+	// aperture resolution); add only this call's Operation so the synthesis
+	// token_usage row attributes correctly.
+	usageCtx := provider.WithOperation(ctx, provider.OperationAskSynthesis)
 
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
 		Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),

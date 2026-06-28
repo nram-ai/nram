@@ -148,6 +148,65 @@ func newAskSvc(t *testing.T, rc *askFakeRecaller, mem *askFakeMem, projects *ask
 
 // --- tests ------------------------------------------------------------------
 
+// TestAsk_RerankReceivesOwnershipContext proves the Ask method stamps
+// org/user/project/namespace on the pipeline context before the neighborhood
+// rerank stage, so the usage-recording reranker writes an attributable
+// token_usage row instead of a NULL-ownership one the analytics view drops.
+// (ctxCapturingReranker is defined in recall_test.go, same package.)
+func TestAsk_RerankReceivesOwnershipContext(t *testing.T) {
+	projects := askTestProjects()
+	work := projects.bySlug["work"]
+
+	repo := newMockSettingsRepo()
+	repo.put(SettingAskRerankEnabled, "global", "true")
+	repo.put(SettingAskSiblingsPerCandidate, "global", "0")
+	settings := NewSettingsService(repo)
+
+	rc := &askFakeRecaller{resp: &RecallResponse{Memories: []RecallResult{
+		askCandidate("aaaaaaaa", "work", 0.9),
+		askCandidate("bbbbbbbb", "work", 0.8),
+	}}}
+	svc := newAskSvc(t, rc, &askFakeMem{}, projects, askFakeLLM{content: "ok"}, settings)
+
+	capt := &ctxCapturingReranker{}
+	svc.WithReranker(func() provider.RerankProvider { return capt })
+
+	userID, orgID, apiKeyID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := svc.Ask(context.Background(), &AskRequest{
+		Query:            "q",
+		ProjectSlug:      "work",
+		OwnerNamespaceID: uuid.New(),
+		UserID:           &userID,
+		OrgID:            orgID,
+		APIKeyID:         &apiKeyID,
+	}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	if capt.calls != 1 {
+		t.Fatalf("ask rerank stage should fire once, got %d calls", capt.calls)
+	}
+	uc := provider.UsageContextFromContext(capt.ctx)
+	if uc == nil {
+		t.Fatal("ask rerank ctx carries no UsageContext: ownership was not stamped")
+	}
+	if uc.OrgID == nil || *uc.OrgID != orgID {
+		t.Errorf("org_id on rerank ctx: got %v want %v", uc.OrgID, orgID)
+	}
+	if uc.UserID == nil || *uc.UserID != userID {
+		t.Errorf("user_id on rerank ctx: got %v want %v", uc.UserID, userID)
+	}
+	if uc.ProjectID == nil || *uc.ProjectID != work.ID {
+		t.Errorf("project_id on rerank ctx: got %v want %v", uc.ProjectID, work.ID)
+	}
+	if got := provider.NamespaceIDFromContext(capt.ctx); got != work.NamespaceID {
+		t.Errorf("namespace_id on rerank ctx: got %v want %v", got, work.NamespaceID)
+	}
+	if op, ok := provider.OperationFromContext(capt.ctx); !ok || op != provider.OperationRerank {
+		t.Errorf("operation on rerank ctx: got %v ok=%v want %v", op, ok, provider.OperationRerank)
+	}
+}
+
 func TestAsk_ProviderUnconfigured(t *testing.T) {
 	rc := &askFakeRecaller{resp: &RecallResponse{}}
 	svc := newAskSvc(t, rc, &askFakeMem{}, askTestProjects(), nil, nil)

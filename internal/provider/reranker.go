@@ -339,11 +339,11 @@ func (u *UsageRecordingRerank) Rerank(ctx context.Context, query string, docs []
 	start := time.Now()
 	resp, err := u.inner.Rerank(ctx, query, docs)
 	latency := int(time.Since(start).Milliseconds())
-	u.record(ctx, resp, err, latency)
+	u.record(ctx, query, docs, resp, err, latency)
 	return resp, err
 }
 
-func (u *UsageRecordingRerank) record(ctx context.Context, resp *RerankResponse, callErr error, latencyMs int) {
+func (u *UsageRecordingRerank) record(ctx context.Context, query string, docs []string, resp *RerankResponse, callErr error, latencyMs int) {
 	if u.recorder == nil {
 		return
 	}
@@ -355,6 +355,19 @@ func (u *UsageRecordingRerank) record(ctx context.Context, resp *RerankResponse,
 		promptTokens = resp.Usage.PromptTokens
 		completionTokens = resp.Usage.CompletionTokens
 		modelName = resp.Model
+	}
+
+	// Tokenizer fallback: a cross-encoder /v1/rerank server may omit the usage
+	// block (the measured llama-server reports it, but not every server does).
+	// Estimate the prefill when the server reported nothing, mirroring the LLM
+	// recorder. A cross-encoder scores (query, doc) pairs, prefilling the query
+	// once per document, so count it per pair; reranking does no generation, so
+	// completion stays 0.
+	if resp != nil && promptTokens == 0 && completionTokens == 0 {
+		promptTokens = EstimateTokens(modelName, query) * len(docs)
+		for _, d := range docs {
+			promptTokens += EstimateTokens(modelName, d)
+		}
 	}
 
 	if u.counter != nil {

@@ -7,7 +7,134 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/nram-ai/nram/internal/model"
 )
+
+// fakeRerankProvider is a RerankProvider stub for the usage-recording wrapper
+// tests: it returns a fixed response/error without any network or model call.
+type fakeRerankProvider struct {
+	name string
+	resp *RerankResponse
+	err  error
+}
+
+func (f *fakeRerankProvider) Rerank(_ context.Context, _ string, _ []string) (*RerankResponse, error) {
+	return f.resp, f.err
+}
+func (f *fakeRerankProvider) Name() string { return f.name }
+
+// TestUsageRecordingRerank_AttributesOwnership proves the rerank recorder reads
+// org/user/project/namespace off the context (as the recall and ask pipelines
+// now stamp it) and writes a non-NULL-ownership token_usage row stamped
+// OperationRerank, so analytics' caller-scoped query can see it.
+func TestUsageRecordingRerank_AttributesOwnership(t *testing.T) {
+	rec := &captureRecorder{}
+	inner := &fakeRerankProvider{name: "llama-server", resp: &RerankResponse{
+		Scores: []float64{0.1, 0.2},
+		Model:  "bge-reranker-v2-m3",
+		Usage:  TokenUsage{PromptTokens: 4319, TotalTokens: 4319},
+	}}
+	w := NewUsageRecordingRerank(inner, rec, nil)
+
+	org, user, proj, ns := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ctx := WithUsageContext(context.Background(), &model.UsageContext{OrgID: &org, UserID: &user, ProjectID: &proj})
+	ctx = WithNamespaceID(ctx, ns)
+	ctx = WithOperation(ctx, OperationRerank)
+
+	if _, err := w.Rerank(ctx, "q", []string{"a", "b"}); err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	got := rec.last()
+	if got == nil {
+		t.Fatal("expected a recorded row")
+	}
+	if got.Operation != string(OperationRerank) {
+		t.Errorf("operation: got %q want %q", got.Operation, OperationRerank)
+	}
+	if got.OrgID == nil || *got.OrgID != org {
+		t.Errorf("org_id: got %v want %v", got.OrgID, org)
+	}
+	if got.UserID == nil || *got.UserID != user {
+		t.Errorf("user_id: got %v want %v", got.UserID, user)
+	}
+	if got.ProjectID == nil || *got.ProjectID != proj {
+		t.Errorf("project_id: got %v want %v", got.ProjectID, proj)
+	}
+	if got.NamespaceID != ns {
+		t.Errorf("namespace_id: got %v want %v", got.NamespaceID, ns)
+	}
+	if got.TokensInput != 4319 || got.TokensOutput != 0 {
+		t.Errorf("tokens: in=%d out=%d, want in=4319 out=0", got.TokensInput, got.TokensOutput)
+	}
+}
+
+// TestUsageRecordingRerank_ZeroUsageEstimates proves the per-pair tokenizer
+// fallback fires when a rerank server omits the usage block: the query is
+// counted once per document and completion stays 0 (reranking does no
+// generation).
+func TestUsageRecordingRerank_ZeroUsageEstimates(t *testing.T) {
+	rec := &captureRecorder{}
+	inner := &fakeRerankProvider{name: "llama-server", resp: &RerankResponse{
+		Scores: []float64{0.1, 0.2},
+		Model:  "bge",
+		Usage:  TokenUsage{}, // server returned no usage
+	}}
+	w := NewUsageRecordingRerank(inner, rec, nil)
+
+	query := "hello world relevance query"
+	docs := []string{"the first candidate document", "a second, longer candidate document about things"}
+	ctx := WithOperation(context.Background(), OperationRerank)
+	if _, err := w.Rerank(ctx, query, docs); err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+
+	want := EstimateTokens("bge", query) * len(docs)
+	for _, d := range docs {
+		want += EstimateTokens("bge", d)
+	}
+	got := rec.last()
+	if got == nil {
+		t.Fatal("expected a recorded row")
+	}
+	if want == 0 {
+		t.Fatal("test setup: expected a non-zero estimate")
+	}
+	if got.TokensInput != want {
+		t.Errorf("estimated input: got %d want %d (query once per doc + each doc)", got.TokensInput, want)
+	}
+	if got.TokensOutput != 0 {
+		t.Errorf("output tokens: got %d want 0", got.TokensOutput)
+	}
+}
+
+// TestUsageRecordingRerank_ReportedUsageUnchanged proves the fallback does NOT
+// override measured counts when the server reports usage.
+func TestUsageRecordingRerank_ReportedUsageUnchanged(t *testing.T) {
+	rec := &captureRecorder{}
+	inner := &fakeRerankProvider{name: "openai", resp: &RerankResponse{
+		Scores: []float64{0.5},
+		Model:  "bge",
+		Usage:  TokenUsage{PromptTokens: 4319, TotalTokens: 4319},
+	}}
+	w := NewUsageRecordingRerank(inner, rec, nil)
+
+	ctx := WithOperation(context.Background(), OperationRerank)
+	if _, err := w.Rerank(ctx, "q", []string{"a", "b", "c"}); err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	got := rec.last()
+	if got == nil {
+		t.Fatal("expected a recorded row")
+	}
+	if got.TokensInput != 4319 {
+		t.Errorf("measured input must be unchanged: got %d want 4319", got.TokensInput)
+	}
+	if got.TokensOutput != 0 {
+		t.Errorf("output tokens: got %d want 0", got.TokensOutput)
+	}
+}
 
 // TestCrossEncoderRerank_RemapsToInputOrder verifies that scores returned by a
 // /v1/rerank server (sorted by score, with index back-references) are remapped

@@ -14,6 +14,18 @@ type UsageContext struct {
 	ProjectID *uuid.UUID
 }
 
+// NewUsageContext builds a UsageContext from a request's ownership IDs, taking
+// the address of fresh copies so callers do not have to. A zero orgID is left
+// nil (a NULL org_id row is dropped from the caller-scoped analytics view, so
+// callers should pass a real org when they have one).
+func NewUsageContext(userID *uuid.UUID, projectID, orgID uuid.UUID) *UsageContext {
+	uc := &UsageContext{UserID: userID, ProjectID: &projectID}
+	if orgID != uuid.Nil {
+		uc.OrgID = &orgID
+	}
+	return uc
+}
+
 type TokenUsage struct {
 	ID           uuid.UUID  `json:"id"`
 	OrgID        *uuid.UUID `json:"org_id"`
