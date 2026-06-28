@@ -132,46 +132,55 @@ const MODEL_HINTS: Record<string, Record<string, string>> = {
     embedding: "e.g. text-embedding-3-small",
     fact: "e.g. gpt-4o-mini",
     entity: "e.g. gpt-4o-mini",
+    reranker: "a chat model for the LLM-judge path, e.g. gpt-4o-mini",
   },
   ollama: {
     embedding: "e.g. qwen3-embedding:0.6b, avoid nomic-embed-text (2048-tok ctx silently truncates long memories). See README → Recommended Models.",
     fact: "e.g. qwen3:8b, llama3.1, gemma2",
     entity: "e.g. qwen3:8b, llama3.1, gemma2",
+    reranker: "a chat model for the LLM-judge path, e.g. qwen3:8b",
   },
   gemini: {
     embedding: "e.g. text-embedding-004",
     fact: "e.g. gemini-2.0-flash",
     entity: "e.g. gemini-2.0-flash",
+    reranker: "a chat model for the LLM-judge path, e.g. gemini-2.0-flash",
   },
   anthropic: {
     embedding: "Not supported; use OpenAI or Ollama",
     fact: "e.g. claude-sonnet-4-6-20250514",
     entity: "e.g. claude-haiku-4-5-20251001",
+    reranker: "a chat model for the LLM-judge path, e.g. claude-haiku-4-5-20251001",
   },
   openrouter: {
     embedding: "e.g. openai/text-embedding-3-small",
     fact: "e.g. anthropic/claude-sonnet-4-6",
     entity: "e.g. anthropic/claude-haiku-4-5",
+    reranker: "a chat model for the LLM-judge path, e.g. anthropic/claude-haiku-4-5",
   },
   vllm: {
     embedding: "served model id, e.g. Qwen/Qwen3-Embedding-0.6B — or click Load Models to detect",
     fact: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
     entity: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
+    reranker: "served reranker model id, e.g. BAAI/bge-reranker-v2-m3 — or click Load Models to detect",
   },
   sglang: {
     embedding: "served model id, e.g. Qwen/Qwen3-Embedding-0.6B — or click Load Models to detect",
     fact: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
     entity: "served model id, e.g. Qwen/Qwen3-8B (thinking auto-disabled) — or click Load Models",
+    reranker: "served reranker model id, e.g. BAAI/bge-reranker-v2-m3 — or click Load Models to detect",
   },
   "llama-server": {
     embedding: "served model id, e.g. Qwen3-Embedding-0.6B-Q8_0 — or click Load Models to detect",
     fact: "served model id from GET /v1/models — or click Load Models",
     entity: "served model id from GET /v1/models — or click Load Models",
+    reranker: "served reranker model id, e.g. bge-reranker-v2-m3 or ms-marco-MiniLM-L6 — or click Load Models",
   },
   "openai-compatible": {
     embedding: "the model id exposed by your endpoint",
     fact: "the model id exposed by your endpoint",
     entity: "the model id exposed by your endpoint",
+    reranker: "the rerank model id exposed by your endpoint",
   },
 };
 
@@ -1276,6 +1285,18 @@ function ProviderSlotCard({
                   <span className="text-muted-foreground">Custom headers</span>
                   <p className="font-mono text-xs text-foreground">
                     {slot.custom_header_keys!.join(", ")}
+                  </p>
+                </div>
+              )}
+              {slot.rerank_method && (
+                <div>
+                  <span className="text-muted-foreground">Detected method</span>
+                  <p className="text-xs text-foreground">
+                    {slot.rerank_method === "cross_encoder"
+                      ? "cross-encoder (/v1/rerank)"
+                      : slot.rerank_method === "judge"
+                        ? "LLM judge"
+                        : slot.rerank_method}
                   </p>
                 </div>
               )}

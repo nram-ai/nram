@@ -43,6 +43,12 @@ const ASK_PROMPTS: SimplePromptSpec[] = [
   { systemKey: "ask.decomposition.system_prompt", title: "Query Decomposition" },
 ];
 
+// Reranking prompts apply to both the recall and ask paths (the LLM-judge
+// reranker method), so they get their own section rather than living under Ask.
+const RERANK_PROMPTS: SimplePromptSpec[] = [
+  { systemKey: "ranking.rerank.judge.system_prompt", title: "Reranker Relevance Judge" },
+];
+
 const SAMPLE_INPUT_PLACEHOLDER = `Enter sample text to test extraction against, for example:
 
 "John Smith works at Acme Corp as a senior engineer. He joined in January 2025 and primarily works with Python and Go. The company is headquartered in San Francisco and recently expanded to Austin, Texas."`;
@@ -630,6 +636,11 @@ export default function PromptTemplates() {
     systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
   }));
 
+  const rerankPrompts = RERANK_PROMPTS.map((spec) => ({
+    spec,
+    systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
+  }));
+
   // Keep refs updated for test calls.
   factSystemPromptRef.current = factSystemPromptData.currentValue;
   entitySystemPromptRef.current = entitySystemPromptData.currentValue;
@@ -946,6 +957,34 @@ export default function PromptTemplates() {
 
             <div className="space-y-6">
               {askPrompts.map(({ spec, systemData }) => (
+                <SimplePromptEditorCard
+                  key={spec.systemKey}
+                  title={spec.title}
+                  description={systemData.description}
+                  promptData={systemData}
+                  onSave={handleSave}
+                  saving={updateMutation.isPending}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Reranking Prompt Section */}
+          <div className="border-t border-border pt-8">
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold tracking-tight">
+                Reranking Prompt
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Used by the LLM-judge reranker to score how well each memory
+                answers the query, on both the recall and ask paths. Applies only
+                when the Reranker provider slot is a generative chat model (detected
+                method "judge"); cross-encoder rerankers ignore it.
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {rerankPrompts.map(({ spec, systemData }) => (
                 <SimplePromptEditorCard
                   key={spec.systemKey}
                   title={spec.title}

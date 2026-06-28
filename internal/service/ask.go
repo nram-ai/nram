@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -167,6 +168,10 @@ type AskService struct {
 	// on the synthesis path. Diagnostic seam for offline measurement; left nil in
 	// production (never set in cmd/server), so the hot path is unaffected.
 	observer func(AskSynthesisTrace)
+	// reranker is optional. When nil (or when it returns nil because the reranker
+	// slot is unconfigured) the neighborhood rerank stage is skipped. Wired via
+	// WithReranker; additionally gated by the ask.rerank.enabled setting.
+	reranker func() provider.RerankProvider
 }
 
 // NewAskService constructs an AskService. llm re-reads the registry on every
@@ -204,6 +209,15 @@ func (s *AskService) WithVectorHydrator(v VectorHydrator) *AskService {
 	return s
 }
 
+// WithReranker wires the rerank provider accessor used by the optional ask
+// neighborhood rerank stage. Passing nil (or an accessor that returns nil when
+// the reranker slot is unconfigured) leaves the stage off. Additionally gated by
+// the ask.rerank.enabled setting. Returns the service for chaining.
+func (s *AskService) WithReranker(fn func() provider.RerankProvider) *AskService {
+	s.reranker = fn
+	return s
+}
+
 // WithSynthesisObserver attaches a read-only diagnostic callback invoked once per
 // Ask on the synthesis path with the assembled neighborhood (in presentation
 // order), the raw pre-grounding-guard synthesizer output, and the cited memory ids.
@@ -212,6 +226,117 @@ func (s *AskService) WithVectorHydrator(v VectorHydrator) *AskService {
 func (s *AskService) WithSynthesisObserver(fn func(AskSynthesisTrace)) *AskService {
 	s.observer = fn
 	return s
+}
+
+// rerankNeighborhood reorders the assembled neighborhood by reranker-judged
+// relevance to the query, descending, so the most relevant memories lead the
+// synthesis prompt. It returns the neighborhood unchanged when the stage is
+// disabled (ask.rerank.enabled false), no reranker is wired, or there are fewer
+// than two members. Fail-soft: a reranker error or a mismatched score count
+// leaves the prior order intact. The ask path tolerates a non-deterministic
+// (judge) reranker because ask is already an LLM call. The operation is stamped
+// so the token_usage row attributes the cost to OperationRerank.
+func (s *AskService) rerankNeighborhood(ctx context.Context, query string, neighborhood []neighborMemory) []neighborMemory {
+	if len(neighborhood) < 2 {
+		return neighborhood
+	}
+	if s.settings == nil || !s.settings.ResolveBool(ctx, SettingAskRerankEnabled, "global") {
+		return neighborhood
+	}
+	if s.reranker == nil {
+		return neighborhood
+	}
+	rp := s.reranker()
+	if rp == nil {
+		return neighborhood
+	}
+
+	// Score the top window of the (already MMR-ordered) neighborhood; the tail
+	// beyond the window keeps its order appended after. Each doc is truncated to
+	// the configured cap so a long memory cannot overflow the reranker server's
+	// batch and fail the whole request.
+	window := min(len(neighborhood), resolveRerankIntSetting(ctx, s.settings, SettingRerankCandidates, defaultRerankCandidates))
+	maxDocChars := resolveRerankIntSetting(ctx, s.settings, SettingRerankMaxDocChars, defaultRerankMaxDocChars)
+	docs := make([]string, window)
+	for i := range window {
+		docs[i] = truncateForRerank(neighborhood[i].content, maxDocChars)
+	}
+
+	resp, err := rp.Rerank(rerankCallContext(ctx, s.settings), query, docs)
+	if err != nil || resp == nil || len(resp.Scores) != window {
+		if err != nil {
+			slog.WarnContext(ctx, "ask: neighborhood rerank failed, keeping prior order", "err", err)
+		} else if resp != nil && len(resp.Scores) != window {
+			slog.WarnContext(ctx, "ask: neighborhood rerank returned mismatched score count, keeping prior order",
+				"want", window, "got", len(resp.Scores))
+		}
+		return neighborhood
+	}
+
+	// Order the scored window by rerank score, descending; stable so equal scores
+	// keep their prior (MMR) order. The ask neighborhood carries no composite
+	// score to blend against, so the reranker score IS the ordering signal here.
+	idx := make([]int, window)
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		return resp.Scores[idx[a]] > resp.Scores[idx[b]]
+	})
+	reordered := make([]neighborMemory, 0, len(neighborhood))
+	for _, oldPos := range idx {
+		reordered = append(reordered, neighborhood[oldPos])
+	}
+	reordered = append(reordered, neighborhood[window:]...)
+	return reordered
+}
+
+// mmrNeighborhood applies Maximal Marginal Relevance to the assembled ask
+// neighborhood for diversity/dedup, mirroring the recall path so both run
+// RRF -> MMR -> Reranker. Runs ALWAYS (independent of the reranker): the
+// neighborhood otherwise has no redundancy control. Reuses mmrSelect by adapting
+// each neighbor to a minimal RecallResult carrying its hydrated embedding;
+// members whose embedding cannot be hydrated stay anchored at their position
+// (mmrSelect handles that). No-op without a hydrator, query embedding, or two
+// members; fail-soft on a hydration error.
+func (s *AskService) mmrNeighborhood(ctx context.Context, neighborhood []neighborMemory, queryEmbedding []float32, queryDim int) []neighborMemory {
+	if len(neighborhood) < 2 || s.vectors == nil || len(queryEmbedding) == 0 {
+		return neighborhood
+	}
+	ids := make([]uuid.UUID, len(neighborhood))
+	for i, n := range neighborhood {
+		ids[i] = n.memoryID
+	}
+	embs, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, ids, queryDim)
+	if err != nil {
+		slog.WarnContext(ctx, "ask: mmr embedding hydration failed, skipping diversity pass", "err", err)
+		return neighborhood
+	}
+
+	adapters := make([]RecallResult, len(neighborhood))
+	for i, n := range neighborhood {
+		adapters[i] = RecallResult{ID: n.memoryID, embedding: embs[n.memoryID]}
+	}
+	lambda := DefaultRankingWeights.MmrLambda
+	if s.settings != nil {
+		lambda = s.settings.ResolveFloatInRange(ctx, SettingRankWeightMmr, "global", 0, 1, lambda)
+	}
+	ordered := mmrSelect(adapters, queryEmbedding, lambda, len(adapters))
+
+	byID := make(map[uuid.UUID]neighborMemory, len(neighborhood))
+	for _, n := range neighborhood {
+		byID[n.memoryID] = n
+	}
+	out := make([]neighborMemory, 0, len(ordered))
+	for _, r := range ordered {
+		if nm, ok := byID[r.ID]; ok {
+			out = append(out, nm)
+		}
+	}
+	if len(out) != len(neighborhood) {
+		return neighborhood // mapping lost a row; keep the safe original
+	}
+	return out
 }
 
 // neighborMemory is one packed memory in the synthesis neighborhood.
@@ -497,6 +622,13 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 			}
 		}
 	}
+
+	// RRF -> MMR/dedupe -> Reranker, the same ordering as recall. MMR runs ALWAYS
+	// (the assembled neighborhood otherwise has no redundancy control); the
+	// reranker is the final relevance ordering, gated by ask.rerank.enabled. Both
+	// reorder only (no trimming) and are fail-soft.
+	neighborhood = s.mmrNeighborhood(ctx, neighborhood, recallResp.QueryEmbedding, recallResp.QueryEmbeddingDim)
+	neighborhood = s.rerankNeighborhood(ctx, req.Query, neighborhood)
 
 	meta := AskSynthesisMeta{
 		LatencyMs:        time.Since(start).Milliseconds(),

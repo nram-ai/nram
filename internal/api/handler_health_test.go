@@ -29,9 +29,12 @@ type mockProviderRegistry struct {
 	embedding provider.EmbeddingProvider
 	fact      provider.LLMProvider
 	entity    provider.LLMProvider
+	reranker  provider.RerankProvider
 }
 
 func (m *mockProviderRegistry) GetEmbedding() provider.EmbeddingProvider { return m.embedding }
+
+func (m *mockProviderRegistry) GetReranker() provider.RerankProvider { return m.reranker }
 
 // GetLLM resolves an LLM slot by name, mirroring the real registry's
 // fallback: the optional slots resolve to the fact provider when no dedicated

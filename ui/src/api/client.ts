@@ -896,6 +896,12 @@ export interface ProviderSlot {
    * unless this is explicitly false.
    */
   disable_thinking?: boolean | null;
+  /**
+   * Reranker slot only: the auto-detected implementation ("cross_encoder" or
+   * "judge"), probed by the backend at save/test time. Empty/undefined for other
+   * slots and for a reranker slot whose method was never probed.
+   */
+  rerank_method?: string;
 }
 
 export interface UpdateProviderSlotRequest {

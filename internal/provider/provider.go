@@ -144,6 +144,30 @@ type EmbeddingProvider interface {
 	Dimensions() []int
 }
 
+// RerankResponse is the result of a rerank scoring call. Scores are aligned to
+// the input document order (Scores[i] scores docs[i]) and normalized to [0,1],
+// higher being more relevant. Usage carries the (prefill-only) token cost for
+// attribution.
+type RerankResponse struct {
+	Scores []float64
+	Model  string
+	Usage  TokenUsage
+}
+
+// RerankProvider scores the relevance of each candidate document to a query in
+// one pass. It is the cross-encoder cousin of the bi-encoder EmbeddingProvider:
+// query and candidate are read together rather than embedded separately, so the
+// score reflects cross-attention a cosine cannot. Two implementations exist: a
+// deterministic cross-encoder over an OpenAI-style /v1/rerank endpoint, and a
+// generative LLM judge that prompts a chat model per candidate.
+type RerankProvider interface {
+	// Rerank returns one relevance score per document, aligned to docs order.
+	Rerank(ctx context.Context, query string, docs []string) (*RerankResponse, error)
+
+	// Name returns the provider identifier (e.g., "openai", "llama-server").
+	Name() string
+}
+
 // Provider combines LLM and embedding capabilities for providers that support both.
 type Provider interface {
 	LLMProvider

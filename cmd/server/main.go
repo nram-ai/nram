@@ -646,6 +646,20 @@ func main() {
 	recallSvc.SetSettings(settingsSvc)
 	recallSvc.SetVectorHydrator(vectorStore)
 
+	// Reranker slot, read live so a hot provider reload is picked up without a
+	// restart. The slot has no fallback, so an unconfigured slot yields nil and
+	// the recall/ask rerank stages stay inert. The stages are additionally gated
+	// off by default (ranking.rerank.enabled / ask.rerank.enabled), so wiring the
+	// accessor here changes nothing until an operator configures the slot and
+	// flips the toggle.
+	rerankProvider := func() provider.RerankProvider {
+		if registry == nil {
+			return nil
+		}
+		return registry.GetReranker()
+	}
+	recallSvc.SetReranker(rerankProvider)
+
 	// One-shot startup audit of the recall-tuning surface. The values
 	// themselves are resolved per recall (see RecallService.resolveFusion);
 	// these logs surface only the deployment-time concerns: stored values
@@ -684,7 +698,7 @@ func main() {
 	}
 	askSvc := service.NewAskService(
 		recallSvc, memoryRepo, projectRepo, relationshipRepo, askProvider, settingsSvc,
-	).WithMetrics(promMetrics).WithVectorHydrator(vectorStore)
+	).WithMetrics(promMetrics).WithVectorHydrator(vectorStore).WithReranker(rerankProvider)
 
 	// Create MCP server.
 	mcpServer := mcp.NewServer(mcp.Dependencies{

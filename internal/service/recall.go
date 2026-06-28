@@ -188,6 +188,11 @@ type RecallResult struct {
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+	// RerankScore is the reranker's normalized [0,1] relevance score for this
+	// candidate, set only when the recall rerank stage ran (ranking.rerank.enabled
+	// with a configured Reranker slot). Nil otherwise. Surfaced so the composite
+	// stays auditable: Score already folds in RerankLambda*RerankScore.
+	RerankScore *float64 `json:"rerank_score,omitempty"`
 
 	// embedding carries the candidate's hydrated embedding through to the
 	// MMR rerank stage. Unexported so JSON serialization drops it. Nil for
@@ -286,6 +291,10 @@ type RankingWeights struct {
 	Confidence     float64
 	Origin         float64
 	MmrLambda      float64
+	// RerankLambda is the additive weight on the reranker score folded into the
+	// composite after the sort, before MMR. 0 (default) makes the rerank term
+	// inert. Global-scope only; not part of the per-project override JSON.
+	RerankLambda float64
 }
 
 // DefaultRankingWeights provides sensible defaults for ranking. Frequency is
@@ -315,6 +324,7 @@ var DefaultRankingWeights = RankingWeights{
 	Confidence:     0.05,
 	Origin:         0.25,
 	MmrLambda:      0.75,
+	RerankLambda:   0.0,
 }
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,
@@ -375,6 +385,10 @@ type RecallService struct {
 	// metrics is optional. When non-nil, a successful Recall increments the
 	// nram_memories_recalled_total counter.
 	metrics *metrics.Metrics
+	// rerankProvider is optional. When nil (the default) or when it returns nil
+	// (reranker slot unconfigured) the rerank stage is skipped. Wired via
+	// SetReranker so the recall stage can re-score the top candidates before MMR.
+	rerankProvider func() provider.RerankProvider
 }
 
 // WithMetrics attaches the Prometheus metrics sink. Returns the same service
@@ -420,6 +434,14 @@ func (s *RecallService) SetWeights(w RankingWeights) {
 // defaults apply via service.GetDefault*.
 func (s *RecallService) SetSettings(svc *SettingsService) {
 	s.settings = svc
+}
+
+// SetReranker wires the rerank provider accessor used by the optional recall
+// rerank stage. Passing nil (or wiring an accessor that returns nil when the
+// reranker slot is unconfigured) leaves the stage off. The stage is additionally
+// gated by the ranking.rerank.enabled setting.
+func (s *RecallService) SetReranker(fn func() provider.RerankProvider) {
+	s.rerankProvider = fn
 }
 
 // SetLexical wires the lexical (BM25/tsvector) searcher used by the hybrid
@@ -1270,6 +1292,17 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	mmrLambda := weightsForProject(projectID).MmrLambda
 	passing = mmrSelect(passing, queryEmbedding, mmrLambda, len(passing))
 
+	// Cross-encoder / judge relevance rerank, the FINAL ordering stage: RRF ->
+	// MMR/dedupe -> Reranker. Runs after MMR (not before) so the strongest
+	// relevance signal gets the last word instead of MMR re-sorting it by the
+	// weak bi-encoder cosine. MMR has already done its diversity job; the
+	// reranker now scores the top window by model-judged query relevance and
+	// folds it into the composite as an additive RerankLambda term. No-op unless
+	// enabled, a reranker slot is configured, and the weight is above zero;
+	// fail-soft on a reranker error. Window stays >= the return limit so a
+	// rescued buried answer survives the truncation below.
+	passing = s.rerankRecall(ctx, req.Query, passing, effWeights.RerankLambda)
+
 	var results []RecallResult
 	var coverageGaps []CoverageGap
 	if req.DiversifyByTagPrefix != "" {
@@ -1699,7 +1732,61 @@ func (s *RecallService) resolveWeights(ctx context.Context) RankingWeights {
 		Confidence:     s.settings.ResolveFloatInRange(ctx, SettingRankWeightConf, "global", 0, 1, d.Confidence),
 		Origin:         s.settings.ResolveFloatInRange(ctx, SettingRankWeightOrigin, "global", 0, 1, d.Origin),
 		MmrLambda:      s.settings.ResolveFloatInRange(ctx, SettingRankWeightMmr, "global", 0, 1, d.MmrLambda),
+		RerankLambda:   s.settings.ResolveFloatInRange(ctx, SettingRankWeightRerank, "global", 0, 1, d.RerankLambda),
 	}
+}
+
+// rerankRecall re-scores the top candidates with the configured reranker and
+// folds each score into the composite as an additive RerankLambda term, then
+// re-sorts. It returns passing unchanged when the stage is disabled
+// (ranking.rerank.enabled false), no reranker is wired, the weight is zero, or
+// there are fewer than two candidates. Fail-soft: a reranker error or a
+// mismatched score count leaves the prior composite order intact, so a flaky
+// reranker can never break recall. The query operation is stamped so the
+// token_usage row attributes the prefill cost to OperationRerank.
+func (s *RecallService) rerankRecall(ctx context.Context, query string, passing []RecallResult, lambda float64) []RecallResult {
+	if len(passing) < 2 || lambda <= 0 {
+		return passing
+	}
+	if s.settings == nil || !s.settings.ResolveBool(ctx, SettingRerankEnabled, "global") {
+		return passing
+	}
+	if s.rerankProvider == nil {
+		return passing
+	}
+	rp := s.rerankProvider()
+	if rp == nil {
+		return passing
+	}
+
+	n := min(len(passing), resolveRerankIntSetting(ctx, s.settings, SettingRerankCandidates, defaultRerankCandidates))
+	maxDocChars := resolveRerankIntSetting(ctx, s.settings, SettingRerankMaxDocChars, defaultRerankMaxDocChars)
+	docs := make([]string, n)
+	for i := range n {
+		docs[i] = truncateForRerank(passing[i].Content, maxDocChars)
+	}
+
+	resp, err := rp.Rerank(rerankCallContext(ctx, s.settings), query, docs)
+	if err != nil || resp == nil || len(resp.Scores) != n {
+		if err != nil {
+			slog.WarnContext(ctx, "recall: rerank failed, keeping composite order", "err", err)
+		} else if resp != nil && len(resp.Scores) != n {
+			slog.WarnContext(ctx, "recall: rerank returned mismatched score count, keeping composite order",
+				"want", n, "got", len(resp.Scores))
+		}
+		return passing
+	}
+
+	for i := range n {
+		score := resp.Scores[i]
+		passing[i].RerankScore = &score
+		passing[i].Score += lambda * score
+	}
+	// Stable so equal-score candidates keep their composite-relative order.
+	sort.SliceStable(passing, func(a, b int) bool {
+		return passing[a].Score > passing[b].Score
+	})
+	return passing
 }
 
 // resolveFusion returns the FusionConfig used by the current recall, reading

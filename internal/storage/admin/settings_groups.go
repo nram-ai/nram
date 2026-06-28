@@ -14,9 +14,10 @@ import (
 // here; TestEverySettingCategoryMapsToGroup enforces that a new category cannot
 // be added without a home (mirroring TestEverySettingHasSchemaEntry).
 //
-// Prompt-typed settings (categories enrichment_prompts, dreaming_prompts) are
-// intentionally absent: prompt keys are edited on the Prompt Templates page,
-// not the Settings page, and are exempt from the grouping requirement.
+// Prompt-typed settings (categories enrichment_prompts, dreaming_prompts,
+// ask_prompts, ranking_prompts) are intentionally absent: prompt keys are edited
+// on the Prompt Templates page, not the Settings page, and are exempt from the
+// grouping requirement.
 var settingsGroups = []api.SettingGroup{
 	{
 		ID:          "memory",

@@ -23,6 +23,7 @@ type DatabasePinger interface {
 type ProviderRegistry interface {
 	GetEmbedding() provider.EmbeddingProvider
 	GetLLM(name string) provider.LLMProvider
+	GetReranker() provider.RerankProvider
 }
 
 // QueueStatter abstracts enrichment queue statistics retrieval.
@@ -144,13 +145,48 @@ func buildProviderHealth(ctx context.Context, reg ProviderRegistry) map[string]h
 	out := make(map[string]healthProviderStatus, len(provider.Slots))
 	seen := make(map[provider.LLMProvider]healthProviderStatus)
 	for _, slot := range provider.Slots {
-		if slot.Kind == provider.KindEmbedding {
+		switch slot.Kind {
+		case provider.KindEmbedding:
 			out[slot.Name] = checkEmbeddingProvider(ctx, reg)
-			continue
+		case provider.KindReranker:
+			out[slot.Name] = checkRerankerProvider(ctx, reg)
+		default:
+			out[slot.Name] = checkLLMProvider(ctx, reg, slot.Name, seen)
 		}
-		out[slot.Name] = checkLLMProvider(ctx, reg, slot.Name, seen)
 	}
 	return out
+}
+
+// checkRerankerProvider checks the reranker provider slot. The slot has no
+// fallback, so a nil provider reports not_configured. When configured it reports
+// ok with the provider name; if the concrete provider implements ProviderHealth
+// (the cross-encoder cross-encoder path, unwrapped in test contexts) it is pinged
+// for latency, matching the LLM/embedding checks.
+func checkRerankerProvider(ctx context.Context, reg ProviderRegistry) healthProviderStatus {
+	if reg == nil {
+		return healthProviderStatus{Status: "not_configured"}
+	}
+
+	rp := reg.GetReranker()
+	if rp == nil {
+		return healthProviderStatus{Status: "not_configured"}
+	}
+
+	status := healthProviderStatus{
+		Status:   "ok",
+		Provider: rp.Name(),
+	}
+
+	if ph, ok := rp.(provider.ProviderHealth); ok {
+		start := time.Now()
+		if err := ph.Ping(ctx); err != nil {
+			status.Status = "error"
+		}
+		latency := time.Since(start).Milliseconds()
+		status.LatencyMs = &latency
+	}
+
+	return status
 }
 
 // checkEmbeddingProvider checks the embedding provider slot.

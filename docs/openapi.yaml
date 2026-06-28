@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.14.1
+  version: 0.15.0
   license:
     name: MIT
 
@@ -4721,6 +4721,8 @@ components:
               $ref: "#/components/schemas/HealthProviderStatus"
             ask:
               $ref: "#/components/schemas/HealthProviderStatus"
+            reranker:
+              $ref: "#/components/schemas/HealthProviderStatus"
         enrichment_queue:
           type: [object, "null"]
           properties:
@@ -6047,6 +6049,14 @@ components:
           description: >-
             The slot's stored "disable thinking" toggle. Absent means unset
             (resolved to disabled server-side).
+        rerank_method:
+          type: string
+          enum: [cross_encoder, judge]
+          description: >-
+            Reranker slot only: the auto-detected implementation, probed by the
+            backend at save/test time. cross_encoder uses a deterministic
+            /v1/rerank endpoint; judge prompts a chat model per candidate. Absent
+            for other slots and for a reranker slot never probed.
 
     ProviderTestRequest:
       type: object
@@ -6122,6 +6132,14 @@ components:
             resolves to true (disabled), so existing slots keep skipping the
             reasoning pass. Inert for openai, anthropic, and openai-compatible,
             where an explicit disable would 400 on current models.
+        rerank_method:
+          type: string
+          enum: [cross_encoder, judge]
+          description: >-
+            Reranker slot only. Selects the rerank implementation. Normally left
+            unset: the save/test path probes the server and fills it
+            (cross_encoder when /v1/rerank answers, judge otherwise). Set
+            explicitly to override the probe.
         clear_api_key:
           type: boolean
           description: >-
@@ -6177,6 +6195,7 @@ components:
         - "ask.neighborhood.max_memories"
         - "ask.neighborhood.min_score_ratio"
         - "ask.recall.candidates"
+        - "ask.rerank.enabled"
         - "ask.siblings.per_candidate"
         - "ask.synthesis.max_tokens"
         - "ask.synthesis.system_prompt"
@@ -6378,6 +6397,12 @@ components:
         - "qdrant.use_tls"
         - "ranking.graph.hop_multiplier"
         - "ranking.recency.decay_per_hour"
+        - "ranking.rerank.candidates"
+        - "ranking.rerank.enabled"
+        - "ranking.rerank.judge.max_tokens"
+        - "ranking.rerank.judge.system_prompt"
+        - "ranking.rerank.judge.temperature"
+        - "ranking.rerank.max_doc_chars"
         - "ranking.weight.confidence"
         - "ranking.weight.frequency"
         - "ranking.weight.graph_relevance"
@@ -6385,6 +6410,7 @@ components:
         - "ranking.weight.mmr_lambda"
         - "ranking.weight.origin"
         - "ranking.weight.recency"
+        - "ranking.weight.rerank"
         - "ranking.weight.similarity"
         - "recall.default_limit"
         - "recall.fusion.enabled"

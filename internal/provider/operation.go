@@ -48,6 +48,13 @@ const (
 	// analytics can isolate ask traffic from the enrichment/dream operations.
 	OperationAskSynthesis Operation = "ask_synthesis"
 
+	// OperationRerank is the relevance-scoring call the reranker slot makes over
+	// recall's top-K or the ask neighborhood. For a cross-encoder it is one
+	// batched /v1/rerank call whose cost is all prefill (no generation); for the
+	// LLM-judge path it is one scoring completion per candidate. Kept distinct so
+	// the per-pair prefill cost is isolated from ask synthesis and enrichment.
+	OperationRerank Operation = "rerank"
+
 	// Dream-cycle operations. Kept distinct from the consolidation/
 	// contradiction-check generics so analytics can drill into the specific
 	// stage of the dream pipeline that consumed tokens.
@@ -89,6 +96,7 @@ const (
 	ctxKeyNamespaceID
 	ctxKeyAPIKeyID
 	ctxKeyCycleID
+	ctxKeyRerankJudge
 )
 
 // WithOperation stamps the call's operation kind into ctx so the

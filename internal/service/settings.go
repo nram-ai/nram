@@ -65,8 +65,37 @@ const (
 	SettingRankWeightConf                   = "ranking.weight.confidence"
 	SettingRankWeightOrigin                 = "ranking.weight.origin"
 	SettingRankWeightMmr                    = "ranking.weight.mmr_lambda"
-	SettingTokenRetention                   = "usage.token_retention_days"
-	SettingTokenCostRates                   = "usage.cost_rates"
+	// SettingRankWeightRerank is the additive composite weight for the
+	// cross-encoder/judge rerank score on the recall path. Default 0 (no effect)
+	// so the term is inert until an operator both configures a reranker slot and
+	// raises this above 0. Folded in after the composite sort, before MMR.
+	SettingRankWeightRerank = "ranking.weight.rerank"
+	// SettingRerankEnabled gates the recall-path rerank stage. Default false:
+	// off until explicitly enabled, even when a reranker slot is configured.
+	SettingRerankEnabled = "ranking.rerank.enabled"
+	// SettingRerankCandidates is the post-MMR rerank window: how many top
+	// candidates are scored by the reranker per query. Bounds the per-query cost
+	// (one cross-encoder forward each) and must stay >= the return limit so a
+	// rescued buried answer survives truncation. Shared by recall and ask.
+	SettingRerankCandidates = "ranking.rerank.candidates"
+	// SettingRerankMaxDocChars caps each document's length before it is sent to
+	// the reranker. A cross-encoder only attends to ~512 tokens, so the tail is
+	// wasted; the cap also keeps one long pair from exceeding the reranker
+	// server's physical batch and failing the whole request. Default 1200 chars
+	// is measured to keep a (query, doc) pair on this corpus under the llama-server
+	// DEFAULT --ubatch-size of 512 tokens (worst pair ~452 tokens), so a stock
+	// reranker server works without retuning. Shared by recall and ask.
+	SettingRerankMaxDocChars = "ranking.rerank.max_doc_chars"
+	// LLM-judge rerank knobs (used only when the reranker slot's detected method
+	// is "judge", i.e. a generative chat model rather than a cross-encoder). The
+	// system prompt is editable on the Prompt Templates page; max_tokens/temperature
+	// bound the per-candidate scoring call. The service resolves these and passes
+	// them to the provider per call (the provider package is settings-agnostic).
+	SettingRerankJudgeSystemPrompt = "ranking.rerank.judge.system_prompt"
+	SettingRerankJudgeMaxTokens    = "ranking.rerank.judge.max_tokens"
+	SettingRerankJudgeTemperature  = "ranking.rerank.judge.temperature"
+	SettingTokenRetention          = "usage.token_retention_days"
+	SettingTokenCostRates          = "usage.cost_rates"
 
 	// Hybrid recall fusion. Off by default; flipping enabled turns on
 	// parallel vector + BM25/tsvector retrieval with RRF fusion. The two
@@ -755,6 +784,11 @@ const (
 	SettingAskDecompositionMaxSubqueries = "ask.decomposition.max_subqueries"
 	SettingAskDecompositionMaxTokens     = "ask.decomposition.max_tokens"
 	SettingAskDecompositionTemperature   = "ask.decomposition.temperature"
+	// SettingAskRerankEnabled gates the ask-path neighborhood rerank. Default
+	// false: off until explicitly enabled, even when a reranker slot is
+	// configured. The ask path tolerates a non-deterministic (judge) reranker
+	// since ask is already an LLM call.
+	SettingAskRerankEnabled = "ask.rerank.enabled"
 )
 
 // Provider prompt-delivery and Ollama keep-warm runtime settings.
@@ -948,6 +982,8 @@ If the neighborhood genuinely does not contain the answer, reply exactly: Not in
 
 Answer directly, with no preamble.`
 
+	rerankJudgeSystemPromptText = `You are a relevance judge. Given a query and a document, output only a single number between 0 and 1 indicating how well the document answers the query (1 = perfectly answers it, 0 = irrelevant). Output the number and nothing else.`
+
 	askDecompositionSystemPromptText = `You rewrite a user's question into focused retrieval sub-queries for a memory search. You do NOT answer the question. You output JSON only.
 
 If answering the question requires enumerating, comparing, or classifying across a dimension (for example "which of my projects are written in C++ and which in TypeScript", "compare X and Y", "list each by category"), output one retrieval query per distinct class or value of that dimension. A single broad query lets a dominant class bury a minority one; a focused per-class query retrieves each class's own cluster.
@@ -1006,6 +1042,13 @@ var settingDefaults = map[string]string{
 	SettingRankWeightConf:                         "0.05",
 	SettingRankWeightOrigin:                       "0.25",
 	SettingRankWeightMmr:                          "0.75",
+	SettingRankWeightRerank:                       "0",
+	SettingRerankEnabled:                          "false",
+	SettingRerankCandidates:                       "25",
+	SettingRerankMaxDocChars:                      "1200",
+	SettingRerankJudgeSystemPrompt:                rerankJudgeSystemPromptText,
+	SettingRerankJudgeMaxTokens:                   "16",
+	SettingRerankJudgeTemperature:                 "0",
 	SettingRecallFusionEnabled:                    "true",
 	SettingRecallFusionK:                          "60",
 	SettingRecallFusionVecW:                       "0.60",
@@ -1083,6 +1126,7 @@ var settingDefaults = map[string]string{
 	SettingRelationshipSystemPrompt: relationshipSystemPromptText,
 
 	SettingAskEnabled:                    "false",
+	SettingAskRerankEnabled:              "false",
 	SettingAskSynthesisSystemPrompt:      askSynthesisSystemPromptText,
 	SettingAskSynthesisTemperature:       "0.1",
 	SettingAskSynthesisMaxTokens:         "4096",

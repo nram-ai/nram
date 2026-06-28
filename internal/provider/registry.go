@@ -119,6 +119,11 @@ type SlotConfig struct {
 	// the generic openai-compatible type never receive a knob (an explicit disable
 	// 400s on current models), so the toggle is inert for them.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
+	// RerankMethod selects the reranker-slot implementation: "cross_encoder"
+	// (deterministic /v1/rerank) or "judge" (generative chat model). Set by the
+	// admin save path from ProbeRerankMethod; empty defaults to cross_encoder at
+	// build time. Inert for non-reranker slots.
+	RerankMethod string `json:"rerank_method,omitempty"`
 }
 
 // RegistryConfig holds the configuration for all provider slots and the shared
@@ -134,7 +139,10 @@ type RegistryConfig struct {
 	// Ask is the dedicated ask-synthesis slot. Unlike QueryAugment and
 	// IngestionDecision it has NO fallback (see provider.SlotAsk), so an empty
 	// Type leaves the ask tool's synthesis provider unconfigured.
-	Ask            SlotConfig           `json:"ask"`
+	Ask SlotConfig `json:"ask"`
+	// Reranker is the dedicated relevance-rerank slot (KindReranker). No
+	// fallback; an empty Type leaves the recall/ask rerank stages inert.
+	Reranker       SlotConfig           `json:"reranker"`
 	CircuitBreaker CircuitBreakerConfig `json:"circuit_breaker"`
 }
 
@@ -155,6 +163,8 @@ func (c RegistryConfig) slotConfig(name string) SlotConfig {
 		return c.IngestionDecision
 	case SlotAsk:
 		return c.Ask
+	case SlotReranker:
+		return c.Reranker
 	}
 	return SlotConfig{}
 }
@@ -175,6 +185,8 @@ func (c *RegistryConfig) SetSlotConfig(name string, sc SlotConfig) {
 		c.IngestionDecision = sc
 	case SlotAsk:
 		c.Ask = sc
+	case SlotReranker:
+		c.Reranker = sc
 	}
 }
 
@@ -189,8 +201,12 @@ type Registry struct {
 	// query_augment, ingestion_decision). A missing key means that slot is
 	// unconfigured; GetLLM applies the slot's FallbackTo in that case. Keyed by
 	// name so build/reload/accessors stay slot-agnostic (see slots.go).
-	llm    map[string]LLMProvider
-	config RegistryConfig
+	llm map[string]LLMProvider
+	// reranker holds the built KindReranker provider, or nil when the reranker
+	// slot is unconfigured. No fallback (like ask), so GetReranker returns nil
+	// and the recall/ask rerank stages stay inert.
+	reranker RerankProvider
+	config   RegistryConfig
 
 	// Host-keyed concurrency gates shared across all slots and subsystems that
 	// target the same host, so an upstream host sees an aggregate in-flight cap
@@ -328,6 +344,15 @@ func (r *Registry) GetIngestionDecision() LLMProvider { return r.GetLLM(SlotInge
 // than routing synthesis traffic onto the enrichment providers.
 func (r *Registry) GetAsk() LLMProvider { return r.GetLLM(SlotAsk) }
 
+// GetReranker returns the rerank provider, or nil if the reranker slot is
+// unconfigured. The slot has no fallback, so callers treat nil as "reranking
+// unavailable" and skip the rerank stage rather than routing it elsewhere.
+func (r *Registry) GetReranker() RerankProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.reranker
+}
+
 // SlotConfigured reports whether the named slot has a DEDICATED provider built
 // (ignoring any fallback), driving the admin "configured" status so operators
 // can tell a configured slot from a fallback. Unknown names return false.
@@ -336,6 +361,9 @@ func (r *Registry) SlotConfigured(name string) bool {
 	defer r.mu.RUnlock()
 	if name == SlotEmbedding {
 		return r.embedding != nil
+	}
+	if name == SlotReranker {
+		return r.reranker != nil
 	}
 	return r.llm[name] != nil
 }
@@ -362,6 +390,7 @@ func (r *Registry) Reload(config RegistryConfig) error {
 
 	r.embedding = built.embedding
 	r.llm = built.llm
+	r.reranker = built.reranker
 	r.llmGates = built.llmGates
 	r.embedGates = built.embedGates
 	r.config = config
@@ -489,6 +518,7 @@ func (r *Registry) load(config RegistryConfig) error {
 	}
 	r.embedding = built.embedding
 	r.llm = built.llm
+	r.reranker = built.reranker
 	r.llmGates = built.llmGates
 	r.embedGates = built.embedGates
 	r.config = config
@@ -501,6 +531,7 @@ func (r *Registry) load(config RegistryConfig) error {
 type builtProviders struct {
 	embedding EmbeddingProvider
 	llm       map[string]LLMProvider // LLM-kind slots keyed by slot name
+	reranker  RerankProvider         // KindReranker slot, nil when unconfigured
 	// Host-keyed gates built for this config, installed on r alongside the
 	// providers. nil maps when host gating is disabled.
 	llmGates   map[string]*hostGate
@@ -594,6 +625,18 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 			built.embedding = embedder
 			continue
 		}
+		if def.Kind == KindReranker {
+			rp, err := createRerankProvider(slot)
+			if err != nil {
+				return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
+			}
+			// Usage recording only (no circuit breaker or host gate): the rerank
+			// stage is an optional, fail-soft read-path step, so callers tolerate
+			// an upstream error by keeping the prior order rather than relying on
+			// a breaker. Token attribution still lands via the recorder.
+			built.reranker = r.wrapRerank(rp)
+			continue
+		}
 		lp, err := createLLMProvider(slot)
 		if err != nil {
 			return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
@@ -644,6 +687,16 @@ func (r *Registry) wrapLLM(inner LLMProvider) LLMProvider {
 		return inner
 	}
 	return NewUsageRecordingLLM(inner, r.recorder, r.resolver).WithTokenCounter(r.indirectTokenCounter())
+}
+
+// wrapRerank wraps a rerank provider in the usage-recording middleware so every
+// Rerank call lands a token_usage row stamped OperationRerank. When no recorder
+// is configured (e.g. unit tests) the inner provider is returned as-is.
+func (r *Registry) wrapRerank(inner RerankProvider) RerankProvider {
+	if r.recorder == nil {
+		return inner
+	}
+	return NewUsageRecordingRerank(inner, r.recorder, r.resolver).WithTokenCounter(r.indirectTokenCounter())
 }
 
 // wrapEmbedding wraps a circuit-breaker-protected embedding provider in

@@ -744,10 +744,10 @@ describe("API Client E2E", () => {
   // -----------------------------------------------------------------------
 
   describe("adminAPI.providers", () => {
-    it("getProviderSlots() returns 6 slots", async () => {
+    it("getProviderSlots() returns 7 slots", async () => {
       const slots = await adminAPI.getProviderSlots();
       expect(Array.isArray(slots)).toBe(true);
-      expect(slots.length).toBe(6);
+      expect(slots.length).toBe(7);
       const slotNames = slots.map((s) => s.slot);
       expect(slotNames).toContain("embedding");
       expect(slotNames).toContain("fact");
@@ -755,6 +755,7 @@ describe("API Client E2E", () => {
       expect(slotNames).toContain("query_augment");
       expect(slotNames).toContain("ingestion_decision");
       expect(slotNames).toContain("ask");
+      expect(slotNames).toContain("reranker");
     });
 
     it("testProviderSlot() returns a result (may fail without provider)", async () => {

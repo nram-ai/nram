@@ -14,6 +14,10 @@ type SlotKind int
 const (
 	KindEmbedding SlotKind = iota
 	KindLLM
+	// KindReranker is the cross-encoder / relevance-scoring slot. Unlike the
+	// embedding (bi-encoder) and LLM (generative) kinds it does not Embed or
+	// Complete; it scores (query, candidate) pairs through a RerankProvider.
+	KindReranker
 )
 
 // Slot name constants. These are the wire/identity names used in the settings
@@ -25,6 +29,7 @@ const (
 	SlotQueryAugment      = "query_augment"
 	SlotIngestionDecision = "ingestion_decision"
 	SlotAsk               = "ask"
+	SlotReranker          = "reranker"
 )
 
 // SlotDef is the canonical descriptor for a provider slot.
@@ -83,6 +88,13 @@ var Slots = []SlotDef{
 		Label:       "Ask Synthesis",
 		Description: "Synthesizes answers over recalled memories for the ask tool. Required when the ask feature is enabled; no fallback, so ask traffic never lands on the enrichment providers.",
 		Kind:        KindLLM,
+		FallbackTo:  "",
+	},
+	{
+		Name:        SlotReranker,
+		Label:       "Reranker",
+		Description: "Re-scores (query, candidate) relevance to reorder recall and ask candidates. Optional and off by default. Auto-detects a cross-encoder /v1/rerank server or a generative LLM judge at configure time; no fallback.",
+		Kind:        KindReranker,
 		FallbackTo:  "",
 	},
 }

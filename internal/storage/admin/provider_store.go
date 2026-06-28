@@ -166,6 +166,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		CustomHeaderKeys: sortedHeaderKeys(persisted.CustomHeaders),
 		ExtraBody:        persisted.ExtraBody,
 		DisableThinking:  persisted.DisableThinking,
+		RerankMethod:     persisted.RerankMethod,
 	}
 }
 
@@ -247,6 +248,19 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 	return effective, modelMax
 }
 
+// rerankProbeConfig builds the minimal provider.SlotConfig that ProbeRerankMethod
+// reads (BaseURL, APIKey, Model, CustomHeaders; it normalizes the URL itself and
+// ignores Type). Centralizing it keeps the test path and the save path from
+// drifting on which fields the probe depends on.
+func rerankProbeConfig(cfg api.ProviderSlotConfig) provider.SlotConfig {
+	return provider.SlotConfig{
+		BaseURL:       cfg.URL,
+		APIKey:        cfg.APIKey,
+		Model:         cfg.Model,
+		CustomHeaders: cfg.CustomHeaders,
+	}
+}
+
 func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderTestRequest) (*api.ProviderTestResult, error) {
 	start := time.Now()
 
@@ -266,9 +280,30 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 		CustomHeaders:   req.Config.CustomHeaders,
 		ExtraBody:       req.Config.ExtraBody,
 		DisableThinking: req.Config.DisableThinking,
+		RerankMethod:    req.Config.RerankMethod,
 	}
 	if req.Config.Timeout != nil {
 		slotCfg.Timeout = *req.Config.Timeout
+	}
+
+	// The reranker slot is neither an embedding nor an LLM provider: it is tested
+	// by probing the rerank endpoint, which also auto-detects whether the server
+	// is a cross-encoder or must be driven as an LLM judge.
+	if def.Kind == provider.KindReranker {
+		method, perr := provider.ProbeRerankMethod(ctx, rerankProbeConfig(req.Config))
+		latency := time.Since(start).Milliseconds()
+		if perr != nil {
+			return &api.ProviderTestResult{
+				Success:   false,
+				Message:   fmt.Sprintf("test failed: %v", perr),
+				LatencyMs: latency,
+			}, nil
+		}
+		return &api.ProviderTestResult{
+			Success:   true,
+			Message:   fmt.Sprintf("reranker reachable (detected method: %s)", method),
+			LatencyMs: latency,
+		}, nil
 	}
 
 	// Build a single-slot registry and probe it by kind.
@@ -342,6 +377,20 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 		oldModel := existing.Model
 		if oldModel != "" && cfg.Model != "" && cfg.Model != oldModel {
 			return s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
+		}
+	}
+
+	// Reranker auto-detect: probe the configured server so the stored config
+	// records which implementation to build (cross-encoder vs LLM judge). On a
+	// probe error the save still proceeds, keeping any operator-supplied method
+	// (or empty, which the registry builds as cross_encoder) so a configure-
+	// before-the-server-is-up flow is not blocked.
+	if slot == provider.SlotReranker && cfg.Type != "" {
+		if method, perr := provider.ProbeRerankMethod(ctx, rerankProbeConfig(cfg)); perr != nil {
+			slog.WarnContext(ctx, "reranker slot save: method probe failed, keeping prior/default method",
+				"err", perr, "method", cfg.RerankMethod)
+		} else {
+			cfg.RerankMethod = method
 		}
 	}
 
@@ -559,6 +608,7 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 			CustomHeaders:      apiCfg.CustomHeaders,
 			ExtraBody:          apiCfg.ExtraBody,
 			DisableThinking:    apiCfg.DisableThinking,
+			RerankMethod:       apiCfg.RerankMethod,
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout

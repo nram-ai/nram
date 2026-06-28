@@ -111,6 +111,10 @@ type ProviderSlotStatus struct {
 	// checkbox. Nil means unset (resolved to disabled); the UI defaults the
 	// checkbox checked when this is nil or true.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
+	// RerankMethod echoes the reranker slot's auto-detected implementation
+	// ("cross_encoder" or "judge") so the UI can show the detected mode. Empty
+	// for non-reranker slots and for a reranker slot whose method was never probed.
+	RerankMethod string `json:"rerank_method,omitempty"`
 }
 
 // ProviderTestRequest is the request body for POST /providers/test.
@@ -150,6 +154,12 @@ type ProviderSlotConfig struct {
 	// SGLang/llama-server/Gemini types; inert for openai/anthropic/openai-compatible,
 	// where an explicit disable would 400 on current models.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
+	// RerankMethod selects the reranker-slot implementation ("cross_encoder" or
+	// "judge"). Reranker slot only. Auto-detected by the save/test path
+	// (ProbeRerankMethod) and returned on read so the UI can show the detected
+	// mode; an operator may set it explicitly to override the probe. Inert for
+	// every other slot.
+	RerankMethod string `json:"rerank_method,omitempty"`
 }
 
 // ProviderTestResult is the response body for POST /providers/test.

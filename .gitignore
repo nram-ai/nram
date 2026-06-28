@@ -38,3 +38,11 @@ internal/ui/dist/*
 # Local-only live ask grounding harness: measures wide-aperture single-topic
 # bail/misground against a live backend; kept for our own re-runs, never committed.
 /internal/service/ask_grounding_livedata_test.go
+
+# Local-only live reranker harnesses: connect to a live backend and the deployed
+# rerankers, and embed owner-specific IPs/namespace; kept for our own re-runs,
+# never committed.
+/internal/service/rerank_eval_livedata_test.go
+/internal/service/rerank_stage_livedata_test.go
+/internal/service/rerank_proof_livedata_test.go
+/internal/service/rerank_judge_livedata_test.go
