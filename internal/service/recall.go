@@ -315,6 +315,19 @@ type RankingWeights struct {
 // still leaving genuine cross-tier hits (e.g. an identity question answered from
 // about_me) on top. The measured safe window was [0.20, 0.35]; 0.25 centers it
 // with ~0.1 margin against embedding-similarity noise on both sides.
+//
+// RerankLambda 0.30 is the additive weight on the reranker's relevance score,
+// folded into the composite only when the reranker is enabled and a Reranker
+// slot is configured (rerankRecall). Both the reranker score (sigmoid-normalized
+// to [0,1], reranker.go) and the composite (max-normalized fusion times quality)
+// live in [0,1], so the term cannot dominate or invert the order. 0.30 was
+// derived from a live-corpus sweep (internal/service/rerank_lambda_tune_livedata_test.go):
+// it matches the measured top-25 composite window range (~0.32), so a confident
+// reranker peak (~0.95) decisively reorders the contested middle while still
+// deferring to a runaway composite leader; it sits in the stable [0.20, 0.60]
+// plateau, and the reranker self-attenuates to near-zero when no candidate
+// clearly matches. A non-zero default also means ranking.rerank.enabled is
+// sufficient on its own (no silent no-op from a zero weight).
 var DefaultRankingWeights = RankingWeights{
 	Similarity:     0.50,
 	Recency:        0.15,
@@ -324,7 +337,7 @@ var DefaultRankingWeights = RankingWeights{
 	Confidence:     0.05,
 	Origin:         0.25,
 	MmrLambda:      0.75,
-	RerankLambda:   0.0,
+	RerankLambda:   0.30,
 }
 
 // FusionConfig governs candidate retrieval (parallel vector + lexical,

@@ -1042,7 +1042,7 @@ var settingDefaults = map[string]string{
 	SettingRankWeightConf:                         "0.05",
 	SettingRankWeightOrigin:                       "0.25",
 	SettingRankWeightMmr:                          "0.75",
-	SettingRankWeightRerank:                       "0",
+	SettingRankWeightRerank:                       "0.3",
 	SettingRerankEnabled:                          "false",
 	SettingRerankCandidates:                       "25",
 	SettingRerankMaxDocChars:                      "1200",
