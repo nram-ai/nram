@@ -82,4 +82,8 @@ export {
   faFileLines,
   faFileCsv,
   faFileCode,
+
+  // Section-tab icons.
+  faScaleBalanced,
+  faArrowDownWideShort,
 } from "@fortawesome/free-solid-svg-icons";

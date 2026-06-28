@@ -7,6 +7,9 @@ import {
   usePullOllamaModel,
   useProviderModels,
 } from "../hooks/useApi";
+import SectionTabs, { type SectionTabTone } from "../components/SectionTabs";
+import { useSectionTabParam } from "../hooks/useSectionTabParam";
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import type {
   ProviderSlot,
   UpdateProviderSlotRequest,
@@ -16,7 +19,18 @@ import type {
 } from "../api/client";
 import { APIError } from "../api/client";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faXmark, faSpinner } from "../lib/icons";
+import {
+  faCheck,
+  faXmark,
+  faSpinner,
+  faCubes,
+  faListCheck,
+  faDiagramProject,
+  faWandMagicSparkles,
+  faScaleBalanced,
+  faComments,
+  faArrowDownWideShort,
+} from "../lib/icons";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1358,6 +1372,24 @@ function ProviderSlotCard({
 // Main Page
 // ---------------------------------------------------------------------------
 
+// slotTone maps a slot's configured/health state to a SectionTabs icon tone,
+// mirroring StatusDot so the tab strip surfaces each slot's health at a glance.
+function slotTone(slot: ProviderSlot): SectionTabTone {
+  if (!slot.configured) return "muted";
+  return slot.status === "ok" ? "ok" : "error";
+}
+
+// Per-slot tab icon, keyed by the canonical slot id (internal/provider/slots.go).
+const SLOT_ICONS: Record<string, IconDefinition> = {
+  embedding: faCubes,
+  fact: faListCheck,
+  entity: faDiagramProject,
+  query_augment: faWandMagicSparkles,
+  ingestion_decision: faScaleBalanced,
+  ask: faComments,
+  reranker: faArrowDownWideShort,
+};
+
 function ProviderConfiguration() {
   const slotsQuery = useProviderSlots();
 
@@ -1367,6 +1399,14 @@ function ProviderConfiguration() {
   // The backend returns the ordered canonical slot list with labels and live
   // status; render it directly (empty until the query resolves).
   const slots: ProviderSlot[] = slotsQuery.data ?? [];
+
+  // Active slot synced to ?slot=, self-healing to the first slot when the param
+  // is missing or names a stale/unknown slot.
+  const { active: activeSlotId, select: selectSlot } = useSectionTabParam(
+    "slot",
+    slots.map((s) => s.slot),
+  );
+  const activeSlot = slots.find((s) => s.slot === activeSlotId);
 
   return (
     <div className="relative">
@@ -1397,16 +1437,25 @@ function ProviderConfiguration() {
         </div>
       )}
 
-      {/* Content */}
-      {!isLoading && !isError && (
-        <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-1">
-          {slots.map((slot) => (
-            <ProviderSlotCard
-              key={slot.slot}
-              slot={slot}
-              disabled={false}
-            />
-          ))}
+      {/* Content: a tab per slot, with only the active slot's card rendered. */}
+      {!isLoading && !isError && activeSlot && (
+        <div className="space-y-6">
+          <SectionTabs
+            ariaLabel="Provider slots"
+            active={activeSlot.slot}
+            onChange={selectSlot}
+            items={slots.map((s) => ({
+              id: s.slot,
+              label: s.label,
+              icon: SLOT_ICONS[s.slot],
+              tone: slotTone(s),
+            }))}
+          />
+          <ProviderSlotCard
+            key={activeSlot.slot}
+            slot={activeSlot}
+            disabled={false}
+          />
         </div>
       )}
     </div>

@@ -22,6 +22,7 @@ import {
   type SettingWithSchema,
 } from "./settingsNav";
 import Switch from "../components/Switch";
+import SectionTabs from "../components/SectionTabs";
 import PhaseBudgetBar, { type PhaseBudgetSegment } from "../components/PhaseBudgetBar";
 import { QueryAugmentBackfillBlock } from "../components/QueryAugmentBackfillBlock";
 import { MultiVectorBackfillBlock } from "../components/MultiVectorBackfillBlock";
@@ -31,8 +32,53 @@ import { ClearCompletedJobsBlock } from "../components/ClearCompletedJobsBlock";
 import { GraphCleanupBlock } from "../components/GraphCleanupBlock";
 import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
 import { VectorMigrationBlock } from "../components/VectorMigrationBlock";
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faXmark, faCircleQuestion, faSpinner, faMagnifyingGlass } from "../lib/icons";
+import {
+  faCheck,
+  faXmark,
+  faCircleQuestion,
+  faSpinner,
+  faMagnifyingGlass,
+  faGear,
+  faBrain,
+  faSeedling,
+  faCloudMoon,
+  faComments,
+  faPlug,
+  faDiagramProject,
+  faKey,
+  faDatabase,
+  faCubes,
+  faRotate,
+  faSatelliteDish,
+  faScroll,
+  faServer,
+  faBolt,
+  faChartLine,
+} from "../lib/icons";
+
+// Per-group tab icon, keyed by the backend group id
+// (internal/storage/admin/settings_groups.go). Unmapped groups fall back to
+// the gear icon.
+const GROUP_ICONS: Record<string, IconDefinition> = {
+  memory: faBrain,
+  enrichment: faSeedling,
+  dreaming: faCloudMoon,
+  recall: faMagnifyingGlass,
+  ask: faComments,
+  api: faPlug,
+  graph_visualization: faDiagramProject,
+  auth: faKey,
+  vector_db: faDatabase,
+  hnsw: faCubes,
+  lifecycle: faRotate,
+  events: faSatelliteDish,
+  logging: faScroll,
+  providers: faServer,
+  caches: faBolt,
+  usage_export: faChartLine,
+};
 
 // Setting keys are not always literal phase names; e.g. `dreaming.transitive.*`
 // drives the `transitive_discovery` phase. The bar needs the phase key to
@@ -1128,30 +1174,19 @@ function SettingsEditor() {
         </div>
       )}
 
-      {/* Tab bar: one pill per visible group. Hidden while searching, since
+      {/* Tab bar: one segment per visible group. Hidden while searching, since
           search shows matches across every group at once. */}
       {!isLoading && !isError && !searching && visibleGroups.length > 0 && (
-        <div role="tablist" aria-label="Setting groups" className="flex flex-wrap gap-2">
-          {visibleGroups.map((g) => {
-            const active = g.id === activeGroup?.id;
-            return (
-              <button
-                key={g.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => selectGroup(g.id)}
-                className={
-                  active
-                    ? "rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm"
-                    : "rounded-full border border-input px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
-                }
-              >
-                {g.label}
-              </button>
-            );
-          })}
-        </div>
+        <SectionTabs
+          ariaLabel="Setting groups"
+          active={activeGroup?.id ?? ""}
+          onChange={selectGroup}
+          items={visibleGroups.map((g) => ({
+            id: g.id,
+            label: g.label,
+            icon: GROUP_ICONS[g.id] ?? faGear,
+          }))}
+        />
       )}
       </div>
 

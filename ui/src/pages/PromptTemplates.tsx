@@ -5,9 +5,32 @@ import {
   useUpdateSetting,
   useTestExtractionPrompt,
 } from "../hooks/useApi";
+import { useSectionTabParam } from "../hooks/useSectionTabParam";
 import type { ExtractionTestResult, Setting, SettingSchema } from "../api/client";
+import SectionTabs, { type SectionTabItem } from "../components/SectionTabs";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCheck, faXmark, faSpinner } from "../lib/icons";
+import {
+  faCheck,
+  faXmark,
+  faSpinner,
+  faFileImport,
+  faSeedling,
+  faCloudMoon,
+  faComments,
+  faArrowDownWideShort,
+} from "../lib/icons";
+
+// Tab sections for the prompt templates page. The 8 prompt groups are folded
+// into these 5 tabs so the page shows one section at a time instead of a long
+// single-column scroll.
+const PROMPT_SECTIONS: SectionTabItem[] = [
+  { id: "extraction", label: "Extraction", icon: faFileImport },
+  { id: "enrichment", label: "Enrichment", icon: faSeedling },
+  { id: "dreaming", label: "Dreaming", icon: faCloudMoon },
+  { id: "ask", label: "Ask", icon: faComments },
+  { id: "reranking", label: "Reranking", icon: faArrowDownWideShort },
+];
+const PROMPT_SECTION_IDS = PROMPT_SECTIONS.map((s) => s.id);
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -550,6 +573,13 @@ export default function PromptTemplates() {
   const updateMutation = useUpdateSetting();
   const testMutation = useTestExtractionPrompt();
 
+  // Active section tab synced to ?section=, self-healing to the first section
+  // when the param is missing or names an unknown section. Deep-linkable.
+  const { active: activeSection, select: selectSection } = useSectionTabParam(
+    "section",
+    PROMPT_SECTION_IDS,
+  );
+
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
@@ -640,6 +670,39 @@ export default function PromptTemplates() {
     spec,
     systemData: resolvePromptData([spec.systemKey], schemas, settingsMap, ""),
   }));
+
+  // The dreaming/ask/reranking tabs are structurally identical (a header plus a
+  // list of SimplePromptEditorCards), so they render from this descriptor
+  // instead of three copy-pasted blocks. Extraction and enrichment stay inline
+  // since they carry per-card test panels.
+  const simpleSections: {
+    id: string;
+    title: string;
+    description: string;
+    prompts: { spec: { title: string; systemKey: string }; systemData: PromptData }[];
+  }[] = [
+    {
+      id: "dreaming",
+      title: "Dreaming Prompts",
+      description:
+        "These prompts are used by the dreaming system during background memory consolidation. They control how the LLM detects contradictions, synthesizes related memories, scores alignment between new evidence and existing knowledge, and audits the novelty of each synthesis.",
+      prompts: dreamingPrompts,
+    },
+    {
+      id: "ask",
+      title: "Ask Prompt",
+      description:
+        "This prompt is used by the ask tool to synthesize one grounded, cited answer over the recalled memory neighborhood. It controls how the LLM cites sources and stays within the provided context. Used only when the ask feature is enabled.",
+      prompts: askPrompts,
+    },
+    {
+      id: "reranking",
+      title: "Reranking Prompt",
+      description:
+        'Used by the LLM-judge reranker to score how well each memory answers the query, on both the recall and ask paths. Applies only when the Reranker provider slot is a generative chat model (detected method "judge"); cross-encoder rerankers ignore it.',
+      prompts: rerankPrompts,
+    },
+  ];
 
   // Keep refs updated for test calls.
   factSystemPromptRef.current = factSystemPromptData.currentValue;
@@ -799,10 +862,11 @@ export default function PromptTemplates() {
           Prompt Templates
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          The system prompts the model uses for enrichment and dreaming. Each
-          phase exposes one tunable system prompt holding the full instruction
-          and output contract; the memory data is wrapped into the user message
-          by a fixed code template and is not editable here.
+          The system prompts the model uses across extraction, enrichment,
+          dreaming, ask, and reranking. Each phase exposes one tunable system
+          prompt holding the full instruction and output contract; the memory
+          data is wrapped into the user message by a fixed code template and is
+          not editable here. Pick a section above to edit its prompts.
         </p>
       </div>
 
@@ -822,180 +886,135 @@ export default function PromptTemplates() {
         </div>
       )}
 
-      {/* Content */}
+      {/* Content: a tab per section, with only the active section rendered. */}
       {!isLoading && !isError && (
         <div className="space-y-8">
-          {/* Fact Extraction */}
-          <PromptEditorCard
-            title="Fact Extraction"
-            description={factSystemPromptData.description}
-            promptData={factSystemPromptData}
-            onSave={handleSave}
-            saving={updateMutation.isPending}
-            onTest={handleTestFact}
-            testing={testingFact}
-            testResult={factTestResult}
-            sampleInput={factSampleInput}
-            onSampleInputChange={setFactSampleInput}
+          <SectionTabs
+            ariaLabel="Prompt sections"
+            active={activeSection}
+            onChange={selectSection}
+            items={PROMPT_SECTIONS}
           />
 
-          {/* Entity Extraction */}
-          <PromptEditorCard
-            title="Entity Extraction"
-            description={entitySystemPromptData.description}
-            promptData={entitySystemPromptData}
-            onSave={handleSave}
-            saving={updateMutation.isPending}
-            onTest={handleTestEntity}
-            testing={testingEntity}
-            testResult={entityTestResult}
-            sampleInput={entitySampleInput}
-            onSampleInputChange={setEntitySampleInput}
-          />
+          {/* Extraction */}
+          {activeSection === "extraction" && (
+            <div className="space-y-8">
+              <PromptEditorCard
+                title="Fact Extraction"
+                description={factSystemPromptData.description}
+                promptData={factSystemPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestFact}
+                testing={testingFact}
+                testResult={factTestResult}
+                sampleInput={factSampleInput}
+                onSampleInputChange={setFactSampleInput}
+              />
 
-          {/* Relationship Extraction */}
-          <PromptEditorCard
-            title="Relationship Extraction"
-            description={relationshipSystemPromptData.description}
-            promptData={relationshipSystemPromptData}
-            onSave={handleSave}
-            saving={updateMutation.isPending}
-            onTest={handleTestRelationship}
-            testing={testingRelationship}
-            testResult={relationshipTestResult}
-            sampleInput={relationshipSampleInput}
-            onSampleInputChange={setRelationshipSampleInput}
-          />
+              <PromptEditorCard
+                title="Entity Extraction"
+                description={entitySystemPromptData.description}
+                promptData={entitySystemPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestEntity}
+                testing={testingEntity}
+                testResult={entityTestResult}
+                sampleInput={entitySampleInput}
+                onSampleInputChange={setEntitySampleInput}
+              />
 
-          {/* Query Augmentation */}
-          <PromptEditorCard
-            title="Query Augmentation"
-            description={augmentSystemPromptData.description}
-            promptData={augmentSystemPromptData}
-            onSave={handleSave}
-            saving={updateMutation.isPending}
-            onTest={handleTestAugment}
-            testing={testingAugment}
-            testResult={augmentTestResult}
-            sampleInput={augmentSampleInput}
-            onSampleInputChange={setAugmentSampleInput}
-          />
+              <PromptEditorCard
+                title="Relationship Extraction"
+                description={relationshipSystemPromptData.description}
+                promptData={relationshipSystemPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestRelationship}
+                testing={testingRelationship}
+                testResult={relationshipTestResult}
+                sampleInput={relationshipSampleInput}
+                onSampleInputChange={setRelationshipSampleInput}
+              />
 
-          {/* Enrichment Prompts Section */}
-          <div className="border-t border-border pt-8">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold tracking-tight">
-                Enrichment Prompts
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Additional prompts used by the enrichment pipeline beyond fact
-                and entity extraction. The ingestion-decision prompt drives the
-                ADD/UPDATE/DELETE/NONE judgment on near-duplicate matches at
-                write time. The test runs with an empty candidate list against
-                the ingestion-decision provider slot (configured under Provider
-                Configuration), so it exercises the prompt and the model that
-                slot resolves to.
-              </p>
+              <PromptEditorCard
+                title="Query Augmentation"
+                description={augmentSystemPromptData.description}
+                promptData={augmentSystemPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestAugment}
+                testing={testingAugment}
+                testResult={augmentTestResult}
+                sampleInput={augmentSampleInput}
+                onSampleInputChange={setAugmentSampleInput}
+              />
             </div>
+          )}
 
-            <PromptEditorCard
-              title="Ingestion Decision"
-              description={ingestionSystemPromptData.description}
-              promptData={ingestionSystemPromptData}
-              onSave={handleSave}
-              saving={updateMutation.isPending}
-              onTest={handleTestIngestion}
-              testing={testingIngestion}
-              testResult={ingestionTestResult}
-              sampleInput={ingestionSampleInput}
-              onSampleInputChange={setIngestionSampleInput}
-            />
-          </div>
+          {/* Enrichment */}
+          {activeSection === "enrichment" && (
+            <div>
+              <div className="mb-6">
+                <h2 className="text-xl font-semibold tracking-tight">
+                  Enrichment Prompts
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Additional prompts used by the enrichment pipeline beyond fact
+                  and entity extraction. The ingestion-decision prompt drives the
+                  ADD/UPDATE/DELETE/NONE judgment on near-duplicate matches at
+                  write time. The test runs with an empty candidate list against
+                  the ingestion-decision provider slot (configured under Provider
+                  Configuration), so it exercises the prompt and the model that
+                  slot resolves to.
+                </p>
+              </div>
 
-          {/* Dreaming Prompts Section */}
-          <div className="border-t border-border pt-8">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold tracking-tight">
-                Dreaming Prompts
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                These prompts are used by the dreaming system during background
-                memory consolidation. They control how the LLM detects
-                contradictions, synthesizes related memories, scores alignment
-                between new evidence and existing knowledge, and audits the
-                novelty of each synthesis.
-              </p>
+              <PromptEditorCard
+                title="Ingestion Decision"
+                description={ingestionSystemPromptData.description}
+                promptData={ingestionSystemPromptData}
+                onSave={handleSave}
+                saving={updateMutation.isPending}
+                onTest={handleTestIngestion}
+                testing={testingIngestion}
+                testResult={ingestionTestResult}
+                sampleInput={ingestionSampleInput}
+                onSampleInputChange={setIngestionSampleInput}
+              />
             </div>
+          )}
 
-            <div className="space-y-6">
-              {dreamingPrompts.map(({ spec, systemData }) => (
-                <SimplePromptEditorCard
-                  key={spec.systemKey}
-                  title={spec.title}
-                  description={systemData.description}
-                  promptData={systemData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-              ))}
-            </div>
-          </div>
+          {/* Dreaming / Ask / Reranking: structurally identical, rendered from
+              the simpleSections descriptor. */}
+          {simpleSections.map((section) =>
+            activeSection === section.id ? (
+              <div key={section.id}>
+                <div className="mb-6">
+                  <h2 className="text-xl font-semibold tracking-tight">
+                    {section.title}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {section.description}
+                  </p>
+                </div>
 
-          {/* Ask Prompt Section */}
-          <div className="border-t border-border pt-8">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold tracking-tight">
-                Ask Prompt
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                This prompt is used by the ask tool to synthesize one grounded,
-                cited answer over the recalled memory neighborhood. It controls
-                how the LLM cites sources and stays within the provided context.
-                Used only when the ask feature is enabled.
-              </p>
-            </div>
-
-            <div className="space-y-6">
-              {askPrompts.map(({ spec, systemData }) => (
-                <SimplePromptEditorCard
-                  key={spec.systemKey}
-                  title={spec.title}
-                  description={systemData.description}
-                  promptData={systemData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Reranking Prompt Section */}
-          <div className="border-t border-border pt-8">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold tracking-tight">
-                Reranking Prompt
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Used by the LLM-judge reranker to score how well each memory
-                answers the query, on both the recall and ask paths. Applies only
-                when the Reranker provider slot is a generative chat model (detected
-                method "judge"); cross-encoder rerankers ignore it.
-              </p>
-            </div>
-
-            <div className="space-y-6">
-              {rerankPrompts.map(({ spec, systemData }) => (
-                <SimplePromptEditorCard
-                  key={spec.systemKey}
-                  title={spec.title}
-                  description={systemData.description}
-                  promptData={systemData}
-                  onSave={handleSave}
-                  saving={updateMutation.isPending}
-                />
-              ))}
-            </div>
-          </div>
+                <div className="space-y-6">
+                  {section.prompts.map(({ spec, systemData }) => (
+                    <SimplePromptEditorCard
+                      key={spec.systemKey}
+                      title={spec.title}
+                      description={systemData.description}
+                      promptData={systemData}
+                      onSave={handleSave}
+                      saving={updateMutation.isPending}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null,
+          )}
         </div>
       )}
 
