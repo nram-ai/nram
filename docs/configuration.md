@@ -57,7 +57,7 @@ YAML values support environment-variable interpolation: `${VAR_NAME:-default}`.
 
 Everything outside the bootstrap surface is managed through the Web Console:
 
-- **Providers** (embedding, fact extraction, entity extraction): `/admin/providers`
+- **Providers** (the required Embedding, Fact Extraction, and Entity Extraction slots, plus the optional Query Augmentation, Ingestion Decision, Ask Synthesis, and Reranker slots): `/admin/providers`
 - **Vector backend** (Qdrant address/credentials, HNSW tuning): `/admin/settings`
 - **Dreaming**, **enrichment**, **ranking**, **recall fusion**, **reconsolidation**, **retention**, **rate limits**, **lifecycle sweep**, **events**, and prompt templates: `/admin/settings`
 
@@ -105,6 +105,9 @@ Migrations run automatically on startup when `migrate_on_start: true` (the defau
 | `--backfill-enrichment` | Enqueue enrichment jobs for memories missing vectors, then exit. The worker skips fact/entity extraction for memories whose lineage/relationships already exist, so re-running is cheap. |
 | `--reembed-all-memories` | Force re-embed every live memory (e.g. after switching embedding models), then exit |
 | `--normalize-memory-tags` | Rewrite tags on all memory rows to the canonical normalized form, then exit |
+| `-h`, `--help` | Print the usage screen and exit |
+| `-v`, `--version` | Print the product identity, build stamps, and this deployment's instance UUID, then exit |
 | `migrate up` / `migrate down` / `migrate status` / `migrate create <name>` | Migration CLI commands (run before normal startup) |
+| `migrate-to-postgres --database-url <url>` | Copy the active SQLite database into the PostgreSQL instance at `<url>`, then exit |
 
 The `backfill-audit` operator binary is documented in [operations.md](operations.md#draining-the-novelty-audit-backlog).

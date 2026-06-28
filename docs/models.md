@@ -34,7 +34,7 @@ Back to the [README](../README.md).
 
 ## Local models must all fit in VRAM at once
 
-If you run the embedding and the fact/entity slots on Ollama (or any local backend), budget VRAM for the **sum** of every selected model, not the largest single one. The embedding model and the extraction model(s) are loaded and called independently, and the enrichment pipeline alternates between them on essentially every job, so both must be resident on the GPU at the same time.
+If you run the embedding and the fact/entity slots on Ollama (or another local backend such as vLLM, SGLang, or llama.cpp's llama-server), budget VRAM for the **sum** of every selected model, not the largest single one. The embedding model and the extraction model(s) are loaded and called independently, and the enrichment pipeline alternates between them on essentially every job, so both must be resident on the GPU at the same time.
 
 When they don't all fit, one of two things happens, both bad:
 
@@ -113,3 +113,12 @@ nram still controls `temperature` and `max_tokens` per call (both are standard O
 ## Embedding dimensions
 
 You do not need to enter the embedding model's dimension count. nram auto-detects dimensions on the first call to a new embedding provider by sending a probe string and reading the response shape. The detected count appears in the provider status read-back after the first successful call.
+
+## The reranker slot (optional)
+
+The reranker is off by default and not required. When configured, it re-scores the top recall and `ask` candidates for relevance before they are returned, demoting results that ranked high on vector or lexical similarity but are not actually on topic. nram detects which of two methods the configured endpoint supports at save time:
+
+- **Cross-encoder** (`cross_encoder`): a dedicated relevance model served over a `/v1/rerank` endpoint (for example a `bge-reranker`-class model). It scores every `(query, candidate)` pair in one call, is deterministic, and is cheap per call. Prefer it when you can run one.
+- **LLM judge** (`judge`): any generative chat model, scored one candidate at a time. It needs no separate reranker server, but is non-deterministic and costs more tokens. Use it to reuse a chat model you already host when a dedicated cross-encoder is not available.
+
+Sizing is modest: a cross-encoder in the `bge-reranker` class is far smaller than the extraction models, and the judge reuses an extraction-tier chat model. The reranker only runs over the small candidate window already retrieved, so it adds a single extra call per recall or `ask`, not per memory.
