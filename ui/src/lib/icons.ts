@@ -73,6 +73,10 @@ export {
   faGears,
   faServer,
   faUser,
+  faNetworkWired,
+
+  // Sidebar rail controls.
+  faThumbtack,
 
   // Empty-state and action icons.
   faSeedling,

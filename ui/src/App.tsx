@@ -41,15 +41,17 @@ import {
   faFileImport,
   faUserAstronaut,
   faStar,
-  faTableCellsLarge,
   faPeopleGroup,
   faGears,
   faServer,
   faUser,
+  faNetworkWired,
 } from "./lib/icons";
 import { formatCommit } from "./lib/formatters";
 import { useTheme } from "./context/ThemeContext";
 import RequireRole from "./components/RequireRole";
+import SidebarNav, { type NavItem, type NavSection } from "./components/SidebarNav";
+import { BuildInfo } from "./components/BuildInfo";
 import { NeuralNetwork } from "./components/NeuralNetwork/NeuralNetwork";
 import { Logo } from "./components/Logo";
 import { EmptyState } from "./components/EmptyState";
@@ -154,57 +156,68 @@ class ErrorBoundary extends React.Component<
 // Types and nav model
 // ---------------------------------------------------------------------------
 
-interface NavItem {
-  path: string;
-  label: string;
-  section: string;
-  icon: IconDefinition;
-  minRole?: string;
-  writeOnly?: boolean;
-  requiresEnrichment?: boolean;
-  // requiresAsk hides the entry unless the ask feature flag (ask.enabled) is on.
-  requiresAsk?: boolean;
-  // External links to a server-served (non-SPA) route, opened in a new tab.
-  external?: boolean;
-}
-
 const navItems: NavItem[] = [
   { path: "/", label: "Dashboard", section: "Overview", icon: faGauge },
-  { path: "/memories", label: "Memory Browser", section: "Data", icon: faBrain },
-  { path: "/ask", label: "Ask", section: "Data", icon: faComments, requiresAsk: true },
-  { path: "/procedural", label: "Procedural Memory", section: "Data", icon: faScroll },
-  { path: "/entities", label: "Entity Browser", section: "Data", icon: faCubes },
-  { path: "/graph", label: "Graph Visualization", section: "Data", icon: faDiagramProject },
-  { path: "/projects", label: "Projects", section: "Management", icon: faFolderTree },
-  { path: "/organizations", label: "Organizations", section: "Management", icon: faBuilding, minRole: "administrator" },
-  { path: "/users", label: "Users", section: "Management", icon: faUsers, minRole: "org_owner" },
-  { path: "/providers", label: "Providers", section: "Configuration", icon: faPlug, minRole: "administrator" },
-  { path: "/settings", label: "Settings", section: "Configuration", icon: faSliders, minRole: "administrator" },
-  { path: "/prompt-templates", label: "Prompt Templates", section: "Configuration", icon: faMessage, minRole: "administrator", requiresEnrichment: true },
-  { path: "/webhooks", label: "Webhooks", section: "Configuration", icon: faSatelliteDish, minRole: "administrator" },
-  { path: "/oauth", label: "OAuth Clients", section: "Configuration", icon: faKey },
-  { path: "/idp", label: "Identity Providers", section: "Configuration", icon: faFingerprint, minRole: "org_owner" },
-  { path: "/shares", label: "Shares", section: "Configuration", icon: faShareNodes },
-  { path: "/mcp-config", label: "MCP Config", section: "Configuration", icon: faPuzzlePiece },
-  { path: "/docs", label: "API Docs", section: "Configuration", icon: faBookOpen, external: true },
+  // Knowledge: the surfaces for exploring what's stored. Not labeled "Memory"
+  // because the whole product is memory; "Knowledge" mirrors the site's
+  // "Knowledge graph" language.
+  { path: "/memories", label: "Memory Browser", section: "Knowledge", icon: faBrain },
+  { path: "/entities", label: "Entity Browser", section: "Knowledge", icon: faCubes },
+  { path: "/graph", label: "Graph Visualization", section: "Knowledge", icon: faDiagramProject },
+  { path: "/ask", label: "Ask", section: "Knowledge", icon: faComments, requiresAsk: true },
+  { path: "/procedural", label: "Procedural Memory", section: "Knowledge", icon: faScroll },
+  // Workspace: who/what owns memory and how it's shared.
+  { path: "/projects", label: "Projects", section: "Workspace", icon: faFolderTree },
+  { path: "/organizations", label: "Organizations", section: "Workspace", icon: faBuilding, minRole: "administrator" },
+  { path: "/users", label: "Users", section: "Workspace", icon: faUsers, minRole: "org_owner" },
+  { path: "/shares", label: "Shares", section: "Workspace", icon: faShareNodes },
+  // Engine: the enrichment/dreaming pipeline — its configuration and its live
+  // monitors, kept together.
+  { path: "/providers", label: "Providers", section: "Engine", icon: faPlug, minRole: "administrator" },
+  { path: "/settings", label: "Settings", section: "Engine", icon: faSliders, minRole: "administrator" },
+  { path: "/prompt-templates", label: "Prompt Templates", section: "Engine", icon: faMessage, minRole: "administrator", requiresEnrichment: true },
+  { path: "/enrichment", label: "Enrichment Queue", section: "Engine", icon: faListCheck, requiresEnrichment: true },
+  { path: "/dreaming", label: "Dreaming", section: "Engine", icon: faCloudMoon, requiresEnrichment: true },
+  // Integrations: external connections and the API reference.
+  { path: "/oauth", label: "OAuth Clients", section: "Integrations", icon: faKey },
+  { path: "/idp", label: "Identity Providers", section: "Integrations", icon: faFingerprint, minRole: "org_owner" },
+  { path: "/webhooks", label: "Webhooks", section: "Integrations", icon: faSatelliteDish, minRole: "administrator" },
+  { path: "/mcp-config", label: "MCP Config", section: "Integrations", icon: faPuzzlePiece },
+  { path: "/docs", label: "API Docs", section: "Integrations", icon: faBookOpen, external: true },
+  // System: infrastructure, data admin, and observability.
   { path: "/database", label: "Database", section: "System", icon: faDatabase, minRole: "administrator" },
-  { path: "/enrichment", label: "Enrichment Queue", section: "System", icon: faListCheck, requiresEnrichment: true },
-  { path: "/dreaming", label: "Dreaming", section: "System", icon: faCloudMoon, requiresEnrichment: true },
+  { path: "/import", label: "Bulk Import", section: "System", icon: faFileImport, writeOnly: true },
   { path: "/analytics", label: "Analytics", section: "System", icon: faChartLine },
   { path: "/observability", label: "Metrics", section: "System", icon: faBolt, minRole: "administrator" },
   { path: "/logs", label: "Logs", section: "System", icon: faFileLines, minRole: "administrator" },
-  { path: "/import", label: "Bulk Import", section: "System", icon: faFileImport, writeOnly: true },
   { path: "/account", label: "My Account", section: "Account", icon: faUserAstronaut },
 ];
 
-const SECTION_ICONS: Record<string, IconDefinition> = {
-  Overview: faStar,
-  Data: faTableCellsLarge,
-  Management: faPeopleGroup,
-  Configuration: faGears,
-  System: faServer,
-  Account: faUser,
-};
+// Section metadata: rail order, icon, placement, and panel behavior. Single
+// source of truth, consumed by the desktop rail (via railSections) and the
+// mobile drawer (via the derived SECTION_ICONS lookup). Sections render in this
+// order; "bottom" placement puts Account in the rail's utility cluster.
+interface SectionMeta {
+  name: string;
+  icon: IconDefinition;
+  placement: "middle" | "bottom";
+  alwaysPanel?: boolean;
+  showBuildInfo?: boolean;
+}
+
+const SECTION_META: SectionMeta[] = [
+  { name: "Overview", icon: faStar, placement: "middle" },
+  { name: "Knowledge", icon: faBrain, placement: "middle" },
+  { name: "Workspace", icon: faPeopleGroup, placement: "middle" },
+  { name: "Engine", icon: faGears, placement: "middle" },
+  { name: "Integrations", icon: faNetworkWired, placement: "middle" },
+  { name: "System", icon: faServer, placement: "middle" },
+  { name: "Account", icon: faUser, placement: "bottom", alwaysPanel: true, showBuildInfo: true },
+];
+
+const SECTION_ICONS: Record<string, IconDefinition> = Object.fromEntries(
+  SECTION_META.map((m) => [m.name, m.icon]),
+);
 
 // Routes where the neural-network backdrop fades back so foreground
 // data-visualizations own the visual budget.
@@ -304,12 +317,37 @@ function AppLayout() {
 
   const sections = groupBySection(filteredItems);
 
+  // Ordered, filtered rail model for the desktop SidebarNav. Sections with no
+  // visible items (all filtered out by role/flags) are dropped so they show no
+  // rail icon.
+  const railSections: NavSection[] = SECTION_META.filter(
+    (m) => sections[m.name]?.length,
+  ).map((m) => ({
+    section: m.name,
+    icon: m.icon,
+    items: sections[m.name],
+    placement: m.placement,
+    alwaysPanel: m.alwaysPanel,
+    showBuildInfo: m.showBuildInfo,
+  }));
+
   function handleLogout() {
     auth.logout();
   }
 
   return (
     <div className="app-shell flex h-screen">
+      {/* Desktop primary nav: icon rail + flyout (>= md) */}
+      <SidebarNav
+        sections={railSections}
+        activePath={location.pathname}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onLogout={handleLogout}
+        health={health}
+        buildCommit={buildCommit}
+      />
+
       {/* Mobile header bar */}
       <div className="surface-elevated fixed top-0 left-0 right-0 z-40 flex items-center px-4 py-3 md:hidden">
         <button
@@ -331,9 +369,10 @@ function AppLayout() {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Mobile slide-out drawer: full labeled tree (< md only). The desktop
+          rail above replaces this on >= md. */}
       <aside
-        className={`surface-elevated fixed inset-y-0 left-0 z-50 w-60 overflow-y-auto flex flex-col transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 md:shrink-0 ${
+        className={`surface-elevated fixed inset-y-0 left-0 z-50 w-60 overflow-y-auto flex flex-col transform transition-transform duration-200 ease-in-out md:hidden ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -433,17 +472,7 @@ function AppLayout() {
             <span>Logout</span>
           </button>
           {health && (
-            <p
-              className="px-2 pt-1 font-mono text-[11px] leading-tight text-muted-foreground/70"
-              title={
-                health.build.time
-                  ? `Built ${health.build.time} · ${health.build.go}`
-                  : health.build.go
-              }
-            >
-              v{health.version}
-              {buildCommit && ` · ${buildCommit}`}
-            </p>
+            <BuildInfo health={health} commit={buildCommit} className="px-2 pt-1" />
           )}
         </div>
       </aside>
