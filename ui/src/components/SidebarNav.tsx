@@ -218,6 +218,15 @@ export default function SidebarNav({
     setOpenSection(hasPanel(s) ? s.section : null);
   }
 
+  // Theme/logout are non-section rail buttons. Hovering one cancels a pending
+  // open and dismisses any open flyout, so crossing the Account icon on the way
+  // to logout doesn't leave its panel hanging open.
+  function handleUtilityEnter() {
+    if (pinned) return;
+    clearTimers();
+    setOpenSection(null);
+  }
+
   function handleRailClick(s: NavSection) {
     clearTimers();
     setOpenSection((prev) => (prev === s.section && !pinned ? null : s.section));
@@ -388,6 +397,7 @@ export default function SidebarNav({
           <button
             type="button"
             onClick={onToggleTheme}
+            onMouseEnter={handleUtilityEnter}
             title={theme === "dark" ? "Light mode" : "Dark mode"}
             aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             className={railIconClass(false)}
@@ -398,6 +408,7 @@ export default function SidebarNav({
           <button
             type="button"
             onClick={onLogout}
+            onMouseEnter={handleUtilityEnter}
             title="Logout"
             aria-label="Logout"
             className={railIconClass(false)}
