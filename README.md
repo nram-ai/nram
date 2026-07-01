@@ -123,6 +123,16 @@ claude mcp add --transport http nram http://localhost:8674/mcp
 
 Local CLI and IDE tools use the URL directly. Hosted web tools (ChatGPT, claude.ai, the Claude apps) reach your server from the vendor's cloud, so they need a public HTTPS URL via a reverse proxy or tunnel, see [docs/quickstart.md](docs/quickstart.md#7-connect-a-client).
 
+## Run as a service
+
+Run it at boot and restart on failure with the native OS service manager (Windows SCM, Linux systemd, macOS launchd):
+
+```bash
+sudo ./nram service install     # then: start | stop | restart | status | uninstall
+```
+
+`install` captures the current directory, `--config`, and your `DATABASE_URL` / `PORT` / `LOG_LEVEL` / `NRAM_CONFIG` so the service runs like your shell would. Add `--user` for a per-user service that needs no root. Full details: **[docs/operations.md](docs/operations.md#running-as-a-service)**.
+
 ## Reference
 
 The deep reference is split out to keep this page approachable:
@@ -132,7 +142,7 @@ The deep reference is split out to keep this page approachable:
 - **[docs/api.md](docs/api.md)**: full REST API and MCP tool/resource reference, including update/supersede and move semantics.
 - **[docs/models.md](docs/models.md)**: recommended models per slot, VRAM sizing for local models, the optional reranker, and Ollama `num_ctx` and keep-alive tuning.
 - **[docs/configuration.md](docs/configuration.md)**: bootstrap vs runtime config, environment variables, databases (SQLite, Postgres, Qdrant), migrations, and operator flags.
-- **[docs/operations.md](docs/operations.md)**: troubleshooting and the dreaming / backfill operations guide.
+- **[docs/operations.md](docs/operations.md)**: running as a managed OS service, troubleshooting, and the dreaming / backfill operations guide.
 - **[docs/openapi.yaml](docs/openapi.yaml)**: OpenAPI 3.1 specification, also served by the running server at `GET /openapi.yaml` and rendered at `GET /docs`. A conformance test keeps it in sync with the router.
 
 ## Development

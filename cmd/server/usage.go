@@ -21,11 +21,35 @@ const migrateToPostgresUsage = "usage: nram migrate-to-postgres --database-url <
 	"SQLite database into the PostgreSQL instance at <url>. Conflict-safe and\n" +
 	"type-aware; run it once against a freshly provisioned Postgres database."
 
+// serviceUsage is the focused usage for the service subcommand. It is shared by
+// the help dispatcher and the parse-error path in dispatchServiceCommand so the
+// two never drift.
+const serviceUsage = "usage: nram service <install|uninstall|start|stop|restart|status> [--user] [--config <path>]\n\n" +
+	"Register nram with the native OS service manager (Windows SCM, Linux systemd,\n" +
+	"macOS launchd) and control it. Installed services start at boot and restart on\n" +
+	"failure. install snapshots the current directory and the DATABASE_URL, PORT,\n" +
+	"LOG_LEVEL, and NRAM_CONFIG environment variables into the service.\n\n" +
+	"Actions:\n" +
+	"  install     register the service (runs 'nram' from the current directory)\n" +
+	"  uninstall   remove the service\n" +
+	"  start       start the installed service\n" +
+	"  stop        stop the installed service\n" +
+	"  restart     stop then start the installed service\n" +
+	"  status      report whether the service is running, stopped, or absent\n\n" +
+	"Flags:\n" +
+	"  --user      install a per-user service (Linux systemctl --user, macOS\n" +
+	"              LaunchAgent); ignored on Windows\n" +
+	"  --config <path>\n" +
+	"              record this config path in the installed service (resolved to an\n" +
+	"              absolute path at install time)\n\n" +
+	"install and uninstall usually require elevated privileges (sudo, or an\n" +
+	"Administrator shell on Windows) unless --user is given."
+
 // usageText is the top-level help screen. nram parses its command line by hand
 // (no flag package), so the usage is hand-maintained here. The bootstrap env
 // vars mirror internal/config/load.go applyEnv; the default port mirrors
 // internal/config DefaultConfig.
-const usageText = version.Name + ` (` + version.Short + `) ` + version.Version + `: persistent memory server for AI agents
+const usageText = version.Name + ` (` + version.Short + `) ` + version.Version + `: ` + version.Tagline + `
 
 Usage:
   nram [flags]                 start the server (default when no command is given)
@@ -38,10 +62,14 @@ Commands:
   migrate create <name>        scaffold a new up/down SQL migration pair
   migrate-to-postgres --database-url <url>
                                copy the SQLite database into PostgreSQL, then exit
+  service <action> [--user]    install/uninstall/start/stop/restart/status the
+                               binary as a native OS service, then exit
 
 Flags:
   --config <path>              load configuration from this YAML file
                                (default: $NRAM_CONFIG, else ./config.yaml)
+  --workdir <path>             change to this directory before loading config
+                               (set automatically by 'service install')
   --backfill-enrichment        enqueue enrichment for memories missing it, then exit
   --reembed-all-memories       force re-embed every live memory, then exit
   --normalize-memory-tags      rewrite memory tags to canonical form, then exit
@@ -115,16 +143,24 @@ func instanceIDForVersion() (string, bool) {
 	return storage.ReadInstanceID(ctx, db)
 }
 
-// configPathFromArgs returns the value of the --config flag from the command
-// line, or "" when it is absent. Shared by main (to load config) and the
-// --version banner so the two never drift in how they resolve the flag.
-func configPathFromArgs(args []string) string {
+// flagValueFromArgs returns the value following the named value-flag in args, or
+// "" when the flag is absent or has no value. nram parses its command line by
+// hand (no flag package), so this is the one place value flags like --config and
+// --workdir are resolved, keeping every caller consistent.
+func flagValueFromArgs(args []string, name string) string {
 	for i, arg := range args[1:] {
-		if arg == "--config" && i+1 < len(args[1:]) {
+		if arg == name && i+1 < len(args[1:]) {
 			return args[i+2]
 		}
 	}
 	return ""
+}
+
+// configPathFromArgs returns the value of the --config flag from the command
+// line, or "" when it is absent. Shared by main (to load config) and the
+// --version banner so the two never drift in how they resolve the flag.
+func configPathFromArgs(args []string) string {
+	return flagValueFromArgs(args, "--config")
 }
 
 // hasHelpToken reports whether any of the given args is a help request.
@@ -168,6 +204,11 @@ func handleInfoFlags(args []string) bool {
 	case "migrate-to-postgres":
 		if hasHelpToken(args[2:]) {
 			_, _ = fmt.Fprintln(os.Stdout, migrateToPostgresUsage)
+			return true
+		}
+	case "service":
+		if hasHelpToken(args[2:]) {
+			_, _ = fmt.Fprintln(os.Stdout, serviceUsage)
 			return true
 		}
 	}

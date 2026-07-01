@@ -1,8 +1,44 @@
 # Operations
 
-Troubleshooting and the dreaming / backfill operations guide.
+Running nram as a managed service, troubleshooting, and the dreaming / backfill operations guide.
 
 Back to the [README](../README.md).
+
+## Running as a service
+
+`nram service` registers the binary with the native OS service manager so nram starts at boot and restarts on failure, using the same command surface on every platform:
+
+| Platform | Manager | Service definition |
+|---|---|---|
+| Linux | systemd | `/etc/systemd/system/nram.service` (system) or `~/.config/systemd/user/nram.service` (`--user`) |
+| macOS | launchd | `/Library/LaunchDaemons/nram.plist` (system) or `~/Library/LaunchAgents/nram.plist` (`--user`) |
+| Windows | Service Control Manager | a service named `nram` |
+
+```bash
+sudo ./nram service install     # register the service
+sudo ./nram service start
+./nram service status           # running | stopped | unknown (not installed)
+sudo ./nram service stop
+sudo ./nram service uninstall
+```
+
+`install` and `uninstall` change system state, so they need root on Linux/macOS or an Administrator shell on Windows. `restart` is also available. The service definition is created by `install`; nram never edits it afterward, so change any of the captured values below by reinstalling.
+
+**What install captures.** The installed service runs `nram --workdir <dir>` from the directory you installed from (so `config.yaml` and `./nram.db` resolve the same way they would in your shell), plus `--config <path>` when you pass one. It also snapshots the `DATABASE_URL`, `PORT`, `LOG_LEVEL`, and `NRAM_CONFIG` environment variables that are set at install time. The first-boot admin bootstrap credentials (`NRAM_ADMIN_EMAIL` / `NRAM_ADMIN_PASS`) are deliberately **not** captured: systemd units and launchd plists are world-readable, so a plaintext password does not belong in them. Put those in `config.yaml`, or run the first boot in the foreground, if you need headless bootstrap.
+
+**Restart on failure.** systemd gets `Restart=on-failure` (with `RestartSec=120`), Windows gets a restart recovery action, and launchd gets `KeepAlive` keyed on `SuccessfulExit`, so all three restart the process only when it exits with a non-zero status, and leave it stopped after a clean `service stop`.
+
+**Per-user services.** `--user` installs a per-user service (Linux `systemctl --user`, macOS LaunchAgent) that needs no elevated privileges. It is ignored on Windows, where services are always system-level. A per-user service is a distinct registration, so pass `--user` to **every** subcommand (`status`, `start`, `stop`, `uninstall`), not just `install`.
+
+**Verify the install** with the platform's own tooling:
+
+```bash
+systemctl show nram -p Restart -p WantedBy          # Linux (add --user for a user service)
+sudo launchctl print system/nram                     # macOS (system service)
+sc.exe qfailure nram                                 # Windows (recovery actions)
+```
+
+`nram service --help` prints the full flag reference.
 
 ## Troubleshooting
 

@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the semantic version of nram. Bump it by hand on release.
-const Version = "0.16.1"
+const Version = "0.16.2"
 
 // Static product identity. These are the single source of truth for the
 // human-facing name, license, and ownership of the binary, kept verbatim in
@@ -30,6 +30,10 @@ const (
 	Copyright = "Copyright (c) 2026 Brandon Lehmann"
 	// Homepage is the project's canonical home page.
 	Homepage = "https://nram.ai"
+	// Tagline is the canonical one-line product tagline (matches the nram.ai
+	// site title and social card), shared by the CLI help banner and the OS
+	// service registration so the surfaces never drift.
+	Tagline = "The continuity layer for everything you do with AI"
 )
 
 // BuildInfo describes the identity of a running binary.

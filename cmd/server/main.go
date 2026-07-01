@@ -8,9 +8,7 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +81,23 @@ func main() {
 	// Answer --help/-h, --version/-v, and per-subcommand help before touching
 	// the config file or database, so they work in any environment.
 	if handleInfoFlags(os.Args) {
+		return
+	}
+
+	// Honour --workdir before any CWD-relative read (config.yaml, ./nram.db) so
+	// a service manager launching the binary from an arbitrary directory still
+	// resolves files from the directory captured at install time.
+	if werr := applyWorkdir(os.Args); werr != nil {
+		log.Fatalf("%v", werr)
+	}
+
+	// Register/unregister/control the binary as a native OS service and exit.
+	// Routed before config.Load, like the other one-shot commands, because it
+	// talks only to the OS service manager and never needs the database.
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		if serr := dispatchServiceCommand(os.Args); serr != nil {
+			log.Fatalf("%v", serr)
+		}
 		return
 	}
 
@@ -1456,27 +1471,20 @@ func main() {
 		Handler: r,
 	}
 
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		slog.Info("boot: server starting", "addr", addr, "log_level", cfg.LogLevel)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server failed to start: %v", err)
-		}
-	}()
-
-	<-done
-	slog.Info("boot: server shutting down")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("server forced to shutdown: %v", err)
+	// Run the server under the kardianos service runtime. Interactively this
+	// installs a SIGINT/SIGTERM handler and drives Start/Stop (graceful
+	// shutdown); under a service manager it connects to the Windows SCM,
+	// systemd, or launchd. svc.Run blocks until Stop finishes, after which main
+	// returns and the deferred context cancels and Close calls above fire in the
+	// original teardown order.
+	prg := &program{srv: srv, addr: addr, logLevel: cfg.LogLevel}
+	svc, err := buildService(prg, os.Args)
+	if err != nil {
+		log.Fatalf("failed to build service runtime: %v", err)
 	}
-
-	slog.Info("boot: server stopped")
+	if err := svc.Run(); err != nil {
+		log.Fatalf("server runtime error: %v", err)
+	}
 }
 
 // seedRegisteredSettings inserts one row per registered schema entry, using
