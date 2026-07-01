@@ -41,9 +41,12 @@ func TestApplyWorkdirChangesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
 
 	target := t.TempDir()
+	// Register the cwd restore after t.TempDir so that, under LIFO cleanup
+	// ordering, cwd is moved out of target before t.TempDir's RemoveAll runs.
+	// Windows cannot delete a directory that is a live process's cwd.
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 	if err := applyWorkdir([]string{"nram", "--workdir", target}); err != nil {
 		t.Fatalf("applyWorkdir: %v", err)
 	}
