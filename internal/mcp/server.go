@@ -254,8 +254,7 @@ func NewServer(deps Dependencies) *Server {
 		"nram",
 		version.Version,
 		server.WithToolCapabilities(true),
-		server.WithResourceCapabilities(false, true), // subscribe=false, listChanged=true
-		server.WithRecovery(),                        // recover from panics in tool handlers
+		server.WithRecovery(), // recover from panics in tool handlers
 		server.WithInstructions(buildInstructions(hasEmbed, hasEnrich, askEnabled)),
 		server.WithHooks(hooks),
 		// Combined tool-list filter: first hide tools disallowed for
@@ -307,7 +306,12 @@ func NewServer(deps Dependencies) *Server {
 	RegisterProjectUpdateTool(s)
 	RegisterProceduralTools(s)
 	RegisterAboutMeTool(s)
-	RegisterResources(s)
+	// MCP resources are intentionally not registered: nram://projects,
+	// .../entities, and .../graph duplicate the list_projects and graph tools,
+	// which agent clients surface far more reliably than resources. The
+	// construction in resources.go is retained as reference; re-add
+	// RegisterResources(s) (and server.WithResourceCapabilities above) to
+	// expose them again.
 
 	return s
 }

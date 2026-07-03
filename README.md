@@ -139,7 +139,7 @@ The deep reference is split out to keep this page approachable:
 
 - **[docs/install.md](docs/install.md)**: prebuilt downloads for macOS, Linux, and Windows, and checksum verification.
 - **[docs/quickstart.md](docs/quickstart.md)**: build, run, the setup wizard, provider configuration, and connecting a client.
-- **[docs/api.md](docs/api.md)**: full REST API and MCP tool/resource reference, including update/supersede and move semantics.
+- **[docs/api.md](docs/api.md)**: full REST API and MCP tool reference, including update/supersede and move semantics.
 - **[docs/models.md](docs/models.md)**: recommended models per slot, VRAM sizing for local models, the optional reranker, and Ollama `num_ctx` and keep-alive tuning.
 - **[docs/configuration.md](docs/configuration.md)**: bootstrap vs runtime config, environment variables, databases (SQLite, Postgres, Qdrant), migrations, and operator flags.
 - **[docs/operations.md](docs/operations.md)**: running as a managed OS service, troubleshooting, and the dreaming / backfill operations guide.

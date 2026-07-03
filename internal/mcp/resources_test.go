@@ -49,7 +49,6 @@ func TestExtractSlugFromURI_NoPrefix(t *testing.T) {
 func TestProjectsResource_NoHTTPRequest(t *testing.T) {
 	deps := Dependencies{Backend: storage.BackendSQLite}
 	srv := newTestServer(deps)
-	_ = srv // resources registered
 
 	req := mcp.ReadResourceRequest{}
 	_, err := handleProjectsResource(context.Background(), srv, req)
@@ -574,7 +573,9 @@ func TestProjectGraphResource_EdgeCapTruncated(t *testing.T) {
 // --- resource registration tests ---
 
 func TestResourcesRegistered_NoPanic(t *testing.T) {
-	// Verify that NewServer registers resources without panicking.
+	// nram no longer registers MCP resources (the resource construction in
+	// resources.go is retained as reference only). This just asserts the
+	// server builds without panicking.
 	deps := Dependencies{Backend: storage.BackendSQLite}
 	srv := newTestServer(deps)
 	if srv == nil {

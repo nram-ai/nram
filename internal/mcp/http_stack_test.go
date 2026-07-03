@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
@@ -519,6 +520,11 @@ func TestHTTPStack_MCP_Initialize(t *testing.T) {
 	if _, ok := caps["tools"]; !ok {
 		t.Error("capabilities missing tools")
 	}
+	// nram registers no MCP resources, so the resource capability must not be
+	// advertised on the initialize handshake.
+	if _, ok := caps["resources"]; ok {
+		t.Errorf("capabilities unexpectedly advertise resources: %v", caps["resources"])
+	}
 
 	serverInfo, ok := result["serverInfo"].(map[string]any)
 	if !ok {
@@ -950,45 +956,22 @@ func TestHTTPStack_MCP_ListResources(t *testing.T) {
 
 	session := initMCPSession(t, env)
 
+	// nram intentionally registers no MCP resources and does not advertise the
+	// resource capability (the nram:// resources duplicated the list_projects
+	// and graph tools). resources/list must therefore be unsupported: mcp-go
+	// only wires the method handler when resource capability is enabled, so an
+	// out-of-band call returns a JSON-RPC "method not found" error.
 	_, rpcResp := session.call(t, 2, "resources/list", nil)
 	if rpcResp == nil {
 		t.Fatal("resources/list: got nil response")
 	}
-	if rpcResp.Error != nil {
-		t.Fatalf("resources/list: JSON-RPC error: %s", rpcResp.Error.Message)
+	if rpcResp.Error == nil {
+		t.Fatalf("resources/list: expected a JSON-RPC error (resources unsupported), got result: %s",
+			string(rpcResp.Result))
 	}
-
-	// Parse result. It may contain "resources" and/or "resourceTemplates".
-	var result struct {
-		Resources         []map[string]any `json:"resources"`
-		ResourceTemplates []map[string]any `json:"resourceTemplates"`
-	}
-	if err := json.Unmarshal(rpcResp.Result, &result); err != nil {
-		t.Fatalf("resources/list: unmarshal failed: %v (raw: %s)", err, string(rpcResp.Result))
-	}
-
-	totalResources := len(result.Resources) + len(result.ResourceTemplates)
-	if totalResources == 0 {
-		t.Fatal("resources/list: expected at least one resource or resource template")
-	}
-
-	// Look for nram://projects in either resources or resource templates.
-	found := false
-	for _, r := range result.Resources {
-		if uri, ok := r["uri"].(string); ok && strings.Contains(uri, "nram://projects") {
-			found = true
-			break
-		}
-	}
-	for _, r := range result.ResourceTemplates {
-		if uri, ok := r["uriTemplate"].(string); ok && strings.Contains(uri, "nram://") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected nram:// URI in resources/templates, got resources=%v templates=%v",
-			result.Resources, result.ResourceTemplates)
+	if rpcResp.Error.Code != mcp.METHOD_NOT_FOUND {
+		t.Errorf("resources/list: expected method-not-found code %d, got code=%d msg=%s",
+			mcp.METHOD_NOT_FOUND, rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 }
 

@@ -192,12 +192,4 @@ The MCP server is available at `POST /mcp` using Streamable HTTP transport. It e
 | `procedural_update` | Partial-update a procedural entry's mutable fields. |
 | `procedural_forget` | Soft-delete a procedural entry by id. |
 
-Export is not an MCP tool: its payload travelled inline through the transport, which truncates beyond the byte budget, so it moved to the asynchronous REST + UI pipeline at `/v1/me/exports`. Admin-only operations (settings cascade, provider health, paraphrase backfill) and diagnostic flags (`include_superseded`, `include_audit`, `include_low_novelty`) are REST-only. The MCP tool surface is intentionally narrow.
-
-### Resources
-
-| URI | Description |
-|---|---|
-| `nram://projects` | List all projects |
-| `nram://projects/{slug}/entities` | Entities in a project |
-| `nram://projects/{slug}/graph` | Knowledge graph data for a project |
+Export is not an MCP tool: its payload travelled inline through the transport, which truncates beyond the byte budget, so it moved to the asynchronous REST + UI pipeline at `/v1/me/exports`. Admin-only operations (settings cascade, provider health, paraphrase backfill) and diagnostic flags (`include_superseded`, `include_audit`, `include_low_novelty`) are REST-only. The MCP tool surface is intentionally narrow. The server registers no MCP resources: the project/entity/graph data they would expose is already served by the `list_projects` and `graph` tools, which agent clients surface far more reliably than resources.
