@@ -47,30 +47,44 @@ func TestInstructionsHandler_ClaudeAndAgentsAreIdentical(t *testing.T) {
 	}
 }
 
-func TestInstructionsHandler_Cursor(t *testing.T) {
-	cursor, ok := instructions.Lookup("cursor")
+func TestInstructionsHandler_Condensed(t *testing.T) {
+	condensed, ok := instructions.Lookup("condensed")
 	if !ok {
-		t.Fatal("cursor format must resolve")
+		t.Fatal("condensed format must resolve")
 	}
 	full, _ := instructions.Lookup("claude")
-	rec := serveInstructions(t, "?format=cursor")
+	rec := serveInstructions(t, "?format=condensed")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if rec.Body.String() != cursor {
-		t.Fatal("cursor body does not match the condensed body")
+	if rec.Body.String() != condensed {
+		t.Fatal("condensed body does not match the condensed copy")
 	}
 	if rec.Body.String() == full {
-		t.Fatal("cursor body should differ from the full body")
+		t.Fatal("condensed body should differ from the full body")
 	}
 	if !strings.Contains(rec.Body.String(), "reasoning or justifying a skip is itself a violation") {
-		t.Fatal("cursor body is missing the anti-rationalization session-start clause")
+		t.Fatal("condensed body is missing the anti-rationalization session-start clause")
 	}
 	// The condensed body is reused for ChatGPT's Custom instructions field, which
 	// hard-caps at 1500 characters and rejects input past the cap. Keep it under
 	// that limit so it stays pasteable there.
-	if len(cursor) > 1500 {
-		t.Fatalf("cursor body is %d chars, want <= 1500 to fit ChatGPT Custom instructions", len(cursor))
+	if len(condensed) > 1500 {
+		t.Fatalf("condensed body is %d chars, want <= 1500 to fit ChatGPT Custom instructions", len(condensed))
+	}
+}
+
+// TestInstructionsHandler_CursorAlias pins the deprecated "cursor" format as a
+// backward-compatible alias of "condensed": it must return the identical body
+// so callers that have not migrated see no change in response.
+func TestInstructionsHandler_CursorAlias(t *testing.T) {
+	condensed := serveInstructions(t, "?format=condensed")
+	cursor := serveInstructions(t, "?format=cursor")
+	if cursor.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", cursor.Code)
+	}
+	if cursor.Body.String() != condensed.Body.String() {
+		t.Fatal("cursor alias body differs from condensed; the alias must be identical")
 	}
 }
 

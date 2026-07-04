@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.17.0
+  version: 0.17.1
   license:
     name: MIT
 
@@ -129,11 +129,13 @@ paths:
           required: false
           description: >
             Flavor of the guidance. "claude" and "agents" return the same full
-            markdown body; "cursor" returns the condensed rules copy. Defaults
-            to the full body.
+            markdown body; "condensed" returns the length-limited rules copy for
+            surfaces that cap the field length (e.g. ChatGPT Custom
+            instructions); "cursor" is a deprecated alias of "condensed".
+            Defaults to the full body.
           schema:
             type: string
-            enum: [claude, agents, cursor]
+            enum: [claude, agents, condensed, cursor]
             default: claude
       responses:
         "200":

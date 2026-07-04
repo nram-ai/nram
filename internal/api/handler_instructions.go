@@ -12,8 +12,9 @@ import (
 // /instructions so any client can fetch the guidance without authenticating.
 //
 // The ?format= query selects the flavor: "claude" or "agents" (and the empty
-// default) return the full markdown body, "cursor" returns the condensed rules
-// copy. Any other value is rejected with 400 rather than silently defaulting.
+// default) return the full markdown body, "condensed" returns the
+// length-limited rules copy, and "cursor" is a deprecated alias of "condensed".
+// Any other value is rejected with 400 rather than silently defaulting.
 func NewInstructionsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -21,7 +22,7 @@ func NewInstructionsHandler() http.HandlerFunc {
 		body, ok := instructions.Lookup(format)
 		if !ok {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, "unknown format: "+format+" (valid: claude, agents, cursor)")
+			_, _ = io.WriteString(w, "unknown format: "+format+" (valid: claude, agents, condensed, cursor)")
 			return
 		}
 		_, _ = io.WriteString(w, body)

@@ -6,7 +6,7 @@ import { getInstructions } from "../api/client";
 // Types
 // ---------------------------------------------------------------------------
 
-type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "codex" | "opencode" | "chatgpt" | "api-key";
+type ToolTab = "claude-code" | "claude-desktop" | "cursor" | "cursor-cli" | "codex" | "opencode" | "chatgpt" | "api-key";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,15 +43,23 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 // the single source of truth so the page and external callers read one copy;
 // nothing here hardcodes the wording.
 
-type Snippets = { claude: string; cursor: string; agents: string };
+type Snippets = { claude: string; condensed: string; agents: string };
 
 // A single labeled snippet card within a System Prompt Snippet section: which
-// fetched flavor to show and the prose that frames it.
+// fetched flavor to show and the prose that frames it. filePrefix, when set, is
+// prepended to the copyable block so the user can save the result verbatim as a
+// complete file (e.g. a Cursor rule needs a small header above the body).
 type SnippetCardSpec = {
   label: string;
   description: ReactNode;
   snippet: keyof Snippets;
+  filePrefix?: string;
 };
+
+// Header that makes a Cursor rule load automatically in every session. We ship
+// it as part of the copyable file so users never have to hand-write it; the
+// body follows after the blank line.
+const CURSOR_RULE_HEADER = "---\nalwaysApply: true\n---\n\n";
 
 // Per-tab content for the System Prompt Snippet section: the placement guidance
 // under the shared heading, plus one card per snippet the client needs.
@@ -75,19 +83,21 @@ function SnippetBlock({ code, error }: { code: string | undefined; error: string
 // A single labeled snippet card: a heading row (label + description) above the
 // fetched snippet. Used by SystemPromptSection; most tabs render one, the API
 // key tab renders several.
-function SnippetCard({ label, description, code, error }: {
+function SnippetCard({ label, description, code, error, filePrefix }: {
   label: string;
   description: ReactNode;
   code: string | undefined;
   error: string | null;
+  filePrefix?: string;
 }) {
+  const shown = code === undefined ? undefined : (filePrefix ?? "") + code;
   return (
     <div className="bg-card rounded-md border border-border p-4 space-y-4">
       <div className="space-y-1">
         <p className="text-sm font-medium">{label}</p>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
-      <SnippetBlock code={code} error={error} />
+      <SnippetBlock code={shown} error={error} />
     </div>
   );
 }
@@ -114,6 +124,7 @@ function SystemPromptSection({ spec, snippets, error }: {
           description={card.description}
           code={snippets?.[card.snippet]}
           error={error}
+          filePrefix={card.filePrefix}
         />
       ))}
     </div>
@@ -124,7 +135,7 @@ function SystemPromptSection({ spec, snippets, error }: {
 // the Claude desktop/mobile apps) need a public HTTPS URL. The wording is kept in
 // sync with the same callout in README.md so the page and the README read as one
 // message. Only the hosted-web tabs render this; local clients (Claude Code, Cursor,
-// Codex, OpenCode) reach nram directly and do not need it.
+// Cursor CLI, Codex, OpenCode) reach nram directly and do not need it.
 function HostedWebHttpsNote() {
   return (
     <div className="bg-muted rounded-md p-3 text-sm space-y-2">
@@ -245,6 +256,44 @@ function CursorTab({ serverUrl }: { serverUrl: string }) {
       <p className="text-sm text-muted-foreground">
         Cursor supports OAuth-based MCP servers. You will be prompted to
         authenticate when connecting.
+      </p>
+    </div>
+  );
+}
+
+function CursorCliTab({ serverUrl }: { serverUrl: string }) {
+  const jsonConfig = JSON.stringify(
+    {
+      mcpServers: {
+        nram: {
+          url: serverUrl,
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  return (
+    <div className="bg-card rounded-md border border-border p-4 space-y-4">
+      <div>
+        <p className="text-sm font-medium">Add to ~/.cursor/mcp.json</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Add the nram MCP server to your global <span className="font-mono text-xs">~/.cursor/mcp.json</span> or
+          project-level <span className="font-mono text-xs">.cursor/mcp.json</span>. If you already have
+          other MCP servers configured, merge the nram entry into your
+          existing <span className="font-mono text-xs">mcpServers</span> object.
+        </p>
+      </div>
+      <CodeBlock code={jsonConfig} />
+      <p className="text-sm text-muted-foreground">
+        Authenticate with <span className="font-mono text-xs">cursor-agent mcp login nram</span>, then
+        confirm the server and its tools are visible with{" "}
+        <span className="font-mono text-xs">cursor-agent mcp list</span>. If your server is not
+        OAuth-capable, add a static token instead by giving the entry a{" "}
+        <span className="font-mono text-xs">headers</span> object with{" "}
+        <span className="font-mono text-xs">{'"Authorization": "Bearer <your-key>"'}</span> (or a{" "}
+        <span className="font-mono text-xs">{"${env:NRAM_API_KEY}"}</span> reference).
       </p>
     </div>
   );
@@ -470,13 +519,41 @@ const SYSTEM_PROMPT_SECTIONS: Record<ToolTab, SystemPromptSpec> = {
   },
   cursor: {
     description:
-      "Add this snippet to your project's .cursorrules file to guide Cursor on how to use nram effectively.",
+      "Save this as a Cursor rule so Cursor knows how to use nram in every chat.",
     cards: [
       {
-        label: "For .cursorrules",
-        description:
-          "A condensed version of the memory instructions suitable for Cursor's rule format.",
-        snippet: "cursor",
+        label: "Save as a Cursor rule file",
+        description: (
+          <>
+            In your project folder, create a file at{" "}
+            <span className="font-mono text-xs">.cursor/rules/nram-memory.mdc</span> and paste in
+            everything below, exactly as shown. Create the{" "}
+            <span className="font-mono text-xs">.cursor/rules</span> folder first if it does not
+            exist. Cursor then applies it automatically in every chat.
+          </>
+        ),
+        snippet: "claude",
+        filePrefix: CURSOR_RULE_HEADER,
+      },
+    ],
+  },
+  "cursor-cli": {
+    description:
+      "Save this as a Cursor rule so the Cursor CLI uses nram in every session.",
+    cards: [
+      {
+        label: "Save as a Cursor rule file",
+        description: (
+          <>
+            In your home folder, create a file at{" "}
+            <span className="font-mono text-xs">~/.cursor/rules/nram-memory.mdc</span> and paste in
+            everything below, exactly as shown. Create the{" "}
+            <span className="font-mono text-xs">~/.cursor/rules</span> folder first if it does not
+            exist. The Cursor CLI then applies it automatically in every session.
+          </>
+        ),
+        snippet: "claude",
+        filePrefix: CURSOR_RULE_HEADER,
       },
     ],
   },
@@ -518,7 +595,7 @@ const SYSTEM_PROMPT_SECTIONS: Record<ToolTab, SystemPromptSpec> = {
             instead, add it to a <span className="font-medium">Project&apos;s instructions</span>.
           </>
         ),
-        snippet: "cursor",
+        snippet: "condensed",
       },
     ],
   },
@@ -527,7 +604,7 @@ const SYSTEM_PROMPT_SECTIONS: Record<ToolTab, SystemPromptSpec> = {
       "If your MCP client supports a system prompt or rules file, add the appropriate snippet to instruct the model on how to use nram.",
     cards: [
       { label: "For CLAUDE.md", description: "Detailed guidance for Claude-based tools.", snippet: "claude" },
-      { label: "For .cursorrules", description: "Condensed version for Cursor-based tools.", snippet: "cursor" },
+      { label: "Condensed (length-limited tools)", description: "Shorter version for clients that cap the field length, like ChatGPT Custom instructions.", snippet: "condensed" },
       { label: "For AGENTS.md", description: "For OpenAI Codex-based tools.", snippet: "agents" },
     ],
   },
@@ -552,10 +629,11 @@ function MCPConfigGenerator() {
   useEffect(() => {
     let cancelled = false;
     // claude and agents return byte-identical bodies server-side, so fetch
-    // claude once and alias it; cursor is the only other distinct flavor.
-    Promise.all([getInstructions("claude"), getInstructions("cursor")])
-      .then(([claude, cursor]) => {
-        if (!cancelled) setSnippets({ claude, cursor, agents: claude });
+    // claude once and alias it; condensed is the only other distinct flavor
+    // (the length-limited copy used by ChatGPT's Custom instructions).
+    Promise.all([getInstructions("claude"), getInstructions("condensed")])
+      .then(([claude, condensed]) => {
+        if (!cancelled) setSnippets({ claude, condensed, agents: claude });
       })
       .catch((err) => {
         if (!cancelled) {
@@ -570,7 +648,8 @@ function MCPConfigGenerator() {
   const tabs: { key: ToolTab; label: string }[] = [
     { key: "claude-code", label: "Claude Code" },
     { key: "claude-desktop", label: "Claude Desktop / Claude.ai" },
-    { key: "cursor", label: "Cursor" },
+    { key: "cursor", label: "Cursor IDE" },
+    { key: "cursor-cli", label: "Cursor CLI" },
     { key: "codex", label: "Codex" },
     { key: "opencode", label: "OpenCode" },
     { key: "chatgpt", label: "ChatGPT" },
@@ -625,6 +704,7 @@ function MCPConfigGenerator() {
         {activeTab === "claude-code" && <ClaudeCodeTab serverUrl={serverUrl} />}
         {activeTab === "claude-desktop" && <ClaudeDesktopTab serverUrl={serverUrl} />}
         {activeTab === "cursor" && <CursorTab serverUrl={serverUrl} />}
+        {activeTab === "cursor-cli" && <CursorCliTab serverUrl={serverUrl} />}
         {activeTab === "codex" && <CodexTab serverUrl={serverUrl} />}
         {activeTab === "opencode" && <OpenCodeTab serverUrl={serverUrl} />}
         {activeTab === "chatgpt" && <ChatGPTTab serverUrl={serverUrl} />}

@@ -157,8 +157,14 @@ export function fetchMetricsText(): Promise<string> {
   return fetchText("/metrics", { headers: getAuthHeaders() });
 }
 
-/** Flavor of the agent instructions/rules served at /instructions. */
-export type InstructionsFormat = "claude" | "agents" | "cursor";
+/**
+ * Flavor of the agent instructions/rules served at /instructions. "claude" and
+ * "agents" return the full canonical body; "condensed" returns the
+ * length-limited copy for surfaces that cap the field length (e.g. ChatGPT).
+ * "cursor" is a deprecated alias of "condensed" kept for callers still on the
+ * old value; new code should use "condensed".
+ */
+export type InstructionsFormat = "claude" | "agents" | "condensed" | "cursor";
 
 /**
  * Fetch the canonical agent instructions/rules as plain text from the public

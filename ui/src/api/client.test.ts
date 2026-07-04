@@ -1476,7 +1476,7 @@ describe("API Client E2E", () => {
     });
 
     it("getInstructions() returns text for each format", async () => {
-      for (const fmt of ["claude", "agents", "cursor"] as const) {
+      for (const fmt of ["claude", "agents", "condensed", "cursor"] as const) {
         const text = await getInstructions(fmt);
         expect(typeof text).toBe("string");
         expect(text.length).toBeGreaterThan(0);
