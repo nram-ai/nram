@@ -816,6 +816,24 @@ const (
 	// subsystem. Default 1 for the same reason; raise per the embedder's
 	// capacity. A value <= 0 disables the gate.
 	SettingProviderEmbedHostConcurrency = "provider.embed.host_concurrency"
+
+	// SettingProviderCircuitBreakerMaxFailures is the number of consecutive
+	// provider-call failures that trips a slot's circuit breaker (open state),
+	// after which calls are rejected immediately instead of hammering a
+	// downstream that is down. Default 5.
+	SettingProviderCircuitBreakerMaxFailures = "provider.circuit_breaker.max_failures"
+
+	// SettingProviderCircuitBreakerResetBaseSeconds is the base open-window: how
+	// long a tripped breaker waits before its first half-open trial probe. Each
+	// failed probe grows the window geometrically (x2) up to the max below, so a
+	// provider that stays down is probed ever less often instead of every base
+	// interval forever. Default 30 (seconds).
+	SettingProviderCircuitBreakerResetBaseSeconds = "provider.circuit_breaker.reset_base_seconds"
+
+	// SettingProviderCircuitBreakerResetMaxSeconds caps the exponentially-grown
+	// open window, bounding how long recovery detection can lag after a long
+	// outage. Default 300 (5 minutes).
+	SettingProviderCircuitBreakerResetMaxSeconds = "provider.circuit_breaker.reset_max_seconds"
 )
 
 // Default system-prompt text for each phase: the full static instruction (role,
@@ -1196,6 +1214,10 @@ var settingDefaults = map[string]string{
 
 	SettingProviderLLMHostConcurrency:   "1",
 	SettingProviderEmbedHostConcurrency: "1",
+
+	SettingProviderCircuitBreakerMaxFailures:      "5",
+	SettingProviderCircuitBreakerResetBaseSeconds: "30",
+	SettingProviderCircuitBreakerResetMaxSeconds:  "300",
 
 	// Concurrency-shaped defaults are intentionally set to 1 ("safe-for-Ollama").
 	// A 1-GPU local provider (Ollama on a workstation, llama.cpp, etc.) is the

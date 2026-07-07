@@ -168,6 +168,111 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_ExponentialBackoff pins the backoff fix: each failed
+// half-open probe grows the open window geometrically (base, base*2, ...) up to
+// the cap, and a successful probe resets the backoff to the base window.
+func TestCircuitBreaker_ExponentialBackoff(t *testing.T) {
+	cfg := CircuitBreakerConfig{
+		Name:                "test",
+		MaxFailures:         1,
+		ResetTimeout:        100 * time.Millisecond,
+		ResetTimeoutMax:     350 * time.Millisecond,
+		ResetMultiplier:     2,
+		HalfOpenMaxRequests: 1,
+	}
+	cb := NewCircuitBreaker(cfg)
+
+	fakeNow := time.Now()
+	setNow := func() {
+		cb.mu.Lock()
+		f := fakeNow
+		cb.now = func() time.Time { return f }
+		cb.mu.Unlock()
+	}
+	setNow()
+
+	windowMs := func() int64 {
+		cb.mu.Lock()
+		defer cb.mu.Unlock()
+		return int64(cb.effectiveResetTimeout() / time.Millisecond)
+	}
+	fail := func() { _ = cb.Execute(func() error { return errSimulated }) }
+
+	// First trip: the base window.
+	fail()
+	if cb.State() != StateOpen {
+		t.Fatalf("expected open after first failure, got %v", cb.State())
+	}
+	if w := windowMs(); w != 100 {
+		t.Fatalf("cycle 1 window = %dms, want 100", w)
+	}
+
+	// Each failed half-open probe doubles the window, capped at 350ms.
+	for i, want := range []int64{200, 350, 350} {
+		fakeNow = fakeNow.Add(400 * time.Millisecond) // past the current window
+		setNow()
+		if cb.State() != StateHalfOpen {
+			t.Fatalf("probe %d: expected half-open, got %v", i+1, cb.State())
+		}
+		fail() // a failed probe re-opens and grows the window
+		if cb.State() != StateOpen {
+			t.Fatalf("probe %d: expected re-open, got %v", i+1, cb.State())
+		}
+		if w := windowMs(); w != want {
+			t.Fatalf("probe %d window = %dms, want %d", i+1, w, want)
+		}
+	}
+
+	// A successful probe closes the breaker and resets backoff to the base.
+	fakeNow = fakeNow.Add(400 * time.Millisecond)
+	setNow()
+	if cb.State() != StateHalfOpen {
+		t.Fatalf("expected half-open before recovery, got %v", cb.State())
+	}
+	if err := cb.Execute(func() error { return nil }); err != nil {
+		t.Fatalf("expected success probe, got %v", err)
+	}
+	if cb.State() != StateClosed {
+		t.Fatalf("expected closed after recovery, got %v", cb.State())
+	}
+	fail() // re-trip: window must be back to base, proving openCycles reset
+	if w := windowMs(); w != 100 {
+		t.Fatalf("post-recovery window = %dms, want 100 (backoff should reset)", w)
+	}
+}
+
+// TestCircuitBreaker_LiveBoundsResolver verifies BoundsResolver overrides the
+// static config live (this is what lets operator settings changes apply without
+// rebuilding the breaker), and that a zero field falls back to the static value.
+func TestCircuitBreaker_LiveBoundsResolver(t *testing.T) {
+	cfg := DefaultCircuitBreakerConfig() // static MaxFailures = 5
+	var liveMax atomic.Int64
+	liveMax.Store(2)
+	cfg.BoundsResolver = func() CircuitBreakerBounds {
+		return CircuitBreakerBounds{MaxFailures: int(liveMax.Load())}
+	}
+	cb := NewCircuitBreaker(cfg)
+
+	_ = cb.Execute(func() error { return errSimulated })
+	if cb.State() != StateClosed {
+		t.Fatalf("1 failure should stay closed, got %v", cb.State())
+	}
+	_ = cb.Execute(func() error { return errSimulated })
+	if cb.State() != StateOpen {
+		t.Fatalf("2 failures should trip via live bounds (static default is 5), got %v", cb.State())
+	}
+
+	// Zero live field falls back to the static config (MaxFailures 5).
+	liveMax.Store(0)
+	cb2 := NewCircuitBreaker(cfg)
+	for range 4 {
+		_ = cb2.Execute(func() error { return errSimulated })
+	}
+	if cb2.State() != StateClosed {
+		t.Fatalf("4 failures with zero live max should stay closed (fallback to static 5), got %v", cb2.State())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CircuitOpenError tests
 // ---------------------------------------------------------------------------

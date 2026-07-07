@@ -160,29 +160,54 @@ func TestUsageRecordingLLM_ZeroTokenFallback(t *testing.T) {
 	}
 }
 
-func TestUsageRecordingLLM_ErrorPath(t *testing.T) {
+// TestUsageRecordingLLM_CircuitOpenSkipsRow pins the write-amplification fix: a
+// circuit-open rejection made no upstream call, so it must NOT write a durable
+// token_usage row (one per rejected call during an outage was a major source of
+// runaway DB writes). The error still propagates and the Prometheus counter
+// still fires so the rejection stays observable.
+func TestUsageRecordingLLM_CircuitOpenSkipsRow(t *testing.T) {
 	rec := &captureRecorder{}
-	llm := &stubLLM{
-		name: "openai",
-		err:  ErrCircuitOpen,
-	}
-	w := NewUsageRecordingLLM(llm, rec, nil)
+	var counted int
+	llm := &stubLLM{name: "openai", err: ErrCircuitOpen}
+	w := NewUsageRecordingLLM(llm, rec, nil).WithTokenCounter(
+		func(_, _ string, _ float64) { counted++ })
 
 	ctx := WithOperation(context.Background(), OperationFactExtraction)
 	_, err := w.Complete(ctx, &CompletionRequest{Model: "gpt-4o"})
 	if !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen, got %v", err)
 	}
+	if got := rec.last(); got != nil {
+		t.Fatalf("expected NO recorded row on circuit-open, got %+v", got)
+	}
+	if counted != 1 {
+		t.Errorf("expected token counter to fire once on circuit-open, got %d", counted)
+	}
+}
+
+// TestUsageRecordingLLM_RealErrorStillRecords guards the other side: a genuine
+// provider error (an actual call with latency) must still be recorded, so the
+// circuit-open skip does not blind operators to real upstream failures.
+func TestUsageRecordingLLM_RealErrorStillRecords(t *testing.T) {
+	rec := &captureRecorder{}
+	llm := &stubLLM{name: "openai", err: errors.New("upstream 500")}
+	w := NewUsageRecordingLLM(llm, rec, nil)
+
+	ctx := WithOperation(context.Background(), OperationFactExtraction)
+	_, err := w.Complete(ctx, &CompletionRequest{Model: "gpt-4o"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
 
 	got := rec.last()
 	if got == nil {
-		t.Fatal("expected a recorded row even on error")
+		t.Fatal("expected a recorded row for a real provider error")
 	}
 	if got.Success {
 		t.Error("expected Success=false")
 	}
-	if got.ErrorCode == nil || *got.ErrorCode != "circuit_open" {
-		t.Errorf("expected ErrorCode=circuit_open, got %v", got.ErrorCode)
+	if got.ErrorCode == nil || *got.ErrorCode != "provider_error" {
+		t.Errorf("expected ErrorCode=provider_error, got %v", got.ErrorCode)
 	}
 	if got.TokensInput != 0 || got.TokensOutput != 0 {
 		t.Error("error path should record zero tokens (no estimation when no response)")

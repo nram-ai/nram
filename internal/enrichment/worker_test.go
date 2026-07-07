@@ -2755,6 +2755,38 @@ func TestProcessBatch_PerMemoryEmbed(t *testing.T) {
 	}
 }
 
+// TestProcessBatch_EmbedCircuitOpen_ReturnsCooldown is the regression guard for
+// the write-amplification fix. When the embedding provider's breaker is open
+// (LLM up, embedder down), processBatch must return the breaker's RetryAt as a
+// non-zero cooldown so the worker loop sleeps instead of hot-spinning and
+// hammering the DB with per-attempt writes. The job is released (not failed),
+// so a transient outage does not burn a queue attempt.
+func TestProcessBatch_EmbedCircuitOpen_ReturnsCooldown(t *testing.T) {
+	retryAt := time.Now().Add(90 * time.Second)
+	embedProv := &mockEmbeddingProvider{name: "test-embed", respond: func(_ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+		return nil, &provider.CircuitOpenError{Provider: "test-embed", RetryAt: retryAt}
+	}}
+	h := newTestHarness(noopFactLLM(), noopEntityLLM(), embedProv)
+
+	mem := testMemory()
+	mem.ID = uuid.New()
+	mem.Content = "content-for-embed-outage"
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	cooldown := h.pool.processBatch(context.Background(), "w-0", []*model.EnrichmentJob{job})
+
+	if cooldown.IsZero() {
+		t.Fatal("expected a non-zero cooldown when the embed breaker is open; a zero cooldown means the worker would hot-spin")
+	}
+	if !cooldown.Equal(retryAt) {
+		t.Errorf("cooldown = %v, want the breaker RetryAt %v", cooldown, retryAt)
+	}
+	if len(h.queue.completed) != 0 {
+		t.Errorf("expected no completed jobs during an embed outage, got %d", len(h.queue.completed))
+	}
+}
+
 // TestProcessBatch_VectorUpsertFailure_FailsJobs drives the
 // UpsertBatch failure path. Before the fix, runEmbedBatch logged the
 // error and let processBatch's finalize loop run, persisting

@@ -374,6 +374,12 @@ func (u *UsageRecordingRerank) record(ctx context.Context, query string, docs []
 		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
 	}
 
+	// A reranker slot is not breaker-wrapped today (fail-soft read path), so
+	// this guard is defensive/consistent with the LLM and embedding recorders.
+	if skipUsageRecordErr(callErr) {
+		return
+	}
+
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,

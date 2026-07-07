@@ -48,6 +48,12 @@ type ingestionDecisionResult struct {
 	usage           *provider.TokenUsage
 	model           string
 	providerName    string
+	// breakerErr carries the embed error when the ingestion-decision embed
+	// failed, even though the phase fails soft to AddFallback. The caller folds
+	// a circuit-open error here into the worker cooldown so an embedding-only
+	// outage does not leave the worker hot-spinning (the pre-embed leg otherwise
+	// returns success and reports no breaker trip).
+	breakerErr error
 }
 
 // runIngestionDecision is the first enrichment phase. On near-duplicate
@@ -102,6 +108,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	if err != nil || embedResp == nil || len(embedResp.Embeddings) == 0 {
 		slog.Error("enrichment: ingestion_decision embed", "job", job.ID, "err", err)
 		res.decision = IngestionOpAddFallback
+		res.breakerErr = err
 		return res
 	}
 	res.parentEmbedding = embedResp.Embeddings[0]

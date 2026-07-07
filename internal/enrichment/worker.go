@@ -791,6 +791,13 @@ type pendingJob struct {
 	// persisted with no matching vector.
 	vectorWriteFailed bool
 
+	// embedBreakerErr carries the first circuit-open embed error seen during
+	// this job's fail-soft pre-embed phases (ingestion-decision, fact-guard).
+	// processBatch folds it into the worker cooldown so an embedding-only outage
+	// pauses the worker instead of hot-spinning. Nil when no breaker tripped
+	// before the shared embed step.
+	embedBreakerErr error
+
 	// partialRecoveryWarning is the structured payload finalizeJob writes
 	// to last_error via CompleteWithWarning when at least one of the
 	// extraction legs returned a longest-valid-prefix recovery (truncation
@@ -840,7 +847,11 @@ func (wp *WorkerPool) processJob(ctx context.Context, workerID string, job *mode
 		return nil
 	}
 	wp.applyQueryAugment(ctx, p)
-	wp.runEmbedBatch(ctx, []*pendingJob{p})
+	// The single-job path has no poll loop to cool down (unlike processBatch),
+	// so a breaker-open embed error needs no RetryAt here: runEmbedBatch already
+	// released the claim on a transient failure, and finalizeJob below surfaces
+	// the outcome via its returned error. Discard is deliberate.
+	_ = wp.runEmbedBatch(ctx, []*pendingJob{p})
 	err = wp.finalizeJob(ctx, p)
 	wp.recordEnrichmentOutcome(p, err)
 	return err
@@ -942,8 +953,17 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	// Earliest RetryAt across any breaker-open errors observed. The worker
 	// loop sleeps until that time before claiming again so a tripped breaker
 	// does not produce a tight Release/Claim/Release loop while the upstream
-	// provider is recovering.
+	// provider is recovering. Cover EVERY phase, not just fatal pre-embed
+	// errors: the ingestion-decision and fact-guard embeds fail soft (their
+	// breaker trip is carried on p.embedBreakerErr), and the shared batch embed
+	// below returns its own error. Folding all three in is what stops the
+	// worker from hot-spinning against a down embedder while the LLM is up.
 	cooldown := earliestBreakerRetry(preEmbedErrs)
+	for _, p := range results {
+		if p != nil {
+			cooldown = earlierBreakerRetry(cooldown, p.embedBreakerErr)
+		}
+	}
 
 	pendings := make([]*pendingJob, 0, len(jobs))
 	for _, p := range results {
@@ -978,7 +998,12 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 	} else {
 		wp.applyQueryAugment(ctx, pendings[0])
 	}
-	wp.runEmbedBatch(ctx, pendings)
+	// Fold a batch-embed breaker trip into the cooldown as well. This is the
+	// common shape of an embedding-only outage: pre-embed succeeds (LLM up),
+	// then every parent embed here hits the open breaker.
+	if embedErr := wp.runEmbedBatch(ctx, pendings); embedErr != nil {
+		cooldown = earlierBreakerRetry(cooldown, embedErr)
+	}
 	// Map from job.ID back to its index in jobs so we can recover the
 	// start timestamp captured in the goroutine above.
 	idxByID := make(map[uuid.UUID]int, len(jobs))
@@ -1023,6 +1048,20 @@ func earliestBreakerRetry(errs []error) time.Time {
 		}
 	}
 	return earliest
+}
+
+// earlierBreakerRetry folds a single (possibly circuit-open) error into an
+// existing cooldown, returning the sooner of the two RetryAt times. A
+// non-breaker error (or nil) leaves cooldown unchanged.
+func earlierBreakerRetry(cooldown time.Time, err error) time.Time {
+	coe, ok := asCircuitOpen(err)
+	if !ok {
+		return cooldown
+	}
+	if cooldown.IsZero() || coe.RetryAt.Before(cooldown) {
+		return coe.RetryAt
+	}
+	return cooldown
 }
 
 // runPreEmbed runs fact/entity extraction, child-memory creation, and
@@ -1114,9 +1153,29 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// memory we are about to soft-delete). Already-enriched memories skip
 	// the phase: re-judging would create duplicate lineage edges.
 	ingestion := wp.runIngestionDecision(ctx, job, mem)
+
+	// Track the first circuit-open embed error across this job's fail-soft
+	// pre-embed phases (ingestion-decision here, fact-guard below). These phases
+	// intentionally continue on an embed error, so without this the embedding-
+	// only-outage case would leave preEmbedErrs empty and the worker would
+	// hot-spin. Set onto the returned pendingJob so processBatch can fold it
+	// into the cooldown.
+	var embedBreakerErr error
+	noteEmbedBreaker := func(err error) {
+		if embedBreakerErr == nil && err != nil {
+			if _, ok := asCircuitOpen(err); ok {
+				embedBreakerErr = err
+			}
+		}
+	}
+	if ingestion != nil {
+		noteEmbedBreaker(ingestion.breakerErr)
+	}
+
 	if ingestion != nil && ingestion.decision == IngestionOpDelete {
 		p := &pendingJob{job: job, mem: mem, workerID: workerID}
 		p.applyIngestion(ingestion)
+		p.embedBreakerErr = embedBreakerErr
 		return p, nil
 	}
 
@@ -1351,6 +1410,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 				er, embedErr := ep.Embed(provider.WithOperation(ctx, provider.OperationFactGuardEmbedding), &provider.EmbeddingRequest{Input: []string{fact.Content}})
 				switch {
 				case embedErr != nil:
+					noteEmbedBreaker(embedErr)
 					slog.Warn("enrichment: extracted-fact guard candidate embed",
 						"job", job.ID, "memory", mem.ID, "reason", "embed_error", "err", embedErr)
 				case er == nil || len(er.Embeddings) == 0:
@@ -1364,6 +1424,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 					pe, perr := ep.Embed(provider.WithOperation(ctx, provider.OperationFactGuardEmbedding), &provider.EmbeddingRequest{Input: []string{mem.Content}})
 					switch {
 					case perr != nil:
+						noteEmbedBreaker(perr)
 						slog.Warn("enrichment: extracted-fact guard parent embed",
 							"job", job.ID, "memory", mem.ID, "reason", "embed_error", "err", perr)
 					case pe == nil || len(pe.Embeddings) == 0:
@@ -1504,6 +1565,7 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		entityModel:            entityModel,
 		entityProv:             entityProv,
 		partialRecoveryWarning: buildPartialRecoveryWarning(factEnv, entEnv, relEnv),
+		embedBreakerErr:        embedBreakerErr,
 	}
 	p.applyIngestion(ingestion)
 	return p, nil
@@ -1784,16 +1846,21 @@ func (wp *WorkerPool) releaseClaimedPendings(ctx context.Context, pendings []*pe
 // batching (parent + entities + child facts, chunked at embedInputCap) is
 // preserved, cross-memory batching is given up so each token_usage row
 // attributes to its memory — then writes all vectors via UpsertBatch.
-func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob) {
+//
+// Returns the embed error (if any) so processBatch can fold a circuit-open
+// trip into the worker cooldown; a nil return means every memory embedded (or
+// there was nothing to embed). Vector-upsert failures are handled inline (each
+// job is failed) and are not breaker-relevant, so they return nil.
+func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob) error {
 	if len(pendings) == 0 {
-		return
+		return nil
 	}
 	if wp.embedProvider == nil || wp.vectorStore == nil {
-		return
+		return nil
 	}
 	ep := wp.embedProvider()
 	if ep == nil {
-		return
+		return nil
 	}
 
 	inputs := make([]string, 0, len(pendings)*2)
@@ -1873,7 +1940,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 				if isTransientLLMErr(err) {
 					wp.releaseClaimedPendings(ctx, pendings)
 				}
-				return
+				return err
 			}
 			copy(embeddings[start:end], vecs)
 		}
@@ -1934,7 +2001,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		}
 	}
 	if len(items) == 0 {
-		return
+		return nil
 	}
 	upsertStarted := time.Now()
 	if err := wp.vectorStore.UpsertBatch(ctx, items); err != nil {
@@ -1952,7 +2019,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 					"job", p.job.ID, "worker", p.workerID)
 			}
 		}
-		return
+		return nil
 	}
 	slog.Info("enrichment: vectors upserted",
 		"jobs", len(pendings),
@@ -1963,6 +2030,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 	// Multi-vector facets are an additive enhancement on top of the facet-0
 	// vector just written; gated, best-effort, and never fail the job.
 	wp.writeMemoryFacets(ctx, pendings, embeddings)
+	return nil
 }
 
 // writeMemoryFacets, when enrichment.multi_vector.enabled is set and the vector

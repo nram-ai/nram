@@ -144,6 +144,10 @@ func (u *UsageRecordingLLM) record(
 		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
 	}
 
+	if skipUsageRecordErr(callErr) {
+		return
+	}
+
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
@@ -233,6 +237,10 @@ func (u *UsageRecordingEmbedding) record(
 		u.counter(u.inner.Name(), string(op), float64(promptTokens))
 	}
 
+	if skipUsageRecordErr(callErr) {
+		return
+	}
+
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
@@ -247,6 +255,17 @@ func (u *UsageRecordingEmbedding) record(
 // ---------------------------------------------------------------------------
 // shared helpers
 // ---------------------------------------------------------------------------
+
+// skipUsageRecordErr reports whether a failed provider call should NOT get a
+// durable token_usage row. A circuit-open rejection made no upstream call (the
+// breaker short-circuited before any network I/O), so writing one row per
+// rejection is pure write amplification while a provider is down. The
+// Prometheus counter still fires at each call site, so the rejection stays
+// observable as a metric. Real timeouts/provider errors (an actual call with
+// latency) are still recorded.
+func skipUsageRecordErr(callErr error) bool {
+	return callErr != nil && classifyError(callErr) == errCodeCircuitOpen
+}
 
 // recordingContext returns a context that preserves all stamped values
 // (UsageContext, RequestID, NamespaceID, Operation, etc.) but drops the

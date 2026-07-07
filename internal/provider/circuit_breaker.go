@@ -68,6 +68,18 @@ func (e *CircuitOpenError) Is(target error) bool {
 	return target == ErrCircuitOpen
 }
 
+// CircuitBreakerBounds holds the operator-tunable thresholds a breaker reads
+// live on each state evaluation. Zero values mean "use the static config
+// fallback" per field, so a partially-populated resolver still works.
+type CircuitBreakerBounds struct {
+	// MaxFailures is the number of consecutive failures required to trip.
+	MaxFailures int
+	// ResetBase is the first open-window duration (before any backoff growth).
+	ResetBase time.Duration
+	// ResetMax caps the exponentially-grown open window.
+	ResetMax time.Duration
+}
+
 // CircuitBreakerConfig holds the tuning parameters for a CircuitBreaker.
 type CircuitBreakerConfig struct {
 	// Name labels the breaker (e.g., "ollama-fact"); embedded into CircuitOpenError
@@ -75,11 +87,28 @@ type CircuitBreakerConfig struct {
 	Name string
 	// MaxFailures is the number of consecutive failures required to trip the circuit.
 	MaxFailures int
-	// ResetTimeout is how long the circuit stays open before transitioning to half-open.
+	// ResetTimeout is the base open window: how long the circuit stays open
+	// before its first transition to half-open. Successive failed half-open
+	// probes grow the window geometrically (see ResetMultiplier) up to
+	// ResetTimeoutMax.
 	ResetTimeout time.Duration
+	// ResetTimeoutMax caps the exponentially-grown open window. Zero means no
+	// cap (grows unbounded, not recommended).
+	ResetTimeoutMax time.Duration
+	// ResetMultiplier is the geometric growth factor applied to the open window
+	// on each consecutive failed probe. Values < 1 are treated as the default 2.
+	ResetMultiplier float64
 	// HalfOpenMaxRequests is the maximum number of trial requests allowed in the
 	// half-open state before deciding whether to close or re-open the circuit.
 	HalfOpenMaxRequests int
+	// BoundsResolver, when non-nil, supplies MaxFailures / ResetBase / ResetMax
+	// live on each state evaluation so operator settings changes take effect
+	// without rebuilding the breaker. Per-field zero values fall back to the
+	// static config above. Name, ResetMultiplier, and HalfOpenMaxRequests stay
+	// static. The resolver must be cheap (a cached settings read); it is called
+	// under the breaker mutex, but only in the open/half-open/failure paths, not
+	// on the closed-state success hot path.
+	BoundsResolver func() CircuitBreakerBounds
 }
 
 // DefaultCircuitBreakerConfig returns a sensible default configuration.
@@ -87,6 +116,8 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 	return CircuitBreakerConfig{
 		MaxFailures:         5,
 		ResetTimeout:        30 * time.Second,
+		ResetTimeoutMax:     300 * time.Second,
+		ResetMultiplier:     2,
 		HalfOpenMaxRequests: 1,
 	}
 }
@@ -99,8 +130,13 @@ type CircuitBreaker struct {
 	config              CircuitBreakerConfig
 	state               CircuitState
 	consecutiveFailures int
-	lastStateChange     time.Time
-	lastError           error
+	// openCycles counts consecutive open windows since the breaker last closed
+	// on a successful probe. 1 on the first trip; incremented each time a
+	// half-open probe fails and re-opens. Drives the exponential growth of the
+	// reset window (effectiveResetTimeout). Reset to 0 when the breaker closes.
+	openCycles      int
+	lastStateChange time.Time
+	lastError       error
 	// halfOpenInFlight tracks trial requests that have been admitted to the
 	// underlying call but have not yet returned. Distinct from a "tried in this
 	// window" flag so a panic, ctx cancellation, or never-returning fn cannot
@@ -124,6 +160,59 @@ func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 	}
 }
 
+// bounds returns the live thresholds, consulting BoundsResolver when set and
+// falling back to the static config per field. Caller need not hold cb.mu.
+func (cb *CircuitBreaker) bounds() CircuitBreakerBounds {
+	b := CircuitBreakerBounds{
+		MaxFailures: cb.config.MaxFailures,
+		ResetBase:   cb.config.ResetTimeout,
+		ResetMax:    cb.config.ResetTimeoutMax,
+	}
+	if cb.config.BoundsResolver != nil {
+		live := cb.config.BoundsResolver()
+		if live.MaxFailures > 0 {
+			b.MaxFailures = live.MaxFailures
+		}
+		if live.ResetBase > 0 {
+			b.ResetBase = live.ResetBase
+		}
+		if live.ResetMax > 0 {
+			b.ResetMax = live.ResetMax
+		}
+	}
+	return b
+}
+
+// effectiveResetTimeout returns the current open-window duration: the base
+// window grown geometrically by ResetMultiplier for each open cycle beyond the
+// first, clamped to ResetMax. openCycles==1 (the first trip) yields the base
+// window. Caller must hold cb.mu (reads cb.openCycles).
+func (cb *CircuitBreaker) effectiveResetTimeout() time.Duration {
+	b := cb.bounds()
+	base := b.ResetBase
+	if base <= 0 {
+		base = 30 * time.Second
+	}
+	mult := cb.config.ResetMultiplier
+	if mult < 1 {
+		mult = 2
+	}
+	// exponent is the number of times the window has re-grown: 0 on the first
+	// open cycle so the initial wait is exactly base.
+	exp := max(cb.openCycles-1, 0)
+	d := float64(base)
+	for range exp {
+		d *= mult
+		// Clamp in-loop and stop: this also caps the float before it can grow
+		// toward +Inf for a large openCycles.
+		if b.ResetMax > 0 && d >= float64(b.ResetMax) {
+			d = float64(b.ResetMax)
+			break
+		}
+	}
+	return max(time.Duration(d), base)
+}
+
 // State returns the current circuit state, performing any time-based transitions.
 func (cb *CircuitBreaker) State() CircuitState {
 	cb.mu.Lock()
@@ -138,7 +227,7 @@ func (cb *CircuitBreaker) State() CircuitState {
 func (cb *CircuitBreaker) stateLocked() CircuitState {
 	switch cb.state {
 	case StateOpen:
-		if cb.now().Sub(cb.lastStateChange) >= cb.config.ResetTimeout {
+		if cb.now().Sub(cb.lastStateChange) >= cb.effectiveResetTimeout() {
 			cb.state = StateHalfOpen
 			cb.halfOpenInFlight = 0
 			cb.halfOpenAttempted = false
@@ -148,9 +237,10 @@ func (cb *CircuitBreaker) stateLocked() CircuitState {
 		// Self-heal stuck windows. If a trial was admitted but its outcome was
 		// never recorded (panic between admit and return, killed goroutine,
 		// etc.), halfOpenInFlight stays > 0 forever and every subsequent call
-		// is rejected. After 2x ResetTimeout with no recorded outcome, refresh
-		// the HalfOpen window: zero the in-flight quota and admit a new trial.
-		if cb.now().Sub(cb.lastStateChange) >= 2*cb.config.ResetTimeout && !cb.halfOpenAttempted {
+		// is rejected. After 2x the current reset window with no recorded
+		// outcome, refresh the HalfOpen window: zero the in-flight quota and
+		// admit a new trial.
+		if cb.now().Sub(cb.lastStateChange) >= 2*cb.effectiveResetTimeout() && !cb.halfOpenAttempted {
 			cb.halfOpenInFlight = 0
 			cb.halfOpenAttempted = false
 			cb.lastStateChange = cb.now()
@@ -163,7 +253,7 @@ func (cb *CircuitBreaker) stateLocked() CircuitState {
 // metadata. Caller must hold cb.mu.
 func (cb *CircuitBreaker) openErrorLocked() error {
 	openSince := cb.lastStateChange
-	retryAt := openSince.Add(cb.config.ResetTimeout)
+	retryAt := openSince.Add(cb.effectiveResetTimeout())
 	return &CircuitOpenError{
 		Provider:  cb.config.Name,
 		Cause:     cb.lastError,
@@ -222,6 +312,9 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	if cb.state == StateHalfOpen {
 		cb.state = StateClosed
 		cb.lastStateChange = cb.now()
+		// A successful probe means the upstream recovered; reset the backoff
+		// so the next unrelated outage starts from the base window again.
+		cb.openCycles = 0
 	}
 }
 
@@ -248,15 +341,19 @@ func (cb *CircuitBreaker) recordFailureWithCause(cause error) {
 
 	switch cb.state {
 	case StateClosed:
-		if cb.consecutiveFailures >= cb.config.MaxFailures {
+		if cb.consecutiveFailures >= cb.bounds().MaxFailures {
 			cb.state = StateOpen
 			cb.lastStateChange = cb.now()
+			// First open cycle of this outage: base reset window.
+			cb.openCycles = 1
 		}
 	case StateHalfOpen:
 		cb.state = StateOpen
 		cb.lastStateChange = cb.now()
 		cb.halfOpenAttempted = true
 		cb.halfOpenInFlight = 0
+		// A failed probe re-opens the circuit and grows the next window.
+		cb.openCycles++
 	}
 }
 

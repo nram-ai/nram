@@ -234,6 +234,14 @@ type Registry struct {
 	// dependency on the settings service. nil → gating disabled (unlimited).
 	hostConcurrencyCfg atomic.Pointer[func(context.Context) HostConcurrency]
 
+	// circuitBreakerCfg resolves the live breaker thresholds (max failures,
+	// base and max reset windows). Injected like hostConcurrencyCfg so the
+	// provider package stays free of a settings dependency. Read live on each
+	// breaker state evaluation (via the BoundsResolver closure installed in
+	// buildProviders), so an operator changing the settings takes effect within
+	// the settings-cache TTL with no registry reload. nil → static defaults.
+	circuitBreakerCfg atomic.Pointer[func() CircuitBreakerBounds]
+
 	// Wrapping infrastructure. Both may be nil; when nil, providers are
 	// returned without the usage-recording middleware (e.g., in tests that
 	// don't care about token_usage rows). Captured at construction time and
@@ -567,6 +575,17 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 	breakerCfgFor := func(slotType, slotLabel string) CircuitBreakerConfig {
 		c := cbConfig
 		c.Name = slotType + "-" + slotLabel
+		// Read the live-bounds resolver on each breaker evaluation so operator
+		// settings changes apply without a rebuild. The atomic is re-read per
+		// call (not captured), matching the host-concurrency pattern, so a
+		// later WithCircuitBreaker swap is picked up too. nil resolver → the
+		// breaker uses c's static thresholds.
+		c.BoundsResolver = func() CircuitBreakerBounds {
+			if ptr := r.circuitBreakerCfg.Load(); ptr != nil {
+				return (*ptr)()
+			}
+			return CircuitBreakerBounds{}
+		}
 		return c
 	}
 
@@ -795,6 +814,23 @@ func (r *Registry) WithHostConcurrency(fn func(context.Context) HostConcurrency)
 		r.hostConcurrencyCfg.Store(nil)
 	} else {
 		r.hostConcurrencyCfg.Store(&fn)
+	}
+	return r
+}
+
+// WithCircuitBreaker installs the callback that resolves the live breaker
+// thresholds (max consecutive failures, base reset window, max reset window).
+// Each breaker reads it on every open/half-open/failure evaluation via the
+// BoundsResolver closure wired in buildProviders, so changing the underlying
+// settings takes effect within the settings-cache TTL with no restart and no
+// registry reload. The callback must be cheap (a cached settings read); it is
+// invoked under a breaker mutex. Passing nil restores the static defaults.
+// Returns the receiver for chaining.
+func (r *Registry) WithCircuitBreaker(fn func() CircuitBreakerBounds) *Registry {
+	if fn == nil {
+		r.circuitBreakerCfg.Store(nil)
+	} else {
+		r.circuitBreakerCfg.Store(&fn)
 	}
 	return r
 }

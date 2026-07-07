@@ -422,6 +422,19 @@ func main() {
 				Embed: settingsSvc.ResolveIntWithDefault(ctx, service.SettingProviderEmbedHostConcurrency, "global"),
 			}
 		})
+		// Install the live circuit-breaker thresholds. Read from the settings
+		// cache on each breaker state evaluation, so an admin changing the
+		// backoff knobs takes effect within the cache TTL with no restart. The
+		// breaker itself has no request context, so resolve against Background;
+		// these are global-scope settings.
+		registry.WithCircuitBreaker(func() provider.CircuitBreakerBounds {
+			ctx := context.Background()
+			return provider.CircuitBreakerBounds{
+				MaxFailures: settingsSvc.ResolveIntWithDefault(ctx, service.SettingProviderCircuitBreakerMaxFailures, "global"),
+				ResetBase:   settingsSvc.ResolveDurationSecondsWithDefault(ctx, service.SettingProviderCircuitBreakerResetBaseSeconds, "global"),
+				ResetMax:    settingsSvc.ResolveDurationSecondsWithDefault(ctx, service.SettingProviderCircuitBreakerResetMaxSeconds, "global"),
+			}
+		})
 		// Reload so the embedding provider already wrapped by NewRegistry
 		// picks up the freshly-installed embed wrapper, cache, and host gate.
 		// On configs with no embedding slot this is a no-op.
