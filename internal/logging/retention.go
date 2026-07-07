@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/nram-ai/nram/internal/periodic"
 )
 
 // LogPruner is the storage capability the retention sweeper needs.
@@ -55,25 +57,16 @@ func (s *RetentionSweeper) Sweep(ctx context.Context) error {
 
 // Run sweeps once immediately and then on the given interval until ctx is done.
 // Sweep errors are reported to stderr (never through slog, to avoid feeding the
-// log table from its own janitor).
+// log table from its own janitor). The interval is fixed for the life of the
+// call, so periodic.Run's per-tick re-resolution just returns the same value.
 func (s *RetentionSweeper) Run(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	sweep := func() {
-		if err := s.Sweep(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "logging: retention sweep failed: %v\n", err)
-		}
-	}
-	sweep()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sweep()
-		}
-	}
+	periodic.Run(ctx, periodic.Fixed(interval),
+		func(ctx context.Context, _ bool) {
+			if err := s.Sweep(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "logging: retention sweep failed: %v\n", err)
+			}
+		})
 }

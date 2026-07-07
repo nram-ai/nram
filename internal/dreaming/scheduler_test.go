@@ -19,6 +19,44 @@ func newSchedulerForCancelTests() *Scheduler {
 	}
 }
 
+// fakeRetention is a substitutable retentionSweeper that signals each Sweep on
+// a channel so a test can block on the sweep instead of sleep-polling.
+type fakeRetention struct {
+	sweptCh chan struct{}
+}
+
+func (f *fakeRetention) Sweep(context.Context) error {
+	select {
+	case f.sweptCh <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// TestScheduler_SweepsRetentionOnStartup is the regression test for the
+// up-to-6h dream-log retention blind window after a restart. PollInterval is
+// pinned to 1h so the main poll loop can't fire, and retentionSweepInterval is
+// 6h, so the only thing that can account for a sweep within the deadline is the
+// startup sweep on the retention goroutine. It fails against the pre-change
+// scheduler (which swept retention only on a 6h ticker) and passes after.
+func TestScheduler_SweepsRetentionOnStartup(t *testing.T) {
+	ret := &fakeRetention{sweptCh: make(chan struct{}, 1)}
+	s := &Scheduler{
+		config:       SchedulerConfig{PollInterval: time.Hour},
+		activeCycles: make(map[uuid.UUID]context.CancelFunc),
+		retention:    ret,
+	}
+
+	s.Start()
+	defer s.Stop()
+
+	select {
+	case <-ret.sweptCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retention did not sweep at startup before the 6h interval elapsed")
+	}
+}
+
 func TestScheduler_CancelCycle_FoundAndUnknown(t *testing.T) {
 	s := newSchedulerForCancelTests()
 

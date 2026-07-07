@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/periodic"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -102,30 +103,18 @@ func (s *StuckCycleSweeper) sweepInterval(ctx context.Context) time.Duration {
 func (s *StuckCycleSweeper) run(ctx context.Context) {
 	defer s.wg.Done()
 
-	// Sweep once at startup so a freshly restarted instance abandons
-	// already-stuck cycles immediately instead of waiting a full interval —
-	// the common crash+restart recovery path.
-	if err := s.Sweep(ctx); err != nil {
-		slog.Warn("dreaming: startup stuck-cycle sweep failed", "err", err)
-	}
-
-	timer := time.NewTimer(s.sweepInterval(ctx))
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			if err := s.Sweep(ctx); err != nil {
+	// periodic.Run sweeps once at startup (so a restart abandons already-stuck
+	// cycles without waiting a full interval) then re-resolves sweepInterval
+	// each tick (so dreaming.stuck_sweep_seconds hot-reloads).
+	periodic.Run(ctx, s.sweepInterval, func(ctx context.Context, startup bool) {
+		if err := s.Sweep(ctx); err != nil {
+			if startup {
+				slog.Warn("dreaming: startup stuck-cycle sweep failed", "err", err)
+			} else {
 				slog.Warn("dreaming: stuck-cycle sweep failed", "err", err)
 			}
-			// Re-resolve each tick so a dreaming.stuck_sweep_seconds change
-			// takes effect without a restart. timer.C is already drained here,
-			// so Reset is safe.
-			timer.Reset(s.sweepInterval(ctx))
 		}
-	}
+	})
 }
 
 // Sweep finds cycles whose status='running' and updated_at is older than the

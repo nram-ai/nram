@@ -9,13 +9,27 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/periodic"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
+// retentionSweepInterval is how often dream-log retention runs. Kept a constant
+// (not a setting) because no dreaming.*_sweep_interval setting exists; the
+// operator-tunable knob is the retention window (dreaming.log_retention_days),
+// not this cadence.
+const retentionSweepInterval = 6 * time.Hour
+
 // ProjectReader looks up project details.
 type ProjectReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Project, error)
+}
+
+// retentionSweeper is the subset of *RetentionSweeper the scheduler drives on
+// its retention loop. Consumer-side interface so tests can substitute a fake
+// without standing up the full sweeper and its repos.
+type retentionSweeper interface {
+	Sweep(ctx context.Context) error
 }
 
 // SchedulerConfig configures the dream scheduler.
@@ -58,7 +72,7 @@ type Scheduler struct {
 	idleCheck IdleChecker
 	runner    *Runner
 	eventBus  events.EventBus
-	retention *RetentionSweeper
+	retention retentionSweeper
 
 	// activeCycles tracks in-flight cycles owned by this instance, keyed by
 	// cycle ID. Used by CancelCycle so an admin Abandon hitting THIS instance
@@ -86,7 +100,7 @@ func NewScheduler(
 	idleCheck IdleChecker,
 	runner *Runner,
 	eventBus events.EventBus,
-	retention *RetentionSweeper,
+	retention retentionSweeper,
 ) *Scheduler {
 	return &Scheduler{
 		config:       config.withDefaults(context.Background(), settings),
@@ -133,12 +147,35 @@ func (s *Scheduler) unregisterCycle(id uuid.UUID) {
 	delete(s.activeCycles, id)
 }
 
-// Start launches the scheduler in a background goroutine.
+// Start launches the scheduler in a background goroutine, plus a second
+// goroutine for the dream-log retention sweep. Retention runs on its own
+// periodic.Run loop (rather than a branch of the poll select) so it sweeps once
+// at startup — a restart reclaims already-expired dream logs immediately
+// instead of waiting up to a full retention interval. Both goroutines share the
+// scheduler's ctx and waitgroup, so Stop tears them both down.
 func (s *Scheduler) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.wg.Add(1)
 	go s.run(ctx)
+
+	// retention is always non-nil in production (NewScheduler wires it); the
+	// guard only covers Schedulers built via struct literal in tests that omit
+	// it and never exercise the retention path.
+	if s.retention != nil {
+		s.wg.Go(func() {
+			periodic.Run(ctx, periodic.Fixed(retentionSweepInterval),
+				func(ctx context.Context, startup bool) {
+					if err := s.retention.Sweep(ctx); err != nil {
+						if startup {
+							slog.Warn("dreaming: startup retention sweep failed", "err", err)
+						} else {
+							slog.Warn("dreaming: retention sweep failed", "err", err)
+						}
+					}
+				})
+		})
+	}
 }
 
 // Stop cancels the scheduler and waits for it to finish. Any cycle that was
@@ -192,19 +229,12 @@ func (s *Scheduler) snapshotActiveCycles() []uuid.UUID {
 func (s *Scheduler) run(ctx context.Context) {
 	defer s.wg.Done()
 
-	retentionTicker := time.NewTicker(6 * time.Hour)
-	defer retentionTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(s.config.PollInterval):
 			s.poll(ctx)
-		case <-retentionTicker.C:
-			if err := s.retention.Sweep(ctx); err != nil {
-				slog.Warn("dreaming: retention sweep failed", "err", err)
-			}
 		}
 	}
 }

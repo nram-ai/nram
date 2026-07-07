@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/periodic"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -181,29 +182,15 @@ func (s *LifecycleService) Stop() {
 	s.wg.Wait()
 }
 
-// loop runs the periodic sweep until the context is cancelled. A
-// time.Ticker preserves the configured period regardless of how long a
-// sweep takes, so the cadence stays at the operator-configured interval
-// instead of drifting longer by the sweep duration each iteration.
-// After every tick we re-resolve the interval and Reset the ticker if
-// the operator changed lifecycle.sweep_interval_seconds via the admin
-// UI, so live edits still take effect on the next tick.
+// loop runs the periodic sweep until the context is cancelled. periodic.Run
+// sweeps once at startup so a restart reclaims already-expired memories without
+// waiting a full interval, then re-resolves resolveSweepInterval each tick so a
+// live edit to lifecycle.sweep_interval_seconds via the admin UI takes effect
+// on the next tick.
 func (s *LifecycleService) loop(ctx context.Context) {
-	interval := s.resolveSweepInterval(ctx)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_, _, _ = s.sweep(ctx)
-			if next := s.resolveSweepInterval(ctx); next != interval {
-				ticker.Reset(next)
-				interval = next
-			}
-		}
-	}
+	periodic.Run(ctx, s.resolveSweepInterval, func(ctx context.Context, _ bool) {
+		_, _, _ = s.sweep(ctx)
+	})
 }
 
 // Sweep runs a single sweep pass. It can be called manually (e.g., from an

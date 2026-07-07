@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/periodic"
 	"github.com/nram-ai/nram/internal/service"
 )
 
@@ -109,30 +110,18 @@ func (s *StuckJobSweeper) sweepInterval(ctx context.Context) time.Duration {
 func (s *StuckJobSweeper) run(ctx context.Context) {
 	defer s.wg.Done()
 
-	// Sweep once at startup so a freshly restarted instance reclaims
-	// already-stale orphans immediately instead of waiting a full interval —
-	// the common crash+restart recovery path.
-	if err := s.Sweep(ctx); err != nil {
-		slog.Warn("enrichment: startup stuck-job sweep failed", "err", err)
-	}
-
-	timer := time.NewTimer(s.sweepInterval(ctx))
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			if err := s.Sweep(ctx); err != nil {
+	// periodic.Run sweeps once at startup (so a restart reclaims already-stale
+	// orphans without waiting a full interval) then re-resolves sweepInterval
+	// each tick (so enrichment.stuck_sweep_seconds hot-reloads).
+	periodic.Run(ctx, s.sweepInterval, func(ctx context.Context, startup bool) {
+		if err := s.Sweep(ctx); err != nil {
+			if startup {
+				slog.Warn("enrichment: startup stuck-job sweep failed", "err", err)
+			} else {
 				slog.Warn("enrichment: stuck-job sweep failed", "err", err)
 			}
-			// Re-resolve each tick so an enrichment.stuck_sweep_seconds change
-			// takes effect without a restart. timer.C is already drained here,
-			// so Reset is safe.
-			timer.Reset(s.sweepInterval(ctx))
 		}
-	}
+	})
 }
 
 // Sweep finds enrichment_queue rows in status='processing' that match
