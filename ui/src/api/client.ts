@@ -872,6 +872,12 @@ export interface ProviderSlot {
   model: string;
   dimensions?: number | null;
   /**
+   * The slot's opt-in configured output dimension (embedding slot only). Null/0
+   * means the model's native size. Distinct from `dimensions`, which is the
+   * probed effective dimension. Drives the editor's optional dimension field.
+   */
+  dimension?: number | null;
+  /**
    * Effective context window in tokens: the actual budget the pipeline
    * can spend. For Ollama slots this is min(model GGUF max, runtime
    * num_ctx); for OpenRouter it equals the model's reported
@@ -928,6 +934,13 @@ export interface UpdateProviderSlotRequest {
   model?: string;
   api_key?: string;
   timeout?: number;
+  /**
+   * Embedding slot opt-in output dimension. Omit or 0 to use the model's native
+   * size (the OpenAI "dimensions" request field is not sent). A positive value
+   * requires a Matryoshka-capable model; sending it to a fixed-dimension server
+   * (SGLang, vLLM, llama-server) makes the embedding call fail.
+   */
+  dimension?: number;
   /**
    * Arbitrary HTTP headers attached to every outbound request to this slot's
    * provider host (for proxies/gateways). The map is the new full set (omitted

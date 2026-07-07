@@ -74,6 +74,13 @@ func isOpenAICompatibleType(t string) bool {
 	}
 }
 
+// IsOpenAICompatibleType reports whether a raw (un-normalized) provider type
+// string routes through the OpenAI-compatible adapter and therefore serves a
+// GET /v1/models list. Exported for the admin store's served-model auto-detection.
+func IsOpenAICompatibleType(t string) bool {
+	return isOpenAICompatibleType(NormalizeProviderType(t))
+}
+
 // thinkingDisabled resolves the per-slot DisableThinking pointer, defaulting to
 // true (thinking off) when unset. The reasoning pass is dead weight on nram's
 // extraction/decision/synthesis calls, so a slot that has never set the toggle
@@ -90,6 +97,12 @@ type SlotConfig struct {
 	APIKey  string `json:"api_key"`
 	Model   string `json:"model"`
 	Timeout int    `json:"timeout"` // seconds, 0 = default
+	// Dimension is the embedding slot's opt-in output dimension. 0 (the default)
+	// means use the model's native size and omit the OpenAI "dimensions" request
+	// field; a positive value is sent verbatim and requires a Matryoshka-capable
+	// model. Applied uniformly to the probe and production embeds so the per-dim
+	// vector table matches what the model returns. Inert for non-embedding slots.
+	Dimension int `json:"dimension,omitempty"`
 	// PromptCacheEnabled marks the system prefix as cacheable on providers that
 	// accept an explicit hint (Anthropic). Sourced from the global
 	// provider.prompt_cache.enabled setting.
@@ -849,6 +862,7 @@ func createEmbeddingProvider(config SlotConfig) (EmbeddingProvider, error) {
 			BaseURL:               config.BaseURL,
 			APIKey:                config.APIKey,
 			DefaultEmbeddingModel: config.Model,
+			EmbeddingDimension:    config.Dimension,
 			Timeout:               slotTimeout(config.Timeout),
 			ProviderType:          ptype,
 			CustomHeaders:         config.CustomHeaders,

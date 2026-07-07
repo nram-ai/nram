@@ -480,6 +480,7 @@ function ProviderSlotEditForm({
   // Tracks an explicit "clear saved key" action. Distinct from a blank field,
   // which means "keep the stored key" (preserve-on-blank).
   const [clearApiKey, setClearApiKey] = useState(false);
+  const isEmbeddingSlot = slotName === "embedding";
   const modelPlaceholder = MODEL_HINTS[form.type]?.[slotName] || "e.g. model-name";
 
   // Validate the Extra Body JSON live so an invalid edit blocks Save with an
@@ -511,6 +512,7 @@ function ProviderSlotEditForm({
       model: "",
       api_key: "",
       timeout: "",
+      dimension: "",
     }));
   };
 
@@ -530,6 +532,17 @@ function ProviderSlotEditForm({
     }
     if (form.timeout) {
       req.timeout = parseInt(form.timeout, 10);
+    }
+    // Opt-in embedding dimension: sent only for the embedding slot and only when
+    // a positive integer is entered; blank/0 omits it so the model's native size
+    // is used and the OpenAI "dimensions" request field is never sent.
+    if (isEmbeddingSlot && form.dimension) {
+      const dim = parseInt(form.dimension, 10);
+      // parseInt yields NaN for non-numeric input, and NaN > 0 is false, so the
+      // single positive check also rejects blank/garbage without a finiteness guard.
+      if (dim > 0) {
+        req.dimension = dim;
+      }
     }
     // Always send the header set so removals take effect. Empty map clears all.
     req.custom_headers = headerRowsToRecord(form.custom_headers);
@@ -709,6 +722,28 @@ function ProviderSlotEditForm({
           </p>
         )}
       </div>
+
+      {/* Embedding dimension (opt-in, embedding slot only) */}
+      {isEmbeddingSlot && (
+        <div>
+          <label className="mb-1 block text-sm font-medium text-foreground">
+            Embedding dimension (optional)
+          </label>
+          <input
+            type="number"
+            value={form.dimension}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, dimension: e.target.value }))
+            }
+            placeholder="native"
+            min={1}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Leave blank to use the model's native size. Set a value only for a model that supports Matryoshka output truncation (e.g. OpenAI text-embedding-3). Fixed-dimension servers such as SGLang, vLLM, and llama-server reject a requested dimension, so a value here makes their embeddings fail. Changing this re-embeds all stored vectors.
+          </p>
+        </div>
+      )}
 
       {/* Custom Headers */}
       <CustomHeadersEditor

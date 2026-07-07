@@ -201,6 +201,9 @@ export interface EditFormState {
   model: string;
   api_key: string;
   timeout: string;
+  // Opt-in embedding output dimension as raw text (blank = model's native size).
+  // Embedding slot only; sent on save only when non-blank.
+  dimension: string;
   // Custom HTTP headers as an ordered, editable list. Pre-existing headers are
   // seeded with a blank value (their stored value is masked); a blank value on
   // save tells the backend to keep the stored one.
@@ -260,6 +263,7 @@ export function initialFormStateForSlot(slot: {
   url?: string;
   model?: string;
   timeout?: number | null;
+  dimension?: number | null;
   custom_header_keys?: string[];
   extra_body?: Record<string, unknown> | null;
   disable_thinking?: boolean | null;
@@ -270,6 +274,7 @@ export function initialFormStateForSlot(slot: {
     model: slot.configured ? (slot.model ?? "") : "",
     api_key: "",
     timeout: slot.timeout != null ? String(slot.timeout) : "",
+    dimension: slot.dimension != null && slot.dimension > 0 ? String(slot.dimension) : "",
     custom_headers: (slot.custom_header_keys ?? []).map((key) => ({ key, value: "" })),
     extra_body:
       slot.extra_body && Object.keys(slot.extra_body).length > 0

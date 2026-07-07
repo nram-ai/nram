@@ -158,6 +158,7 @@ func (s *ProviderAdminStore) slotStatus(ctx context.Context, slot string) api.Pr
 		URL:              persisted.URL,
 		Model:            persisted.Model,
 		Dimensions:       dimensions,
+		Dimension:        persisted.Dimension,
 		ContextWindow:    contextWindow,
 		ContextWindowMax: contextWindowMax,
 		Timeout:          persisted.Timeout,
@@ -285,6 +286,9 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 	if req.Config.Timeout != nil {
 		slotCfg.Timeout = *req.Config.Timeout
 	}
+	if req.Config.Dimension != nil {
+		slotCfg.Dimension = *req.Config.Dimension
+	}
 
 	// The reranker slot is neither an embedding nor an LLM provider: it is tested
 	// by probing the rerank endpoint, which also auto-detects whether the server
@@ -371,11 +375,23 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	// persistence paths see the merged values.
 	cfg = mergeProviderSecrets(cfg, existing, opts)
 
-	// An embedding-model change routes through the destructive cascade.
-	// Same-model edits (URL, key, timeout) bypass it.
-	if slot == provider.SlotEmbedding && existing != nil {
+	// Auto-detect the served model id for OpenAI-compatible endpoints so an
+	// operator never has to hand-type a --served-model-name (e.g. a filesystem
+	// path). Runs before the cascade comparison so a detected id feeds the
+	// model-change check. It only fills a blank/unserved model on a single-model
+	// endpoint and never rewrites a working multi-model config (see the helper).
+	if provider.IsOpenAICompatibleType(cfg.Type) {
+		s.autodetectServedModel(ctx, &cfg)
+	}
+
+	// An embedding-model or dimension change routes through the destructive
+	// cascade (vectors are keyed per model+dimension). Same-model, same-dimension
+	// edits (URL, key, timeout, headers) bypass it.
+	if slot == provider.SlotEmbedding && existing != nil && existing.Model != "" {
 		oldModel := existing.Model
-		if oldModel != "" && cfg.Model != "" && cfg.Model != oldModel {
+		modelChanged := cfg.Model != "" && cfg.Model != oldModel
+		dimChanged := embeddingDimValue(existing.Dimension) != embeddingDimValue(cfg.Dimension)
+		if modelChanged || dimChanged {
 			return s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
 		}
 	}
@@ -398,6 +414,35 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 		return nil, err
 	}
 	return nil, nil
+}
+
+// embeddingDimValue resolves a slot's optional opt-in dimension pointer to a
+// concrete value, treating nil (unset) and 0 as identical "native dimension".
+func embeddingDimValue(d *int) int {
+	if d == nil {
+		return 0
+	}
+	return *d
+}
+
+// autodetectServedModel fills cfg.Model from the endpoint's GET /v1/models list
+// for OpenAI-compatible slots, so operators don't hand-type a served-model id.
+// It only acts when the endpoint reports exactly one served model and the
+// configured Model is blank or not that id; a multi-model endpoint (cloud OpenAI,
+// a multi-model Ollama/vLLM host) or an unreachable endpoint leaves cfg.Model
+// untouched, so a working configuration is never clobbered.
+func (s *ProviderAdminStore) autodetectServedModel(ctx context.Context, cfg *api.ProviderSlotConfig) {
+	ids, err := provider.ListOpenAIModels(ctx, cfg.URL, cfg.APIKey, cfg.CustomHeaders)
+	if err != nil || len(ids) != 1 {
+		return
+	}
+	served := ids[0]
+	if served == "" || cfg.Model == served {
+		return
+	}
+	slog.InfoContext(ctx, "provider slot: auto-detected served model",
+		"url", cfg.URL, "was", cfg.Model, "detected", served)
+	cfg.Model = served
 }
 
 // mergeProviderSecrets reconciles client-supplied secrets with the currently
@@ -612,6 +657,9 @@ func LoadProviderRegistryConfig(ctx context.Context, settingsRepo *storage.Setti
 		}
 		if apiCfg.Timeout != nil {
 			sc.Timeout = *apiCfg.Timeout
+		}
+		if apiCfg.Dimension != nil {
+			sc.Dimension = *apiCfg.Dimension
 		}
 		cfg.SetSlotConfig(def.Name, sc)
 	}

@@ -83,11 +83,15 @@ type ProviderSlotStatus struct {
 	Description string `json:"description"`
 	Required    bool   `json:"required"`
 
-	Configured       bool   `json:"configured"`
-	Type             string `json:"type,omitempty"`
-	URL              string `json:"url,omitempty"`
-	Model            string `json:"model,omitempty"`
-	Dimensions       *int   `json:"dimensions,omitempty"`
+	Configured bool   `json:"configured"`
+	Type       string `json:"type,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Dimensions *int   `json:"dimensions,omitempty"`
+	// Dimension echoes the slot's opt-in configured output dimension (nil/0 =
+	// native), so the editor can prefill the field. Distinct from Dimensions,
+	// which is the probed effective dimension.
+	Dimension        *int   `json:"dimension,omitempty"`
 	ContextWindow    *int   `json:"context_window,omitempty"`
 	ContextWindowMax *int   `json:"context_window_max,omitempty"`
 	Timeout          *int   `json:"timeout,omitempty"`
@@ -124,15 +128,23 @@ type ProviderTestRequest struct {
 }
 
 // ProviderSlotConfig is the desired configuration for a provider slot.
-// Dimensions is intentionally absent; it's discovered by Registry.EmbeddingDim,
-// not user-configurable (a mismatched dim sends vectors to the wrong
-// per-dim table and recall silently breaks).
+// Dimension defaults to 0 = "use the model's native size" (discovered by
+// Registry.EmbeddingDim); a positive value is an opt-in output dimension for a
+// Matryoshka-capable embedding model. It is applied uniformly to the probe and to
+// production embeds, so the measured dimension always matches what production
+// writes and vectors never land in the wrong per-dim table.
 type ProviderSlotConfig struct {
 	Type    string `json:"type"`
 	URL     string `json:"url"`
 	APIKey  string `json:"api_key,omitempty"`
 	Model   string `json:"model"`
 	Timeout *int   `json:"timeout,omitempty"` // seconds, 0 = default (300s)
+	// Dimension is the embedding slot's opt-in output dimension. 0/omitted means
+	// the model's native size (the OpenAI "dimensions" request field is not sent).
+	// A positive value requires a Matryoshka-capable model; sending it to a
+	// fixed-dimension server (e.g. SGLang, vLLM) 400s the request. Embedding slot
+	// only; inert elsewhere.
+	Dimension *int `json:"dimension,omitempty"`
 	// CustomHeaders are arbitrary HTTP headers attached to every outbound
 	// request to this slot's provider host (inference, embeddings, health
 	// pings, and the Ollama/OpenRouter auxiliary calls). Intended for proxies

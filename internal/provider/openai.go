@@ -24,6 +24,17 @@ type OpenAIConfig struct {
 	// DefaultEmbeddingModel is the default model to use for embeddings when none is specified.
 	DefaultEmbeddingModel string
 
+	// EmbeddingDimension, when > 0, is the output dimension nram requests via the
+	// OpenAI "dimensions" body field on every embedding call (probe and production
+	// alike). Leave it 0 for the model's native size: most self-hosted embedding
+	// servers (SGLang, vLLM, llama-server, TEI) serve a single fixed-dimension model
+	// and reject the "dimensions" field outright, so sending it 400s the request.
+	// Set it only for a model that genuinely supports Matryoshka output truncation
+	// (e.g. OpenAI text-embedding-3). Because it is applied uniformly, the startup
+	// probe measures the same dimension production produces, so the per-dim vector
+	// table stays consistent.
+	EmbeddingDimension int
+
 	// Organization is an optional organization identifier sent via the OpenAI-Organization header.
 	Organization string
 
@@ -324,8 +335,14 @@ func (p *OpenAIProvider) Embed(ctx context.Context, req *EmbeddingRequest) (*Emb
 		Input: req.Input,
 		Model: model,
 	}
-	if req.Dimension > 0 {
-		body.Dimensions = req.Dimension
+	// The "dimensions" field is sent only when the slot explicitly opts in via
+	// EmbeddingDimension (a Matryoshka-capable model). req.Dimension is ignored on
+	// purpose: it was historically derived from the hardcoded Dimensions() list and
+	// forwarded a value (e.g. 3072) that fixed-dimension servers reject. Omitting the
+	// field yields the model's native output, which is the correct and only value
+	// such servers accept.
+	if p.config.EmbeddingDimension > 0 {
+		body.Dimensions = p.config.EmbeddingDimension
 	}
 
 	var embResp openaiEmbeddingResponse

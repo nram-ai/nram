@@ -185,6 +185,70 @@ func TestOpenAIEmbed(t *testing.T) {
 	}
 }
 
+// TestOpenAIEmbedDimensionsGate verifies that the OpenAI "dimensions" body field
+// is emitted only when the slot opts in via OpenAIConfig.EmbeddingDimension, and
+// never from EmbeddingRequest.Dimension. Fixed-dimension servers (SGLang, vLLM)
+// reject the field outright, so the default must omit it and yield the native
+// output size.
+func TestOpenAIEmbedDimensionsGate(t *testing.T) {
+	cases := []struct {
+		name      string
+		configDim int
+		reqDim    int
+		wantField bool
+		wantValue int
+	}{
+		{name: "default omits field", configDim: 0, reqDim: 0, wantField: false},
+		{name: "req dimension is ignored", configDim: 0, reqDim: 3072, wantField: false},
+		{name: "opt-in sends configured value", configDim: 512, reqDim: 0, wantField: true, wantValue: 512},
+		{name: "opt-in wins over req", configDim: 768, reqDim: 3072, wantField: true, wantValue: 768},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var rawBody map[string]json.RawMessage
+			srv := newTestServer(t, map[string]http.HandlerFunc{
+				"POST /v1/embeddings": func(w http.ResponseWriter, r *http.Request) {
+					_ = json.NewDecoder(r.Body).Decode(&rawBody)
+					resp := openaiEmbeddingResponse{
+						Object: "list",
+						Data:   []openaiEmbeddingData{{Object: "embedding", Embedding: []float32{0.1, 0.2}, Index: 0}},
+						Model:  "m",
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(resp)
+				},
+			})
+			defer srv.Close()
+
+			p := NewOpenAIProvider(OpenAIConfig{
+				BaseURL:               srv.URL,
+				DefaultEmbeddingModel: "m",
+				EmbeddingDimension:    tc.configDim,
+			})
+			if _, err := p.Embed(context.Background(), &EmbeddingRequest{
+				Input:     []string{"hello"},
+				Dimension: tc.reqDim,
+			}); err != nil {
+				t.Fatalf("Embed() error: %v", err)
+			}
+
+			raw, present := rawBody["dimensions"]
+			if present != tc.wantField {
+				t.Fatalf("dimensions field present = %v, want %v (body=%v)", present, tc.wantField, rawBody)
+			}
+			if tc.wantField {
+				var got int
+				if err := json.Unmarshal(raw, &got); err != nil {
+					t.Fatalf("decode dimensions: %v", err)
+				}
+				if got != tc.wantValue {
+					t.Errorf("dimensions = %d, want %d", got, tc.wantValue)
+				}
+			}
+		})
+	}
+}
+
 // TestOpenAIEmbedBaseURLWithVersionSuffix is a regression test for base-URL
 // double-stacking: a BaseURL that already ends in "/v1" must not produce a
 // "/v1/v1/embeddings" request. The constructor normalizes the version segment

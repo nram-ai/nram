@@ -149,6 +149,54 @@ func TestListProviderModels(t *testing.T) {
 	}
 }
 
+func TestAutodetectServedModel(t *testing.T) {
+	store := NewProviderAdminStore(ProviderAdminDeps{})
+
+	t.Run("single model fills blank", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"/srv/Qwen3-Embedding-0.6B"}, nil, nil)
+		cfg := &api.ProviderSlotConfig{Type: "sglang", URL: srv.URL, Model: ""}
+		store.autodetectServedModel(context.Background(), cfg)
+		if cfg.Model != "/srv/Qwen3-Embedding-0.6B" {
+			t.Errorf("Model = %q, want the served id", cfg.Model)
+		}
+	})
+
+	t.Run("single model replaces mismatch", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"/srv/Qwen3-Embedding-0.6B"}, nil, nil)
+		cfg := &api.ProviderSlotConfig{Type: "sglang", URL: srv.URL, Model: "qwen3-embedding:0.6b"}
+		store.autodetectServedModel(context.Background(), cfg)
+		if cfg.Model != "/srv/Qwen3-Embedding-0.6B" {
+			t.Errorf("Model = %q, want the served id (stale Ollama tag should be replaced)", cfg.Model)
+		}
+	})
+
+	t.Run("single model leaves matching value", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"Qwen/Qwen3-8B"}, nil, nil)
+		cfg := &api.ProviderSlotConfig{Type: "vllm", URL: srv.URL, Model: "Qwen/Qwen3-8B"}
+		store.autodetectServedModel(context.Background(), cfg)
+		if cfg.Model != "Qwen/Qwen3-8B" {
+			t.Errorf("Model = %q, want unchanged", cfg.Model)
+		}
+	})
+
+	t.Run("multi model never clobbers", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"gpt-4o", "gpt-4o-mini", "text-embedding-3-small"}, nil, nil)
+		cfg := &api.ProviderSlotConfig{Type: "openai", URL: srv.URL, Model: "custom-choice"}
+		store.autodetectServedModel(context.Background(), cfg)
+		if cfg.Model != "custom-choice" {
+			t.Errorf("Model = %q, want unchanged on a multi-model endpoint", cfg.Model)
+		}
+	})
+
+	t.Run("unreachable endpoint leaves model", func(t *testing.T) {
+		cfg := &api.ProviderSlotConfig{Type: "sglang", URL: "http://127.0.0.1:1", Model: "keep-me"}
+		store.autodetectServedModel(context.Background(), cfg)
+		if cfg.Model != "keep-me" {
+			t.Errorf("Model = %q, want unchanged when detection fails", cfg.Model)
+		}
+	})
+}
+
 func TestListProviderModelsCredentialFallback(t *testing.T) {
 	var gotAuth, gotProxy string
 	srv := newOpenAIModelsServer(t, []string{"Qwen/Qwen3-8B"}, &gotAuth, &gotProxy)
