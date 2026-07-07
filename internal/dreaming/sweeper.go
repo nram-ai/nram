@@ -69,8 +69,10 @@ func NewStuckCycleSweeper(
 // Start launches the sweeper loop in a background goroutine. Independent of
 // the dream Scheduler's lifecycle so a long-running cycle on this instance
 // (which blocks the scheduler's main loop) can't also block the sweeper
-// that's supposed to detect and recover from it. The sweep interval is read
-// once at start; changing it requires a server restart.
+// that's supposed to detect and recover from it. A sweep runs immediately at
+// startup so a restart abandons already-stuck cycles without waiting a full
+// interval; the sweep interval is re-read every tick, so it can be changed
+// without a restart.
 func (s *StuckCycleSweeper) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -86,24 +88,42 @@ func (s *StuckCycleSweeper) Stop() {
 	s.wg.Wait()
 }
 
-func (s *StuckCycleSweeper) run(ctx context.Context) {
-	defer s.wg.Done()
-
+// sweepInterval resolves dreaming.stuck_sweep_seconds live, clamping a
+// non-positive (or unset) value to the 300s default. Read every tick so an
+// interval change hot-reloads without a restart.
+func (s *StuckCycleSweeper) sweepInterval(ctx context.Context) time.Duration {
 	intervalSecs, _ := s.settings.ResolveInt(ctx, service.SettingDreamStuckSweep, "global")
 	if intervalSecs <= 0 {
 		intervalSecs = 300
 	}
-	ticker := time.NewTicker(time.Duration(intervalSecs) * time.Second)
-	defer ticker.Stop()
+	return time.Duration(intervalSecs) * time.Second
+}
+
+func (s *StuckCycleSweeper) run(ctx context.Context) {
+	defer s.wg.Done()
+
+	// Sweep once at startup so a freshly restarted instance abandons
+	// already-stuck cycles immediately instead of waiting a full interval —
+	// the common crash+restart recovery path.
+	if err := s.Sweep(ctx); err != nil {
+		slog.Warn("dreaming: startup stuck-cycle sweep failed", "err", err)
+	}
+
+	timer := time.NewTimer(s.sweepInterval(ctx))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := s.Sweep(ctx); err != nil {
 				slog.Warn("dreaming: stuck-cycle sweep failed", "err", err)
 			}
+			// Re-resolve each tick so a dreaming.stuck_sweep_seconds change
+			// takes effect without a restart. timer.C is already drained here,
+			// so Reset is safe.
+			timer.Reset(s.sweepInterval(ctx))
 		}
 	}
 }

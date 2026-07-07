@@ -56,10 +56,14 @@ func (f *fakeSweeperSettings) ResolveIntWithDefault(_ context.Context, key, _ st
 
 // fakeStuckJobStore captures sweep activity so tests can assert on it.
 type fakeStuckJobStore struct {
-	mu              sync.Mutex
-	stale           []*model.EnrichmentJob
-	requeued        []uuid.UUID
-	requeueReasons  map[uuid.UUID]string
+	mu             sync.Mutex
+	stale          []*model.EnrichmentJob
+	requeued       []uuid.UUID
+	requeueReasons map[uuid.UUID]string
+	// requeuedCh, when non-nil, receives each successfully requeued id so a
+	// test can block on the requeue instead of sleep-polling. Buffered by the
+	// test; the send is non-blocking so it never stalls the sweeper.
+	requeuedCh      chan uuid.UUID
 	requeueErr      error
 	requeueOK       bool // when false, RequeueStale returns (false, nil), race path
 	listErr         error
@@ -101,6 +105,12 @@ func (s *fakeStuckJobStore) RequeueStale(_ context.Context, id uuid.UUID, reason
 		s.requeueReasons = make(map[uuid.UUID]string)
 	}
 	s.requeueReasons[id] = reason
+	if s.requeuedCh != nil {
+		select {
+		case s.requeuedCh <- id:
+		default:
+		}
+	}
 	return true, nil
 }
 
@@ -458,6 +468,62 @@ func TestStuckJobSweeper_RetentionDisabled(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.deleteFailedCalls != 0 {
 		t.Fatalf("DeleteFailedBefore calls = %d, want 0 when retention disabled", store.deleteFailedCalls)
+	}
+}
+
+// TestStuckJobSweeper_SweepsOnStartup drives the real run() goroutine through
+// Start() and asserts a reclaim happens before the first timer interval could
+// fire. The sweep interval is pinned to 1h so only the startup sweep can
+// account for the requeue — this is the exact behavior the incident lacked
+// (a restart that did not immediately reclaim already-stale orphans).
+func TestStuckJobSweeper_SweepsOnStartup(t *testing.T) {
+	id := uuid.New()
+	store := &fakeStuckJobStore{
+		stale:      []*model.EnrichmentJob{stuckJob(id, "worker-0", 35*time.Minute)},
+		requeueOK:  true,
+		requeuedCh: make(chan uuid.UUID, 1),
+	}
+	settings := &fakeSweeperSettings{
+		stuckThreshold: 30 * time.Minute,
+		sweepInterval:  time.Hour, // only the startup sweep can fire within the test window
+	}
+	sweeper := NewStuckJobSweeper(store, settings, events.NewMemoryBus(8, 8))
+
+	sweeper.Start()
+	defer sweeper.Stop()
+
+	select {
+	case got := <-store.requeuedCh:
+		if got != id {
+			t.Fatalf("startup sweep requeued %s, want %s", got, id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup sweep did not requeue the stale job before the first interval elapsed")
+	}
+}
+
+// TestStuckJobSweeper_SweepIntervalHotReload proves the interval is re-resolved
+// live: mutating the setting between calls to sweepInterval changes the
+// returned value, so a settings change takes effect without a restart. Also
+// covers the sub-second clamp to the 5m default.
+func TestStuckJobSweeper_SweepIntervalHotReload(t *testing.T) {
+	settings := &fakeSweeperSettings{sweepInterval: 5 * time.Minute}
+	sweeper := NewStuckJobSweeper(&fakeStuckJobStore{}, settings, events.NewMemoryBus(8, 8))
+	ctx := context.Background()
+
+	if got := sweeper.sweepInterval(ctx); got != 5*time.Minute {
+		t.Fatalf("initial interval = %s, want 5m", got)
+	}
+
+	settings.sweepInterval = 42 * time.Second
+	if got := sweeper.sweepInterval(ctx); got != 42*time.Second {
+		t.Fatalf("interval after change = %s, want 42s (interval not re-resolved live)", got)
+	}
+
+	// A sub-second (or unset) value clamps to the 5m default.
+	settings.sweepInterval = 500 * time.Millisecond
+	if got := sweeper.sweepInterval(ctx); got != 5*time.Minute {
+		t.Fatalf("sub-second interval = %s, want clamp to 5m default", got)
 	}
 }
 

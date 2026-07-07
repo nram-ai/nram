@@ -74,8 +74,9 @@ func NewStuckJobSweeper(
 // Start launches the sweeper loop in a background goroutine. Independent of
 // the WorkerPool's lifecycle so a wedged pool (which is exactly the failure
 // mode this sweeper recovers from) can't also block the recovery path.
-// The sweep interval is read once at start; changing it requires a server
-// restart. The threshold is read every sweep tick so it hot-reloads.
+// A sweep runs immediately at startup so a restart reclaims already-stale
+// orphans without waiting a full interval. Both the sweep interval and the
+// threshold are re-read every tick, so either can be changed without a restart.
 func (s *StuckJobSweeper) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -93,25 +94,43 @@ func (s *StuckJobSweeper) Stop() {
 	s.wg.Wait()
 }
 
-func (s *StuckJobSweeper) run(ctx context.Context) {
-	defer s.wg.Done()
-
+// sweepInterval resolves enrichment.stuck_sweep_seconds live, clamping a
+// sub-second (or unset) value to the 5m default. Read every tick so an
+// interval change hot-reloads without a restart.
+func (s *StuckJobSweeper) sweepInterval(ctx context.Context) time.Duration {
 	interval := s.settings.ResolveDurationSecondsWithDefault(ctx,
 		service.SettingEnrichmentStuckSweep, "global")
 	if interval < time.Second {
 		interval = 5 * time.Minute
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	return interval
+}
+
+func (s *StuckJobSweeper) run(ctx context.Context) {
+	defer s.wg.Done()
+
+	// Sweep once at startup so a freshly restarted instance reclaims
+	// already-stale orphans immediately instead of waiting a full interval —
+	// the common crash+restart recovery path.
+	if err := s.Sweep(ctx); err != nil {
+		slog.Warn("enrichment: startup stuck-job sweep failed", "err", err)
+	}
+
+	timer := time.NewTimer(s.sweepInterval(ctx))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := s.Sweep(ctx); err != nil {
 				slog.Warn("enrichment: stuck-job sweep failed", "err", err)
 			}
+			// Re-resolve each tick so an enrichment.stuck_sweep_seconds change
+			// takes effect without a restart. timer.C is already drained here,
+			// so Reset is safe.
+			timer.Reset(s.sweepInterval(ctx))
 		}
 	}
 }
