@@ -1,12 +1,54 @@
 package dreaming
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/storage/hnsw"
 )
+
+// noopAliasWriter satisfies EntityAliasWriter for merge tests.
+type noopAliasWriter struct{}
+
+func (noopAliasWriter) Create(_ context.Context, _ *model.EntityAlias) error { return nil }
+
+// TestMergeEntities_DeletesAbsorbedCandidate verifies the merge deletes the
+// absorbed candidate inline (via DeleteByIDs) rather than leaving it as a
+// zero-edge orphan, and folds its mention count into the primary.
+func TestMergeEntities_DeletesAbsorbedCandidate(t *testing.T) {
+	ctx := context.Background()
+	ns := uuid.New()
+
+	w := &recordingEntityWriter{}
+	p := &EntityDedupPhase{
+		entityWriter:  w,
+		aliases:       noopAliasWriter{},
+		relationships: &fakeRelationshipReader{},
+		relWriter:     noopRelWriter{},
+	}
+	logger := NewDreamLogWriter(nil, uuid.New(), uuid.UUID{})
+
+	primary := &model.Entity{ID: uuid.New(), NamespaceID: ns, Name: "Primary", MentionCount: 3}
+	candidate := &model.Entity{ID: uuid.New(), NamespaceID: ns, Name: "Candidate", MentionCount: 2}
+
+	if len(w.deleted) != 0 {
+		t.Fatalf("precondition: no deletes expected before merge, got %v", w.deleted)
+	}
+
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: ns}
+	if err := p.mergeEntities(ctx, cycle, primary, candidate, logger); err != nil {
+		t.Fatalf("mergeEntities: %v", err)
+	}
+
+	if len(w.deleted) != 1 || w.deleted[0] != candidate.ID {
+		t.Fatalf("expected absorbed candidate %s deleted inline, got %v", candidate.ID, w.deleted)
+	}
+	if primary.MentionCount != 5 {
+		t.Fatalf("primary mention count = %d, want 5 (3+2)", primary.MentionCount)
+	}
+}
 
 // TestShouldMerge_VectorSimilarityFallback exercises the A3 dedup change: when
 // canonical text matching cannot tie two entities together, the vector

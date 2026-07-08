@@ -142,6 +142,9 @@ func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid
 	case model.DreamOpEntityMerged:
 		return s.reverseEntityMerge(ctx, namespaceID, entry)
 
+	case model.DreamOpEntityDeleted:
+		return s.reverseEntityDelete(ctx, entry)
+
 	case model.DreamOpEntityUpdated:
 		return s.reverseEntityUpdate(ctx, namespaceID, entry)
 
@@ -158,14 +161,9 @@ func (s *RollbackService) reverseOperation(ctx context.Context, namespaceID uuid
 // reverseEntityMerge restores a consumed entity from its before_state snapshot.
 // before_state = the consumed entity, after_state = the primary entity.
 func (s *RollbackService) reverseEntityMerge(ctx context.Context, namespaceID uuid.UUID, entry *model.DreamLog) error {
-	var consumed model.Entity
-	if err := json.Unmarshal(entry.BeforeState, &consumed); err != nil {
-		return fmt.Errorf("unmarshal consumed entity: %w", err)
-	}
-
-	consumed.UpdatedAt = time.Now().UTC()
-	if err := s.entityWriter.Upsert(ctx, &consumed); err != nil {
-		return fmt.Errorf("restore consumed entity: %w", err)
+	consumed, err := s.restoreEntitySnapshot(ctx, entry.BeforeState)
+	if err != nil {
+		return err
 	}
 
 	// Restore the primary entity's mention count by subtracting the consumed count.
@@ -186,6 +184,32 @@ func (s *RollbackService) reverseEntityMerge(ctx context.Context, namespaceID uu
 	}
 	currentPrimary.UpdatedAt = time.Now().UTC()
 	return s.entityWriter.Upsert(ctx, currentPrimary)
+}
+
+// reverseEntityDelete restores a hard-deleted entity from its before_state
+// snapshot. Both the entity-dedup merge (absorbed candidate) and the hygiene
+// sweep (degenerate names) log DreamOpEntityDeleted with before = the full
+// entity, so the shared snapshot restore covers both. Idempotent: on a merge
+// rollback the EntityMerged reversal also re-Upserts the same entity.
+func (s *RollbackService) reverseEntityDelete(ctx context.Context, entry *model.DreamLog) error {
+	_, err := s.restoreEntitySnapshot(ctx, entry.BeforeState)
+	return err
+}
+
+// restoreEntitySnapshot re-creates an entity from a full before_state snapshot,
+// stamping UpdatedAt, and returns the decoded entity so callers can read its
+// pre-change fields. Shared by reverseEntityDelete and reverseEntityMerge's
+// consumed-entity restore.
+func (s *RollbackService) restoreEntitySnapshot(ctx context.Context, beforeState json.RawMessage) (*model.Entity, error) {
+	var entity model.Entity
+	if err := json.Unmarshal(beforeState, &entity); err != nil {
+		return nil, fmt.Errorf("unmarshal entity snapshot: %w", err)
+	}
+	entity.UpdatedAt = time.Now().UTC()
+	if err := s.entityWriter.Upsert(ctx, &entity); err != nil {
+		return nil, fmt.Errorf("restore entity snapshot: %w", err)
+	}
+	return &entity, nil
 }
 
 // parseRelationshipBeforeWeight extracts the pre-cycle weight from a

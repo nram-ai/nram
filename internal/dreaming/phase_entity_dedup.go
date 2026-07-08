@@ -477,6 +477,20 @@ func (p *EntityDedupPhase) mergeEntities(
 		}
 	}
 
+	// Delete the now zero-edge candidate inline (DeleteByIDs cascades its
+	// vector/rels/aliases) so merge cleanup is self-contained rather than left
+	// for the lifecycle sweep. Best-effort and ordered last: a delete failure
+	// cannot un-commit the merge; we warn and leave the orphan for the sweep.
+	if _, err := p.entityWriter.DeleteByIDs(ctx, []uuid.UUID{candidate.ID}); err != nil {
+		slog.Warn("dreaming: delete absorbed candidate failed",
+			"candidate", candidate.ID, "primary", primary.ID, "err", err)
+		return nil
+	}
+	if err := logger.LogOperation(ctx, model.DreamPhaseEntityDedup, "",
+		model.DreamOpEntityDeleted, "entity", candidate.ID, candidate, nil); err != nil {
+		slog.Warn("dreaming: log absorbed candidate delete failed", "err", err)
+	}
+
 	return nil
 }
 

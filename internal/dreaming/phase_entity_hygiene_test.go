@@ -11,12 +11,17 @@ import (
 )
 
 // recordingEntityWriter satisfies EntityWriter and records the IDs passed to
-// DeleteByIDs so the hygiene sweep's behavior can be asserted.
+// DeleteByIDs and the entities passed to Upsert so callers can assert the
+// hygiene sweep's deletes, a merge's inline delete, or a rollback's restore.
 type recordingEntityWriter struct {
-	deleted []uuid.UUID
+	deleted  []uuid.UUID
+	upserted []*model.Entity
 }
 
-func (w *recordingEntityWriter) Upsert(_ context.Context, _ *model.Entity) error { return nil }
+func (w *recordingEntityWriter) Upsert(_ context.Context, e *model.Entity) error {
+	w.upserted = append(w.upserted, e)
+	return nil
+}
 func (w *recordingEntityWriter) DeleteByIDs(_ context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
 	w.deleted = append(w.deleted, ids...)
 	return ids, nil
