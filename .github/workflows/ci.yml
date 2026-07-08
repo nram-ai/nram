@@ -32,6 +32,25 @@ jobs:
         with:
           version: v2.12.2
 
+  # Reachability-aware Go vulnerability scan. govulncheck reports only
+  # advisories whose vulnerable symbols are actually called, so it distinguishes
+  # a real exposure from a flagged-but-unreachable dependency (e.g. an
+  # x/crypto/ssh advisory when only x/crypto/argon2 is imported). Non-blocking
+  # for now (continue-on-error) so it surfaces a report without gating merges;
+  # promote to blocking once it is confirmed consistently green.
+  govulncheck:
+    name: Go vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # Cross-platform build + test of the OS-portable surface (no external
   # services). Proves the Go code compiles and the SQLite/HNSW/unit paths (plus
   # the embedded-postgres migration test, which supports Linux/macOS/Windows)
