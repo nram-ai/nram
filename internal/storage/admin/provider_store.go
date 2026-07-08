@@ -380,8 +380,22 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	// path). Runs before the cascade comparison so a detected id feeds the
 	// model-change check. It only fills a blank/unserved model on a single-model
 	// endpoint and never rewrites a working multi-model config (see the helper).
+	// The returned list feeds the save-time model validation below without a
+	// second round-trip.
+	var servedIDs []string
 	if provider.IsOpenAICompatibleType(cfg.Type) {
-		s.autodetectServedModel(ctx, &cfg)
+		servedIDs = s.autodetectServedModel(ctx, &cfg)
+	}
+
+	// Validate the (possibly auto-detected) model against the host's served list.
+	// A reachable host that does not serve the configured id yields a non-fatal
+	// warning the caller passes through so the operator catches a typo/un-pulled
+	// model now, not later inside enrichment/embedding. The reranker slot is
+	// exempt: its /v1/rerank server need not list a model at /v1/models and it has
+	// its own ProbeRerankMethod. An unreachable host produces no warning.
+	var warning string
+	if slot != provider.SlotReranker {
+		warning = validateConfiguredModel(cfg, servedIDs)
 	}
 
 	// An embedding-model or dimension change routes through the destructive
@@ -392,7 +406,15 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 		modelChanged := cfg.Model != "" && cfg.Model != oldModel
 		dimChanged := embeddingDimValue(existing.Dimension) != embeddingDimValue(cfg.Dimension)
 		if modelChanged || dimChanged {
-			return s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
+			res, err := s.switchEmbeddingModel(ctx, oldModel, cfg, opts)
+			// Only stamp the warning on a genuinely-persisted result. The
+			// needs-confirmation payload (409) has saved nothing yet, so a
+			// "saved anyway" warning would be false there; it rides the confirmed
+			// cascade result instead, which is the one the console renders.
+			if err == nil && res != nil && !res.NeedsConfirmation && warning != "" {
+				res.Warning = warning
+			}
+			return res, err
 		}
 	}
 
@@ -413,6 +435,9 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 	if err := s.persistAndReload(ctx, slot, cfg); err != nil {
 		return nil, err
 	}
+	if warning != "" {
+		return &api.UpdateProviderSlotResult{Warning: warning}, nil
+	}
 	return nil, nil
 }
 
@@ -431,18 +456,63 @@ func embeddingDimValue(d *int) int {
 // configured Model is blank or not that id; a multi-model endpoint (cloud OpenAI,
 // a multi-model Ollama/vLLM host) or an unreachable endpoint leaves cfg.Model
 // untouched, so a working configuration is never clobbered.
-func (s *ProviderAdminStore) autodetectServedModel(ctx context.Context, cfg *api.ProviderSlotConfig) {
+//
+// It returns the full served-model id list it fetched (nil on a probe error) so
+// the caller can validate a typed model against the same list without a second
+// round-trip. A returned nil means "could not enumerate" (unreachable/erroring
+// host), which callers treat as "cannot validate".
+func (s *ProviderAdminStore) autodetectServedModel(ctx context.Context, cfg *api.ProviderSlotConfig) []string {
 	ids, err := provider.ListOpenAIModels(ctx, cfg.URL, cfg.APIKey, cfg.CustomHeaders)
-	if err != nil || len(ids) != 1 {
-		return
+	if err != nil {
+		return nil
 	}
-	served := ids[0]
-	if served == "" || cfg.Model == served {
-		return
+	if len(ids) == 1 && ids[0] != "" && cfg.Model != ids[0] {
+		slog.InfoContext(ctx, "provider slot: auto-detected served model",
+			"url", cfg.URL, "was", cfg.Model, "detected", ids[0])
+		cfg.Model = ids[0]
 	}
-	slog.InfoContext(ctx, "provider slot: auto-detected served model",
-		"url", cfg.URL, "was", cfg.Model, "detected", served)
-	cfg.Model = served
+	return ids
+}
+
+// validateConfiguredModel returns a non-fatal warning when the configured model
+// id is not among the host's served-model list, so a typo or an un-pulled model
+// is caught at save time instead of failing far later inside enrichment/embedding.
+// It returns "" (no warning) when there is nothing to check: a blank model, or an
+// empty served list (an unreachable/non-enumerable host, which cannot be validated
+// against — mirroring the auto-detect and reranker-probe degrade-gracefully posture
+// so a configure-before-the-server-is-up flow is never blocked).
+//
+// Comparison normalizes an implicit Ollama tag: a colon-less id is treated as
+// "<id>:latest" on both sides, so a typed "qwen3" matches a served "qwen3:latest".
+// This is inert for OpenAI-style ids (no colon), which compare equal either way.
+func validateConfiguredModel(cfg api.ProviderSlotConfig, servedIDs []string) string {
+	if cfg.Model == "" || len(servedIDs) == 0 {
+		return ""
+	}
+	want := normalizeModelTag(cfg.Model)
+	for _, id := range servedIDs {
+		if normalizeModelTag(id) == want {
+			return ""
+		}
+	}
+	const sampleCap = 5
+	sample := servedIDs
+	suffix := ""
+	if len(sample) > sampleCap {
+		sample = sample[:sampleCap]
+		suffix = ", …"
+	}
+	return fmt.Sprintf("model %q is not served by %s (available: %s%s); the slot was saved anyway",
+		cfg.Model, cfg.URL, strings.Join(sample, ", "), suffix)
+}
+
+// normalizeModelTag appends the implicit ":latest" tag to a colon-less model id so
+// Ollama's tagless form compares equal to the server's explicit ":latest" listing.
+func normalizeModelTag(id string) string {
+	if strings.Contains(id, ":") {
+		return id
+	}
+	return id + ":latest"
 }
 
 // mergeProviderSecrets reconciles client-supplied secrets with the currently

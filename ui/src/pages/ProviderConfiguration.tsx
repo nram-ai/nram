@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, type ReactNode } from "react";
 import { useProviderSlots, useTestProviderSlot } from "../hooks/useApi";
 import SectionTabs, { type SectionTabTone } from "../components/SectionTabs";
 import { useSectionTabParam } from "../hooks/useSectionTabParam";
@@ -31,6 +31,39 @@ import {
   TestResultDisplay,
 } from "../components/providerSlots/ProviderSlotEditor";
 
+// Tone → static Tailwind classes for DismissibleBanner. Kept as full literals
+// (not interpolated) so the JIT compiler keeps them.
+const BANNER_TONES = {
+  info: "border-info/40 bg-info/10 text-info",
+  warning: "border-warning/40 bg-warning/10 text-warning",
+} as const;
+
+// DismissibleBanner is the shared shell for the card's inline notices (the
+// cascade-in-flight notice and the save-warning notice), which differ only in
+// tone and body. Children carry the body; text color inherits from the tone.
+function DismissibleBanner({
+  tone,
+  onDismiss,
+  children,
+}: {
+  tone: keyof typeof BANNER_TONES;
+  onDismiss: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`mb-4 rounded-md border p-3 ${BANNER_TONES[tone]}`}>
+      {children}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="mt-2 text-xs font-medium"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Provider Slot Card
 // ---------------------------------------------------------------------------
@@ -48,6 +81,10 @@ function ProviderSlotCard({
   // is in flight. Lives here (not in the editor) so the banner survives after the
   // editor collapses on save.
   const [cascadeResult, setCascadeResult] = useState<UpdateProviderSlotResult | null>(null);
+  // Set after a save whose result carried a non-fatal warning (e.g. the configured
+  // model is not served by the reachable host). Lives here so the banner survives
+  // the editor collapsing on save; cleared when the operator re-opens the editor.
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
 
   const testMutation = useTestProviderSlot();
 
@@ -91,7 +128,15 @@ function ProviderSlotCard({
     if (result.entity_reembed_queued) {
       setCascadeResult(result);
     }
+    setSaveWarning(result.warning ?? null);
     setEditing(false);
+  }, []);
+
+  // Clear a stale save warning whenever the editor is (re-)opened so an earlier
+  // warning does not linger over a fresh edit.
+  const openEditor = useCallback(() => {
+    setSaveWarning(null);
+    setEditing(true);
   }, []);
 
   return (
@@ -125,25 +170,27 @@ function ProviderSlotCard({
             queue drains in the background; the entity loop runs in a
             detached goroutine on the server. */}
         {cascadeResult && (
-          <div className="mb-4 rounded-md border border-info/40 bg-info/10 p-3">
-            <p className="text-sm font-medium text-info">
+          <DismissibleBanner tone="info" onDismiss={() => setCascadeResult(null)}>
+            <p className="text-sm font-medium">
               Embedding model switched: {cascadeResult.old_model} →{" "}
               {cascadeResult.new_model}
             </p>
-            <p className="mt-1 text-xs text-info">
+            <p className="mt-1 text-xs">
               {cascadeResult.memory_jobs_enqueued ?? 0} memory re-embed jobs
               queued, {cascadeResult.entities_affected ?? 0} entities queued
               for re-embed in the background. Recall is degraded until the
               workers drain (~5-15 min for typical corpora).
             </p>
-            <button
-              type="button"
-              onClick={() => setCascadeResult(null)}
-              className="mt-2 text-xs font-medium text-info hover:text-info"
-            >
-              Dismiss
-            </button>
-          </div>
+          </DismissibleBanner>
+        )}
+
+        {/* Save warning banner: the save succeeded but the host does not serve
+            the configured model (typo or un-pulled model). Non-fatal — surfaced
+            so the operator fixes it now instead of at enrichment/embedding time. */}
+        {saveWarning && (
+          <DismissibleBanner tone="warning" onDismiss={() => setSaveWarning(null)}>
+            <p className="text-sm font-medium">{saveWarning}</p>
+          </DismissibleBanner>
         )}
 
         {editing || !slot.configured ? (
@@ -261,7 +308,7 @@ function ProviderSlotCard({
               <button
                 type="button"
                 onClick={() => {
-                  setEditing(true);
+                  openEditor();
                   setTestResult(null);
                 }}
                 className="rounded-md border border-input px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted"

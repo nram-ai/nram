@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,6 +327,63 @@ func TestUpdateProviderSlotTriggersReload(t *testing.T) {
 	if cfg.Embedding.Model != "text-embedding-3-small" {
 		t.Errorf("expected model text-embedding-3-small, got %q", cfg.Embedding.Model)
 	}
+}
+
+// TestUpdateProviderSlotModelValidationWarning exercises the full wired save path
+// end to end: UpdateProviderSlot -> ListOpenAIModels (against a live fake
+// /v1/models server) -> validateConfiguredModel -> warning on the returned result.
+// A multi-model served list is used so auto-detect leaves the typed model in place
+// (it only fills single-model endpoints), letting the validation step act.
+func TestUpdateProviderSlotModelValidationWarning(t *testing.T) {
+	db := testSQLiteDBWithMigrations(t)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: settingsRepo})
+	ctx := context.Background()
+
+	t.Run("reachable host, unserved model warns and still saves", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"gpt-4o", "gpt-4o-mini"}, nil, nil)
+		res, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+			Type: "openai", URL: srv.URL, Model: "gpt-4o-typo",
+		}, api.UpdateProviderSlotOpts{})
+		if err != nil {
+			t.Fatalf("UpdateProviderSlot: %v", err)
+		}
+		if res == nil || res.Warning == "" {
+			t.Fatalf("expected a warning result, got %+v", res)
+		}
+		if !strings.Contains(res.Warning, "gpt-4o-typo") {
+			t.Errorf("warning should name the model, got %q", res.Warning)
+		}
+		// The save still persisted despite the warning.
+		if stored := readStoredSlot(t, settingsRepo, "fact"); stored.Model != "gpt-4o-typo" {
+			t.Errorf("expected the slot to persist despite the warning, stored model = %q", stored.Model)
+		}
+	})
+
+	t.Run("reachable host, served model does not warn", func(t *testing.T) {
+		srv := newOpenAIModelsServer(t, []string{"gpt-4o", "gpt-4o-mini"}, nil, nil)
+		res, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+			Type: "openai", URL: srv.URL, Model: "gpt-4o",
+		}, api.UpdateProviderSlotOpts{})
+		if err != nil {
+			t.Fatalf("UpdateProviderSlot: %v", err)
+		}
+		if res != nil && res.Warning != "" {
+			t.Errorf("expected no warning for a served model, got %q", res.Warning)
+		}
+	})
+
+	t.Run("unreachable host does not warn", func(t *testing.T) {
+		res, err := store.UpdateProviderSlot(ctx, "fact", api.ProviderSlotConfig{
+			Type: "openai", URL: "http://127.0.0.1:1", Model: "anything",
+		}, api.UpdateProviderSlotOpts{})
+		if err != nil {
+			t.Fatalf("UpdateProviderSlot: %v", err)
+		}
+		if res != nil && res.Warning != "" {
+			t.Errorf("expected no warning when the host is unreachable, got %q", res.Warning)
+		}
+	})
 }
 
 func TestUpdateProviderSlotNilRegistryNoError(t *testing.T) {

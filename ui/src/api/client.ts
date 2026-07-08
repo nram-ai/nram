@@ -989,6 +989,12 @@ export interface UpdateProviderSlotResult {
   entities_affected?: number;
   memory_jobs_enqueued?: number;
   entity_reembed_queued?: boolean;
+  /**
+   * warning is a non-fatal advisory the save still succeeded despite (e.g. the
+   * configured model id is not served by an otherwise-reachable host). Rendered
+   * by the console after a successful save.
+   */
+  warning?: string;
 }
 
 // The backend returns the ordered list of slots (one entry per canonical

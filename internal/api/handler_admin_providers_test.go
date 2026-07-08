@@ -230,6 +230,36 @@ func TestAdminProvidersUpdateEmbedding(t *testing.T) {
 	}
 }
 
+func TestAdminProvidersUpdateReturnsWarning(t *testing.T) {
+	store := &mockProviderAdminStore{
+		updateResult: &UpdateProviderSlotResult{
+			Warning: `model "qwen3:4b" is not served by http://host:11434 (available: qwen3:8b); the slot was saved anyway`,
+		},
+	}
+
+	h := NewAdminProvidersHandler(ProviderAdminConfig{Store: store})
+	body := `{"type":"ollama","url":"http://host:11434","model":"qwen3:4b"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/providers/fact", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp UpdateProviderSlotResult
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Warning != store.updateResult.Warning {
+		t.Errorf("expected warning passthrough %q, got %q", store.updateResult.Warning, resp.Warning)
+	}
+	if resp.NeedsConfirmation {
+		t.Errorf("warning-only result must not set needs_confirmation")
+	}
+}
+
 func TestAdminProvidersUpdateFact(t *testing.T) {
 	store := &mockProviderAdminStore{}
 

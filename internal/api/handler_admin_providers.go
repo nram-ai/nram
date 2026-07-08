@@ -46,6 +46,10 @@ type UpdateProviderSlotResult struct {
 	EntitiesAffected    int64  `json:"entities_affected,omitempty"`
 	MemoryJobsEnqueued  int64  `json:"memory_jobs_enqueued,omitempty"`
 	EntityReembedQueued bool   `json:"entity_reembed_queued,omitempty"`
+	// Warning is a non-fatal advisory the save still succeeded despite, e.g. the
+	// configured model id is not served by an otherwise-reachable host. Empty when
+	// there is nothing to warn about; rendered by the console after a successful save.
+	Warning string `json:"warning,omitempty"`
 }
 
 // ProviderAdminConfig holds the dependencies for the provider admin handler.
