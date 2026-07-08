@@ -16,6 +16,7 @@ func TestRegistryAllSlots(t *testing.T) {
 		Embedding: SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k1", Model: "text-embedding-3-small"},
 		Fact:      SlotConfig{Type: ProviderTypeGemini, APIKey: "k2", Model: "gemini-2.0-flash"},
 		Entity:    SlotConfig{Type: ProviderTypeAnthropic, APIKey: "k3", Model: "claude-sonnet-4-20250514"},
+		Reranker:  SlotConfig{Type: ProviderTypeOpenAI, APIKey: "k4", Model: "rerank-model"},
 	}
 
 	r, err := NewRegistry(cfg, nil, nil)
@@ -32,6 +33,9 @@ func TestRegistryAllSlots(t *testing.T) {
 	if r.GetEntity() == nil {
 		t.Error("expected entity provider to be non-nil")
 	}
+	if r.GetReranker() == nil {
+		t.Error("expected reranker provider to be non-nil")
+	}
 
 	// Verify circuit breaker wrapping via type assertion.
 	if _, ok := r.GetEmbedding().(*CircuitBreakerEmbedding); !ok {
@@ -42,6 +46,9 @@ func TestRegistryAllSlots(t *testing.T) {
 	}
 	if _, ok := r.GetEntity().(*CircuitBreakerLLM); !ok {
 		t.Error("entity provider should be wrapped in CircuitBreakerLLM")
+	}
+	if _, ok := r.GetReranker().(*CircuitBreakerRerank); !ok {
+		t.Error("reranker provider should be wrapped in CircuitBreakerRerank")
 	}
 }
 

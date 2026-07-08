@@ -465,3 +465,52 @@ func (c *CircuitBreakerEmbedding) Dimensions() []int {
 func (c *CircuitBreakerEmbedding) CircuitBreaker() *CircuitBreaker {
 	return c.cb
 }
+
+// ---------------------------------------------------------------------------
+// CircuitBreakerRerank
+// ---------------------------------------------------------------------------
+
+// CircuitBreakerRerank wraps a RerankProvider and delegates calls through a
+// CircuitBreaker. The rerank stage is fail-soft at the call site (an error just
+// keeps the prior document order), so the breaker's job here is purely to stop
+// hammering a dead or slow endpoint: once it trips, Rerank returns a
+// CircuitOpenError without touching the upstream, and callers fall back to the
+// prior order cheaply instead of paying the full timeout on every query.
+type CircuitBreakerRerank struct {
+	provider RerankProvider
+	cb       *CircuitBreaker
+}
+
+// NewCircuitBreakerRerank creates a new CircuitBreakerRerank wrapping the given
+// provider. If config.Name is empty the provider's Name() is used so
+// CircuitOpenError can identify the source.
+func NewCircuitBreakerRerank(provider RerankProvider, config CircuitBreakerConfig) *CircuitBreakerRerank {
+	if config.Name == "" {
+		config.Name = provider.Name()
+	}
+	return &CircuitBreakerRerank{
+		provider: provider,
+		cb:       NewCircuitBreaker(config),
+	}
+}
+
+// Rerank delegates to the wrapped provider through the circuit breaker.
+func (c *CircuitBreakerRerank) Rerank(ctx context.Context, query string, docs []string) (*RerankResponse, error) {
+	var resp *RerankResponse
+	err := c.cb.Execute(func() error {
+		var e error
+		resp, e = c.provider.Rerank(ctx, query, docs)
+		return e
+	})
+	return resp, err
+}
+
+// Name returns the underlying provider's name.
+func (c *CircuitBreakerRerank) Name() string {
+	return c.provider.Name()
+}
+
+// CircuitBreaker returns the underlying circuit breaker for inspection.
+func (c *CircuitBreakerRerank) CircuitBreaker() *CircuitBreaker {
+	return c.cb
+}

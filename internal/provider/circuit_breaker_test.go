@@ -529,6 +529,43 @@ func TestCircuitBreakerEmbedding_DelegatesCorrectly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CircuitBreakerRerank tests
+// ---------------------------------------------------------------------------
+
+func TestCircuitBreakerRerank_DelegatesCorrectly(t *testing.T) {
+	mock := &fakeRerankProvider{name: "mock-rerank", resp: &RerankResponse{Scores: []float64{0.9}}}
+	wrapped := NewCircuitBreakerRerank(mock, testConfig())
+
+	// Verify interface satisfaction at compile time.
+	var _ RerankProvider = wrapped
+
+	// Name passes through.
+	if wrapped.Name() != "mock-rerank" {
+		t.Fatalf("expected name mock-rerank, got %s", wrapped.Name())
+	}
+
+	// Successful call.
+	resp, err := wrapped.Rerank(context.Background(), "q", []string{"d"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if resp == nil || len(resp.Scores) != 1 {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+
+	// Failing calls trip the circuit.
+	mock.err = errSimulated
+	for range 3 {
+		_, _ = wrapped.Rerank(context.Background(), "q", []string{"d"})
+	}
+
+	_, err = wrapped.Rerank(context.Background(), "q", []string{"d"})
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected ErrCircuitOpen, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Thread safety
 // ---------------------------------------------------------------------------
 

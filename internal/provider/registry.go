@@ -662,11 +662,12 @@ func (r *Registry) buildProviders(config RegistryConfig) (builtProviders, error)
 			if err != nil {
 				return builtProviders{}, fmt.Errorf("%s slot: %w", def.Name, err)
 			}
-			// Usage recording only (no circuit breaker or host gate): the rerank
-			// stage is an optional, fail-soft read-path step, so callers tolerate
-			// an upstream error by keeping the prior order rather than relying on
-			// a breaker. Token attribution still lands via the recorder.
-			built.reranker = r.wrapRerank(rp)
+			// Circuit breaker (like embed/LLM) plus usage recording; no host gate.
+			// The rerank stage is fail-soft at the call site, so a tripped breaker
+			// just keeps the prior order (see CircuitBreakerRerank for why). Token
+			// attribution still lands via the recorder.
+			built.reranker = r.wrapRerank(
+				NewCircuitBreakerRerank(rp, breakerCfgFor(slot.Type, "rerank")))
 			continue
 		}
 		lp, err := createLLMProvider(slot)
