@@ -86,6 +86,21 @@ func EnqueueUncoveredMemories(ctx context.Context, db DB) (int64, error) {
 	return n, nil
 }
 
+// UncoveredBackfiller adapts the package-level EnqueueUncoveredMemories bulk
+// enqueue to a method so callers (the dreaming uncovered-backfill phase) can
+// inject it behind a narrow one-method interface and substitute a fake in
+// tests. It holds only the DB handle; the heavy lifting stays in
+// EnqueueUncoveredMemories (including its cheap hasUncoveredMemory short-circuit).
+type UncoveredBackfiller struct{ db DB }
+
+// NewUncoveredBackfiller binds the bulk uncovered-enqueue to a DB handle.
+func NewUncoveredBackfiller(db DB) *UncoveredBackfiller { return &UncoveredBackfiller{db: db} }
+
+// EnqueueUncoveredMemories delegates to the package-level bulk enqueue.
+func (b *UncoveredBackfiller) EnqueueUncoveredMemories(ctx context.Context) (int64, error) {
+	return EnqueueUncoveredMemories(ctx, b.db)
+}
+
 // hasUncoveredMemory returns true iff at least one live memory lacks a
 // pending or in-flight (processing) enrichment job.
 func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {

@@ -4,6 +4,7 @@ import { formatLatencyMs } from "./formatters";
 export const PHASE_LABELS: Record<string, string> = {
   project_description_sync: "Project Descriptions",
   entity_dedup: "Entity Dedup",
+  uncovered_backfill: "Uncovered Backfill",
   embedding_backfill: "Embedding Backfill",
   augmentation_backfill: "Augmentation Backfill",
   multi_vector_backfill: "Multi-Vector Backfill",
@@ -27,6 +28,7 @@ export const SUB_PHASE_LABELS: Record<string, string> = {
 export const PHASE_COLORS: Record<string, string> = {
   project_description_sync: "#8b5cf6",
   entity_dedup: "#94a3b8",
+  uncovered_backfill: "#0891b2",
   embedding_backfill: "#3b82f6",
   augmentation_backfill: "#0ea5e9",
   multi_vector_backfill: "#14b8a6",
@@ -506,6 +508,7 @@ function formatMemoryDeleted(log: DreamLog): FormattedLog {
 // hide data.
 const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
   project_description_sync: ["created", "deleted", "skipped", "errors"],
+  uncovered_backfill: ["enqueued", "errors"],
   embedding_backfill: ["candidates", "embedded", "errors"],
   augmentation_backfill: ["candidates", "enqueued", "errors"],
   multi_vector_backfill: ["candidates", "enqueued", "errors"],

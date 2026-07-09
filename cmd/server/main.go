@@ -921,6 +921,19 @@ func main() {
 		// repaired vector state, and before multi-vector backfill so restored
 		// embedding_dims become facet candidates in the same cycle.
 		dreaming.NewEmbeddingBackfillPhase(memoryRepo, memoryRepo, vectorStore, embedProvider, settingsSvc),
+		// Uncovered backfill re-enqueues a FULL enrichment job for every live
+		// memory that holds no enrichment job at all (enrichment disabled at
+		// creation, a failed write-time enqueue, a direct import/migration) — the
+		// unconditional safety net replacing the removed
+		// NRAM_ENABLE_ENRICHMENT_BACKFILL boot hook, gated only on enrichment.enabled.
+		// Unlike embedding backfill (which only re-embeds), the full job restores
+		// extracted facts, entities, and relationships. Runs before the narrower
+		// backfill phases; a memory it enqueues is skipped by them via the partial
+		// unique index idx_enrichment_queue_pending_memory. Enqueue-only, no LLM, so
+		// it consumes no dream token budget and is deliberately absent from runner's
+		// phaseFractionKeys (like the SQL-only projectDescriptionPhase; the other
+		// backfill siblings register a 0.0 fraction instead, which resolves the same).
+		dreaming.NewUncoveredBackfillPhase(storage.NewUncoveredBackfiller(db), settingsSvc),
 		// Augmentation backfill enqueues query-augmentation jobs for rows whose
 		// vector was built from raw content (augmented_embedding_at IS NULL),
 		// automating recovery for memories whose augmentation step was skipped.

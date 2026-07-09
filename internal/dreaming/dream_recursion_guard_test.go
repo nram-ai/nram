@@ -100,7 +100,7 @@ func TestDreamRecursionGuard_EndToEnd(t *testing.T) {
 
 func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 	ctx := context.Background()
-	db := setupRecursionGuardDB(t)
+	db := newMigratedTestDB(t)
 
 	// Real namespace so foreign keys resolve. No project is required for
 	// the bare worker path under test (cascade resolver is nil).
@@ -351,7 +351,7 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 
 // --- support harness ---
 
-func setupRecursionGuardDB(t *testing.T) storage.DB {
+func newMigratedTestDB(t *testing.T) storage.DB {
 	t.Helper()
 	tmpDir := t.TempDir()
 	origDir, err := os.Getwd()

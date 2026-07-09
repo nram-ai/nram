@@ -27,7 +27,14 @@ const (
 
 // DreamPhase constants define the ordered phases of a dream cycle.
 const (
-	DreamPhaseEntityDedup          = "entity_dedup"
+	DreamPhaseEntityDedup = "entity_dedup"
+	// DreamPhaseUncoveredBackfill re-enqueues a full enrichment job for every
+	// live memory that holds no enrichment job at all (enrichment disabled at
+	// creation, a failed write-time enqueue, a direct import/migration), the
+	// unconditional safety net that replaces the removed NRAM_ENABLE_ENRICHMENT_BACKFILL
+	// boot hook. Unlike the embedding-backfill phase (which only re-embeds), the
+	// full job also restores extracted facts, entities, and relationships.
+	DreamPhaseUncoveredBackfill    = "uncovered_backfill"
 	DreamPhaseEmbeddingBackfill    = "embedding_backfill"
 	DreamPhaseAugmentationBackfill = "augmentation_backfill"
 	DreamPhaseMultiVectorBackfill  = "multi_vector_backfill"
