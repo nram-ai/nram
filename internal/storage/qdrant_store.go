@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
@@ -67,12 +68,45 @@ type QdrantStore struct {
 	// Search over-fetch tracks the configured cap (see overFetchFor). Nil until
 	// SetMaxFacetsResolver is called; nil falls back to the over-fetch floor.
 	maxFacetsFn func() int
+	// gate drops the faceted Search over-fetch to 1x when the multi-vector
+	// feature is off or the namespace/dimension has no topic facets. Nil
+	// (unwired) means always over-fetch, the pre-gate behavior.
+	gate *facetGate
 }
 
 // SetMaxFacetsResolver injects the resolver for enrichment.multi_vector.max_facets
 // so the faceted Search candidate window scales with the configured facet cap
 // instead of a fixed multiplier. Wired at boot; safe to leave unset in tests.
 func (s *QdrantStore) SetMaxFacetsResolver(fn func() int) { s.maxFacetsFn = fn }
+
+// SetFacetGate wires the multi-vector feature resolver and presence-cache TTL
+// resolver used to drop the faceted over-fetch to 1x when there is no facet work
+// to do. Wired at boot; safe to leave unset (nil gate over-fetches unconditionally).
+func (s *QdrantStore) SetFacetGate(enabledFn func() bool, ttlFn func() time.Duration) {
+	s.gate = newFacetGate(enabledFn, ttlFn)
+}
+
+// hasTopicFacets reports whether the collection holds any topic-facet
+// (facet_id > 0) points for the namespace. A non-exact filtered count used by the
+// facet gate to drop the over-fetch when there are no topic facets to collapse.
+func (s *QdrantStore) hasTopicFacets(ctx context.Context, collection string, namespaceID uuid.UUID) (bool, error) {
+	gt := 0.0
+	exact := false
+	count, err := s.client.Count(ctx, &qdrant.CountPoints{
+		CollectionName: collection,
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("namespace_id", namespaceID.String()),
+				qdrant.NewRange("facet_id", &qdrant.Range{Gt: &gt}),
+			},
+		},
+		Exact: &exact,
+	})
+	if err != nil {
+		return false, fmt.Errorf("qdrant: probe topic facets in %s: %w", collection, err)
+	}
+	return count > 0, nil
+}
 
 // Compile-time interface check.
 var (
@@ -411,6 +445,10 @@ func (s *QdrantStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, name
 	if err := s.deleteAllFacets(ctx, collection, memoryID); err != nil {
 		return err
 	}
+	// deleteAllFacets has already changed this memory's facet set, so every path
+	// past here alters topic-facet presence for the namespace/dimension; drop the
+	// cached presence answer once, covering both the empty-set and upsert returns.
+	defer s.gate.invalidate(namespaceID, dimension)
 	if len(facets) == 0 {
 		return nil
 	}
@@ -474,7 +512,10 @@ func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []f
 	faceted := isFacetedKind(kind)
 	limit := uint64(topK)
 	if faceted {
-		limit = uint64(topK * overFetchFor(s.maxFacetsFn))
+		of := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
+			return s.hasTopicFacets(pctx, collection, namespaceID)
+		})
+		limit = uint64(topK * of)
 	}
 	scored, err := s.client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: collection,
@@ -690,6 +731,7 @@ func (s *QdrantStore) TruncateAllVectors(ctx context.Context) error {
 	if err := s.EnsureCollections(ctx); err != nil {
 		return fmt.Errorf("qdrant: recreate collections after truncate: %w", err)
 	}
+	s.gate.invalidateAll()
 	return nil
 }
 

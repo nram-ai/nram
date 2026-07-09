@@ -302,6 +302,11 @@ const (
 	SettingMultiVectorFacetThreshold   = "enrichment.multi_vector.facet_threshold"
 	SettingMultiVectorMaxFacets        = "enrichment.multi_vector.max_facets"
 	SettingMultiVectorEmbedConcurrency = "enrichment.multi_vector.embed_concurrency"
+	// SettingMultiVectorFacetPresenceCacheTTL is how long (seconds) recall caches
+	// the per-namespace "does this namespace/dimension have topic facets" answer
+	// before re-probing, so the faceted Search path can skip its per-recall facet
+	// work when there are none. 0 re-probes on every recall.
+	SettingMultiVectorFacetPresenceCacheTTL = "enrichment.multi_vector.facet_presence_cache_ttl_seconds"
 
 	SettingQdrantAddr             = "qdrant.addr"
 	SettingQdrantAPIKey           = "qdrant.api_key"
@@ -1168,20 +1173,21 @@ var settingDefaults = map[string]string{
 	SettingIngestionDecisionTopK:         "5",
 	SettingIngestionDecisionSystemPrompt: ingestionDecisionSystemPromptText,
 
-	SettingQueryAugmentEnabled:           "true",
-	SettingQueryAugmentCount:             "4",
-	SettingMultiVectorEnabled:            "true",
-	SettingMultiVectorFacetThreshold:     "0.65",
-	SettingMultiVectorMaxFacets:          "8",
-	SettingMultiVectorEmbedConcurrency:   "4",
-	SettingQueryAugmentMaxInputChars:     "0",
-	SettingQueryAugmentMaxTokens:         "2048",
-	SettingQueryAugmentSystemPrompt:      queryAugmentSystemPromptText,
-	SettingDreamNoveltyJudgeSystemPrompt: noveltyJudgeSystemPromptText,
-	SettingQdrantUseTLS:                  "false",
-	SettingQdrantPoolSize:                "3",
-	SettingQdrantKeepAliveTime:           "10",
-	SettingQdrantKeepAliveTimeout:        "2",
+	SettingQueryAugmentEnabled:              "true",
+	SettingQueryAugmentCount:                "4",
+	SettingMultiVectorEnabled:               "true",
+	SettingMultiVectorFacetThreshold:        "0.65",
+	SettingMultiVectorMaxFacets:             "8",
+	SettingMultiVectorEmbedConcurrency:      "4",
+	SettingMultiVectorFacetPresenceCacheTTL: "5",
+	SettingQueryAugmentMaxInputChars:        "0",
+	SettingQueryAugmentMaxTokens:            "2048",
+	SettingQueryAugmentSystemPrompt:         queryAugmentSystemPromptText,
+	SettingDreamNoveltyJudgeSystemPrompt:    noveltyJudgeSystemPromptText,
+	SettingQdrantUseTLS:                     "false",
+	SettingQdrantPoolSize:                   "3",
+	SettingQdrantKeepAliveTime:              "10",
+	SettingQdrantKeepAliveTimeout:           "2",
 
 	SettingHNSWM:                "16",
 	SettingHNSWEfConstruction:   "200",

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,6 +114,20 @@ type HNSWStore struct {
 	readDB  *sql.DB
 	writeDB *sql.DB
 	cache   *hnsw.IndexCache
+	// gate short-circuits the per-recall topic-facet brute-force scan when the
+	// multi-vector feature is off or the namespace/dimension has no topic facets.
+	// Nil (unwired, e.g. tests or the migrate-back store) means always scan.
+	gate *facetGate
+	// scanCount counts how many times scanFacetCandidates ran its row loop.
+	// Test-only observability for the facet-scan short-circuit (see ScanCount).
+	scanCount atomic.Int64
+}
+
+// SetFacetGate wires the multi-vector feature resolver and presence-cache TTL
+// resolver used to skip the per-recall topic-facet scan. Wired at boot; safe to
+// leave unset (nil gate scans unconditionally, the pre-gate behavior).
+func (s *HNSWStore) SetFacetGate(enabledFn func() bool, ttlFn func() time.Duration) {
+	s.gate = newFacetGate(enabledFn, ttlFn)
 }
 
 // Compile-time interface check.
@@ -397,6 +412,10 @@ func (s *HNSWStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, namesp
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("hnsw: upsert-facets commit: %w", err)
 	}
+	// The topic-facet set for this namespace/dimension just changed; drop the
+	// cached presence answer so the next recall re-probes instead of waiting for
+	// the TTL (this is the no-facets -> has-facets transition that matters).
+	s.gate.invalidate(namespaceID, dimension)
 
 	// Reflect facet 0 in the in-memory graph (topic facets are SQLite-only).
 	graph, err := s.cache.GetOrCreate(ctx, spec.cacheKind, namespaceID, dimension)
@@ -452,12 +471,35 @@ func (s *HNSWStore) Search(ctx context.Context, kind VectorKind, embedding []flo
 	}
 
 	if spec.faceted {
-		if err := s.scanFacetCandidates(ctx, spec, embedding, namespaceID, dimension, best); err != nil {
-			return nil, err
+		active := s.gate.active(ctx, namespaceID, dimension, func(pctx context.Context) (bool, error) {
+			return s.hasTopicFacets(pctx, namespaceID, dimension)
+		})
+		if active {
+			if err := s.scanFacetCandidates(ctx, spec, embedding, namespaceID, dimension, best); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return collapseFacets(best, namespaceID, topK), nil
+}
+
+// hasTopicFacets reports whether the namespace/dimension holds any topic-facet
+// (facet_id > 0) rows. An O(log n) index probe served by idx_memory_vectors_ns_dim;
+// used by the facet gate to skip the brute-force scan when there is nothing to scan.
+func (s *HNSWStore) hasTopicFacets(ctx context.Context, namespaceID uuid.UUID, dimension int) (bool, error) {
+	spec := hnswSpecs[VectorKindMemory]
+	var one int
+	err := s.readDB.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT 1 FROM %s WHERE namespace_id = ? AND dimension = ? AND facet_id > 0 LIMIT 1", spec.vectorTable),
+		namespaceID.String(), dimension).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("hnsw: probe topic facets: %w", err)
+	}
+	return true, nil
 }
 
 // foldBestFacetCosine scans (id, embedding-blob) rows, decodes each vector, scores
@@ -494,6 +536,7 @@ func foldBestFacetCosine(rows *sql.Rows, query []float32, queryNorm float32, out
 // SQLite brute-force backend's multi-vector path; topic facets are not in the
 // HNSW graph.
 func (s *HNSWStore) scanFacetCandidates(ctx context.Context, spec hnswTableSpec, embedding []float32, namespaceID uuid.UUID, dimension int, best map[uuid.UUID]float64) error {
+	s.scanCount.Add(1)
 	rows, err := s.readDB.QueryContext(ctx,
 		fmt.Sprintf("SELECT %s, embedding FROM %s WHERE namespace_id = ? AND dimension = ? AND facet_id > 0", spec.idColumn, spec.vectorTable),
 		namespaceID.String(), dimension)
@@ -725,6 +768,9 @@ func (s *HNSWStore) TruncateAllVectors(ctx context.Context) error {
 			return fmt.Errorf("hnsw: truncate %s: %w", spec.snapshotTable, err)
 		}
 	}
+	// Every namespace just lost its facets; clear the presence cache so none
+	// keeps a stale "has facets" answer.
+	s.gate.invalidateAll()
 	return nil
 }
 

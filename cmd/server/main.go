@@ -491,6 +491,16 @@ func main() {
 	maxFacetsResolver := func() int {
 		return settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingMultiVectorMaxFacets, "global")
 	}
+	// The faceted Search path is gated on the multi-vector feature switch and a
+	// per-namespace topic-facet presence probe (cached for the configured TTL),
+	// so recall skips its facet work when the feature is off or a namespace has
+	// no topic facets. Shared across all three backends so the wirings can't drift.
+	facetsEnabledResolver := func() bool {
+		return settingsSvc.ResolveBoolWithDefault(context.Background(), service.SettingMultiVectorEnabled, "global")
+	}
+	facetPresenceTTLResolver := func() time.Duration {
+		return settingsSvc.ResolveDurationSecondsWithDefault(context.Background(), service.SettingMultiVectorFacetPresenceCacheTTL, "global")
+	}
 	if qdrantCfg.Addr != "" {
 		// Only adopt Qdrant on a successful construction; assigning the
 		// (nil, err) return straight into the interface would leave a non-nil
@@ -503,6 +513,7 @@ func main() {
 			vectorStore = qs
 			qdrantStore = qs
 			qs.SetMaxFacetsResolver(maxFacetsResolver)
+			qs.SetFacetGate(facetsEnabledResolver, facetPresenceTTLResolver)
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
@@ -512,12 +523,14 @@ func main() {
 		} else {
 			vectorStore = pgvStore
 			pgvStore.SetMaxFacetsResolver(maxFacetsResolver)
+			pgvStore.SetFacetGate(facetsEnabledResolver, facetPresenceTTLResolver)
 			slog.Info("boot: pgvector store initialized")
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
 		hnswCfg := buildHNSWConfig()
 		hnswStore = storage.NewHNSWStore(db.DB(), db.WriteDB(), hnswCfg)
+		hnswStore.SetFacetGate(facetsEnabledResolver, facetPresenceTTLResolver)
 		vectorStore = hnswStore
 		defer func() { _ = hnswStore.Close() }()
 		slog.Info("boot: hnsw vector store initialized (SQLite backend)",

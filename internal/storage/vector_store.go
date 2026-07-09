@@ -194,3 +194,17 @@ func overFetchFor(maxFacetsFn func() int) int {
 	}
 	return of
 }
+
+// effectiveOverFetch is the candidate over-fetch multiplier for an in-band
+// faceted Search (pgvector, Qdrant), after consulting the facet gate: 1x when
+// the gate is inactive (feature off or the namespace/dimension has no topic
+// facets, so the collapse is a no-op) and overFetchFor(maxFacetsFn) when active.
+// It keeps the "1x unless active" policy in one place beside overFetchFor rather
+// than pasted into each backend's Search. probe is the backend's native
+// topic-facet presence probe.
+func effectiveOverFetch(ctx context.Context, gate *facetGate, namespaceID uuid.UUID, dimension int, maxFacetsFn func() int, probe func(context.Context) (bool, error)) int {
+	if !gate.active(ctx, namespaceID, dimension, probe) {
+		return 1
+	}
+	return overFetchFor(maxFacetsFn)
+}

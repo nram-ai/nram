@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -41,12 +42,41 @@ type PgVectorStore struct {
 	// Search over-fetch tracks the configured cap (see overFetchFor). Nil until
 	// SetMaxFacetsResolver is called; nil falls back to the over-fetch floor.
 	maxFacetsFn func() int
+	// gate drops the faceted Search over-fetch to 1x when the multi-vector
+	// feature is off or the namespace/dimension has no topic facets. Nil
+	// (unwired) means always over-fetch, the pre-gate behavior.
+	gate *facetGate
 }
 
 // SetMaxFacetsResolver injects the resolver for enrichment.multi_vector.max_facets
 // so the faceted Search candidate window scales with the configured facet cap
 // instead of a fixed multiplier. Wired at boot; safe to leave unset in tests.
 func (s *PgVectorStore) SetMaxFacetsResolver(fn func() int) { s.maxFacetsFn = fn }
+
+// SetFacetGate wires the multi-vector feature resolver and presence-cache TTL
+// resolver used to drop the faceted over-fetch to 1x when there is no facet work
+// to do. Wired at boot; safe to leave unset (nil gate over-fetches unconditionally).
+func (s *PgVectorStore) SetFacetGate(enabledFn func() bool, ttlFn func() time.Duration) {
+	s.gate = newFacetGate(enabledFn, ttlFn)
+}
+
+// hasTopicFacets reports whether the namespace holds any topic-facet (facet_id > 0)
+// rows in the dimension table. Used by the facet gate to drop the over-fetch when
+// there are no topic facets to collapse.
+func (s *PgVectorStore) hasTopicFacets(ctx context.Context, spec pgvectorTableSpec, namespaceID uuid.UUID) (bool, error) {
+	var one int
+	err := s.pool.QueryRow(ctx,
+		fmt.Sprintf("SELECT 1 FROM %s v JOIN %s p ON v.%s = p.id WHERE p.namespace_id = $1 AND v.facet_id > 0 LIMIT 1",
+			spec.table, spec.parent, spec.idColumn),
+		namespaceID).Scan(&one)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("pgvector: probe topic facets: %w", err)
+	}
+	return true, nil
+}
 
 // Compile-time interface checks.
 var (
@@ -226,7 +256,7 @@ func (s *PgVectorStore) UpsertBatch(ctx context.Context, items []VectorUpsertIte
 // are topic facets written at facet_id = their slice index. The delete-then-
 // insert runs in one transaction so a concurrent reader never sees a partial
 // set. An empty slice removes all facets for the memory at that dimension.
-func (s *PgVectorStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, _ uuid.UUID, dimension int, facets [][]float32) error {
+func (s *PgVectorStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error {
 	spec, err := resolveTableSpec(VectorKindMemory, dimension)
 	if err != nil {
 		return err
@@ -263,6 +293,10 @@ func (s *PgVectorStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, _ 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pgvector: upsert-facets commit: %w", err)
 	}
+	// The topic-facet set for this namespace/dimension just changed; drop the
+	// cached presence answer so the next recall re-probes instead of waiting for
+	// the TTL.
+	s.gate.invalidate(namespaceID, dimension)
 	return nil
 }
 
@@ -308,7 +342,10 @@ func (s *PgVectorStore) Search(ctx context.Context, kind VectorKind, embedding [
 			spec.idColumn, spec.idColumn, spec.idColumn, spec.idColumn,
 			spec.table, spec.parent, spec.idColumn, whereExtra,
 		)
-		args = []any{pgvector.NewVector(embedding), namespaceID, topK * overFetchFor(s.maxFacetsFn), topK}
+		of := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
+			return s.hasTopicFacets(pctx, spec, namespaceID)
+		})
+		args = []any{pgvector.NewVector(embedding), namespaceID, topK * of, topK}
 	} else {
 		query = fmt.Sprintf(
 			`SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
@@ -459,6 +496,7 @@ func (s *PgVectorStore) TruncateAllVectors(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, "TRUNCATE TABLE "+strings.Join(tables, ", ")); err != nil {
 		return fmt.Errorf("pgvector: truncate all vector tables: %w", err)
 	}
+	s.gate.invalidateAll()
 	return nil
 }
 
