@@ -264,39 +264,13 @@ func (s *UpdateService) updateSupersede(
 		UpdatedAt:    now,
 	}
 
-	// Embed the new content. If the embed succeeds we set EmbeddingDim
-	// and try the vector upsert; if the vector upsert fails we drop the
-	// dim so the row stays honest. Failures here do not block the
-	// supersede write: the embedding-backfill phase will repair on the
-	// next dream cycle and the queued enrichment job runs the embed too.
-	reEmbedded := false
-	var newEmbedding []float32
-	var newEmbeddingDim int
-	if s.embedProvider != nil {
-		ep := s.embedProvider()
-		if ep != nil {
-			dim := bestEmbeddingDimension(ep.Dimensions())
-			embCtx := provider.WithUsageContext(ctx, model.NewUsageContextPtr(req.UserID, project.ID, req.OrgID))
-			embCtx = provider.WithNamespaceID(embCtx, mem.NamespaceID)
-			embCtx = provider.WithMemoryID(embCtx, newID)
-			embCtx = provider.WithAPIKeyID(embCtx, req.APIKeyID)
-			embCtx = provider.WithOperation(embCtx, provider.OperationEmbedding)
-
-			resp, embErr := ep.Embed(embCtx, &provider.EmbeddingRequest{
-				Input:     []string{newMem.Content},
-				Dimension: dim,
-			})
-			if embErr == nil && len(resp.Embeddings) > 0 {
-				newEmbedding = resp.Embeddings[0]
-				newEmbeddingDim = len(newEmbedding)
-				newMem.EmbeddingDim = &newEmbeddingDim
-			} else if embErr != nil {
-				slog.Warn("memory update: embed failed; supersede proceeds without vector",
-					"old_memory", mem.ID, "new_memory", newID, "err", embErr)
-			}
-		}
-	}
-
+	// Persist the new memory, mark the old one superseded, and write the
+	// supersedes lineage edge BEFORE re-embedding. The re-embed stamps
+	// WithMemoryID(newID) so its token_usage row attributes to the new memory;
+	// recording that row before newID exists in `memories` would fail the
+	// memory_id foreign key, and the delete-tolerant retry in
+	// TokenUsageRepo.Record would null the link. newMem is inserted without an
+	// EmbeddingDim; it is set below only after a vector is actually stored.
 	lineage := &model.MemoryLineage{
 		NamespaceID: mem.NamespaceID,
 		ParentID:    &mem.ID,
@@ -323,20 +297,46 @@ func (s *UpdateService) updateSupersede(
 		}
 	}
 
-	// Best-effort vector upsert at the new ID. The transaction has
-	// already committed; if upsert fails we patch the row to drop the
-	// dim claim so the backfill phase picks it up.
-	if newEmbedding != nil && s.vectorStore != nil {
-		if err := s.vectorStore.Upsert(ctx, storage.VectorKindMemory, newID, mem.NamespaceID, newEmbedding, newEmbeddingDim); err != nil {
-			slog.Warn("memory update: vector upsert at new ID failed; clearing embedding_dim",
-				"new_memory", newID, "dim", newEmbeddingDim, "err", err)
-			newMem.EmbeddingDim = nil
-			if uerr := s.memories.Update(ctx, newMem); uerr != nil {
-				slog.Warn("memory update: clearing embedding_dim failed",
-					"new_memory", newID, "err", uerr)
+	// Embed the new content now that newID is persisted, so the re-embed's
+	// token_usage row attributes to it. Best-effort: embed/upsert failures do
+	// not undo the committed supersede. EmbeddingDim is recorded only after a
+	// successful vector upsert, so the row never claims a dim it has no vector
+	// for; the embedding-backfill phase and the queued enrichment job repair a
+	// missing vector on the next pass.
+	reEmbedded := false
+	if s.embedProvider != nil {
+		ep := s.embedProvider()
+		if ep != nil {
+			dim := bestEmbeddingDimension(ep.Dimensions())
+			embCtx := provider.WithUsageContext(ctx, model.NewUsageContextPtr(req.UserID, project.ID, req.OrgID))
+			embCtx = provider.WithNamespaceID(embCtx, mem.NamespaceID)
+			embCtx = provider.WithMemoryID(embCtx, newID)
+			embCtx = provider.WithAPIKeyID(embCtx, req.APIKeyID)
+			embCtx = provider.WithOperation(embCtx, provider.OperationEmbedding)
+
+			resp, embErr := ep.Embed(embCtx, &provider.EmbeddingRequest{
+				Input:     []string{newMem.Content},
+				Dimension: dim,
+			})
+			if embErr != nil {
+				slog.Warn("memory update: embed failed; supersede proceeds without vector",
+					"old_memory", mem.ID, "new_memory", newID, "err", embErr)
+			} else if len(resp.Embeddings) > 0 && s.vectorStore != nil {
+				newEmbedding := resp.Embeddings[0]
+				newEmbeddingDim := len(newEmbedding)
+				if err := s.vectorStore.Upsert(ctx, storage.VectorKindMemory, newID, mem.NamespaceID, newEmbedding, newEmbeddingDim); err != nil {
+					slog.Warn("memory update: vector upsert at new ID failed; leaving embedding_dim unset",
+						"new_memory", newID, "dim", newEmbeddingDim, "err", err)
+				} else {
+					// Vector stored; record the dim on the now-persisted row.
+					newMem.EmbeddingDim = &newEmbeddingDim
+					if uerr := s.memories.Update(ctx, newMem); uerr != nil {
+						slog.Warn("memory update: setting embedding_dim after upsert failed",
+							"new_memory", newID, "err", uerr)
+					}
+					reEmbedded = true
+				}
 			}
-		} else {
-			reEmbedded = true
 		}
 	}
 

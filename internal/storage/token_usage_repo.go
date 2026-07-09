@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -65,11 +66,25 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 
 	_, err := r.db.Exec(ctx, query, buildArgs(nullableUUIDStr(usage.MemoryID))...)
 	if err != nil && usage.MemoryID != nil && isForeignKeyViolation(err) {
-		// The memory was hard-deleted between the upstream provider call and
-		// this best-effort accounting write (e.g. a forget landing mid-embed).
-		// Keep the row for billing/analytics; drop only the now-dangling memory
-		// link, which the schema would itself null on delete (ON DELETE SET
-		// NULL). Retry exactly once with the link cleared.
+		// The memory referenced by this row does not exist. The expected cause
+		// is a delete/forget race (a memory hard-deleted between the upstream
+		// provider call and this best-effort accounting write). Keep the row
+		// for billing/analytics; drop only the now-dangling memory link, which
+		// the schema would itself null on delete (ON DELETE SET NULL). Retry
+		// exactly once with the link cleared.
+		//
+		// This also fires — and is the ONLY signal for — a caller that records
+		// usage against a memory it has not persisted yet (a write-ordering
+		// bug). Log loudly so that case surfaces instead of silently nulling.
+		reqID := ""
+		if usage.RequestID != nil {
+			reqID = *usage.RequestID
+		}
+		slog.Warn("token_usage: memory_id foreign key violation; recording row with null memory link (memory absent: deleted mid-flight, or usage recorded before its memory row was persisted)",
+			"memory_id", usage.MemoryID.String(),
+			"operation", usage.Operation,
+			"provider", usage.Provider,
+			"request_id", reqID)
 		usage.MemoryID = nil
 		_, err = r.db.Exec(ctx, query, buildArgs(nil)...)
 	}

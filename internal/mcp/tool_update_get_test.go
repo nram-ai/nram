@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
@@ -360,6 +364,99 @@ func TestHandleMemoryUpdate_ReEmbedIndicator(t *testing.T) {
 	// Without an embed provider, re_embedded should be false.
 	if resp.ReEmbedded {
 		t.Error("expected re_embedded to be false without embed provider")
+	}
+}
+
+// buildAuthCtxWithOrg builds an MCP request context carrying an auth context
+// for the given user and org. buildAuthCtx delegates here with a nil org.
+func buildAuthCtxWithOrg(userID, orgID uuid.UUID) context.Context {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	ac := &auth.AuthContext{UserID: userID, OrgID: orgID}
+	req = req.WithContext(auth.WithContext(req.Context(), ac))
+	return context.WithValue(context.Background(), httpRequestKey, req)
+}
+
+// capturingEmbedProvider records the UsageContext stamped on the embed call so
+// the test can assert the caller's OrgID reached the token_usage attribution
+// context all the way through the update service.
+type capturingEmbedProvider struct {
+	seen     bool
+	gotOrgID *uuid.UUID
+}
+
+func (c *capturingEmbedProvider) Embed(ctx context.Context, _ *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+	c.seen = true
+	if uc := provider.UsageContextFromContext(ctx); uc != nil {
+		c.gotOrgID = uc.OrgID
+	}
+	return &provider.EmbeddingResponse{Embeddings: [][]float32{{0.1}}}, nil
+}
+func (c *capturingEmbedProvider) Name() string      { return "capture" }
+func (c *capturingEmbedProvider) Dimensions() []int { return []int{1} }
+
+// TestHandleMemoryUpdate_ThreadsOrgID pins that the MCP update tool copies the
+// caller's org from the auth context into the UpdateRequest, so the re-embed
+// call's token_usage row is attributed to the org (a NULL org_id row would be
+// dropped from org-scoped analytics).
+func TestHandleMemoryUpdate_ThreadsOrgID(t *testing.T) {
+	userID := uuid.New()
+	orgID := uuid.New()
+	nsID := uuid.New()
+	memoryID := uuid.New()
+	projectID := uuid.New()
+
+	user := &model.User{ID: userID, NamespaceID: nsID}
+	project := &model.Project{ID: projectID, NamespaceID: nsID, OwnerNamespaceID: nsID, Slug: "test"}
+
+	mem := &model.Memory{
+		ID:          memoryID,
+		NamespaceID: nsID,
+		Content:     "old content",
+		Tags:        []string{},
+		Metadata:    json.RawMessage(`{}`),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	emb := &capturingEmbedProvider{}
+	updateSvc := service.NewUpdateService(
+		&mockMemoryUpdater{mem: mem},
+		&mockProjectLookup{project: &model.Project{ID: projectID, NamespaceID: nsID}},
+		nil, // no vector store
+		func() provider.EmbeddingProvider { return emb },
+		&mockEnrichmentQueueRepo{},
+	)
+
+	deps := Dependencies{
+		Backend:     storage.BackendSQLite,
+		UserRepo:    &mockUserRepoStore{user: user},
+		ProjectRepo: &mockProjectRepoStore{project: project},
+		Update:      updateSvc,
+	}
+	srv := newTestServer(deps)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "update"
+	req.Params.Arguments = map[string]any{
+		"id":      memoryID.String(),
+		"project": "test",
+		"content": "changed content",
+	}
+
+	ctx := buildAuthCtxWithOrg(userID, orgID)
+	result, err := handleMemoryUpdate(ctx, srv, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %v", result.Content)
+	}
+
+	if !emb.seen {
+		t.Fatal("expected the re-embed call to run on a content change")
+	}
+	if emb.gotOrgID == nil || *emb.gotOrgID != orgID {
+		t.Errorf("embed UsageContext OrgID: got %v want %v", emb.gotOrgID, orgID)
 	}
 }
 

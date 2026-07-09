@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
@@ -76,10 +75,8 @@ func (m *mockNamespaceRepoStore) Create(_ context.Context, _ *model.Namespace) e
 
 // buildAuthCtx creates a context with an HTTP request carrying auth info.
 func buildAuthCtx(userID uuid.UUID) context.Context {
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-	ac := &auth.AuthContext{UserID: userID}
-	req = req.WithContext(auth.WithContext(req.Context(), ac))
-	return context.WithValue(context.Background(), httpRequestKey, req)
+	// No org on the auth context (uuid.Nil), same as an org-less caller.
+	return buildAuthCtxWithOrg(userID, uuid.Nil)
 }
 
 // buildNoAuthCtx creates a context with an HTTP request but no auth.

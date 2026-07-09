@@ -150,6 +150,10 @@ func handleMemoryUpdate(ctx context.Context, s *Server, request mcp.CallToolRequ
 		UserID:    &uid,
 		APIKeyID:  ac.APIKeyID,
 	}
+	if ac.OrgID != uuid.Nil {
+		oid := ac.OrgID
+		req.OrgID = &oid
+	}
 
 	resp, err := deps.Update.Update(ctx, req)
 	if err != nil {

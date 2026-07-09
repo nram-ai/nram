@@ -324,32 +324,49 @@ func buildUsageRow(
 	}
 
 	// Ownership: prefer pre-stamped UsageContext (no DB hit), else resolver.
+	// mergeOwnership only fills fields the caller left nil, so a partial
+	// context (e.g. user+project stamped, org nil) keeps its caller stamps
+	// while missing fields are backfilled from the namespace resolver.
 	if uc := UsageContextFromContext(ctx); uc != nil {
-		rec.OrgID = uc.OrgID
-		rec.UserID = uc.UserID
-		rec.ProjectID = uc.ProjectID
+		mergeOwnership(rec, uc)
 	}
 	rec.NamespaceID = NamespaceIDFromContext(ctx)
 	if needsResolverLookup(rec, resolver) {
 		if uc, err := resolver.ResolveUsageContext(ctx, rec.NamespaceID); err == nil && uc != nil {
-			rec.OrgID = uc.OrgID
-			rec.UserID = uc.UserID
-			rec.ProjectID = uc.ProjectID
+			mergeOwnership(rec, uc)
 		}
 	}
 	return rec
 }
 
-// needsResolverLookup is true when the caller stamped a namespace but no
-// UsageContext, and a resolver is available. The middleware then performs
-// a one-shot DB lookup to populate org/user/project; without all four
-// preconditions the row is recorded with whatever ownership data ctx
-// carries (possibly NULL).
+// mergeOwnership fills each nil ownership field on rec from uc without
+// clobbering a value the caller already stamped. This matters for
+// shared-project paths where the resolver's owner identity can differ from
+// the caller's stamped user/project.
+func mergeOwnership(rec *model.TokenUsage, uc *model.UsageContext) {
+	if rec.OrgID == nil {
+		rec.OrgID = uc.OrgID
+	}
+	if rec.UserID == nil {
+		rec.UserID = uc.UserID
+	}
+	if rec.ProjectID == nil {
+		rec.ProjectID = uc.ProjectID
+	}
+}
+
+// needsResolverLookup is true when the caller stamped a namespace, a resolver
+// is available, and any ownership field is still nil. The middleware then
+// performs a one-shot DB lookup to backfill the missing org/user/project via
+// mergeOwnership. Firing on any nil (rather than only all-nil) means a partial
+// context (e.g. user+project stamped, org nil) still has its org backfilled
+// instead of writing a NULL org_id row that org-scoped analytics would drop.
+// A fully stamped context skips the lookup entirely.
 func needsResolverLookup(rec *model.TokenUsage, resolver UsageContextResolver) bool {
 	if resolver == nil || rec.NamespaceID == uuid.Nil {
 		return false
 	}
-	return rec.OrgID == nil && rec.UserID == nil && rec.ProjectID == nil
+	return rec.OrgID == nil || rec.UserID == nil || rec.ProjectID == nil
 }
 
 // joinMessages concatenates the message contents into a single string for

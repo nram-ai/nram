@@ -819,7 +819,7 @@ func TestUpdate_RejectsSupersededMemory(t *testing.T) {
 // row is persisted WITHOUT an embedding_dim rather than carrying a stale
 // dim that has no matching vector. The embedding-backfill phase is the
 // owner of repair on the next dream cycle.
-func TestUpdate_VectorUpsertFailure_ClearsEmbeddingDim(t *testing.T) {
+func TestUpdate_VectorUpsertFailure_LeavesEmbeddingDimUnset(t *testing.T) {
 	projectID, _, memID, projects, memories := setupUpdateFixtures()
 
 	embProvider := &mockEmbeddingProvider{
@@ -853,21 +853,21 @@ func TestUpdate_VectorUpsertFailure_ClearsEmbeddingDim(t *testing.T) {
 		t.Error("supersede chain link must still form when only the vector Upsert fails")
 	}
 
-	// Supersede transaction lands first (creates new row in mock), then
-	// the vector upsert at the new ID fails, then the service patches the
-	// new row via Update to clear embedding_dim.
+	// Supersede lands first, inserting the new row WITHOUT an embedding_dim
+	// (persist-before-embed so the re-embed's token_usage.memory_id FK is
+	// satisfiable). The vector upsert at the new ID then fails, so the row is
+	// left exactly as inserted: no follow-up Update, and it never claims a dim
+	// it has no vector for. EmbeddingDim is only ever set after a successful
+	// upsert.
 	if len(memories.supersedes) != 1 {
 		t.Fatalf("expected 1 supersede call; got %d", len(memories.supersedes))
 	}
-	if len(memories.updated) != 1 {
-		t.Fatalf("expected 1 follow-up Update to clear embedding_dim; got %d", len(memories.updated))
+	if len(memories.updated) != 0 {
+		t.Fatalf("expected no follow-up Update when the upsert fails (row inserted without a dim); got %d", len(memories.updated))
 	}
-	persisted := memories.updated[0]
-	if persisted.ID != resp.ID {
-		t.Errorf("follow-up Update should target the new ID %s; got %s", resp.ID, persisted.ID)
-	}
-	if persisted.EmbeddingDim != nil {
-		t.Errorf("EmbeddingDim must be cleared when vector Upsert failed; got %v", *persisted.EmbeddingDim)
+	newRow := memories.supersedes[0].newMem
+	if newRow.EmbeddingDim != nil {
+		t.Errorf("new row must not claim an embedding_dim when the vector Upsert failed; got %v", *newRow.EmbeddingDim)
 	}
 	if len(vectors.upserted) != 0 {
 		t.Errorf("upsert call should have failed; got %d successful upserts", len(vectors.upserted))

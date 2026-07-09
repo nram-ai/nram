@@ -63,12 +63,16 @@ func (c *captureRecorder) last() *model.TokenUsage {
 	return c.rows[len(c.rows)-1]
 }
 
-// resolverStub returns a fixed UsageContext for every namespace lookup.
+// resolverStub returns a fixed UsageContext for every namespace lookup and
+// counts how many times it was consulted, so tests can assert the middleware
+// skips the DB lookup when the caller already stamped a full context.
 type resolverStub struct {
-	uc *model.UsageContext
+	uc    *model.UsageContext
+	calls int
 }
 
 func (r *resolverStub) ResolveUsageContext(ctx context.Context, ns uuid.UUID) (*model.UsageContext, error) {
+	r.calls++
 	return r.uc, nil
 }
 
@@ -357,6 +361,95 @@ func TestUsageRecordingLLM_FallbackResolver(t *testing.T) {
 	}
 	if got.OrgID == nil || *got.OrgID != orgID {
 		t.Errorf("expected resolver-supplied OrgID, got %v", got.OrgID)
+	}
+}
+
+// TestUsageRecordingLLM_PartialContextBackfillsOrg covers the partial-context
+// case: the caller stamped user+project but no org (as an org user's request
+// that failed to thread OrgID would). The resolver must backfill the org while
+// the caller's user/project stamps are preserved (not clobbered by the
+// resolver's owner identity).
+func TestUsageRecordingLLM_PartialContextBackfillsOrg(t *testing.T) {
+	rec := &captureRecorder{}
+	resolverOrg := uuid.New()
+	resolverUser := uuid.New()
+	resolverProject := uuid.New()
+	resolver := &resolverStub{
+		uc: &model.UsageContext{OrgID: &resolverOrg, UserID: &resolverUser, ProjectID: &resolverProject},
+	}
+	llm := &stubLLM{
+		name: "openai",
+		resp: &CompletionResponse{Model: "gpt-4o", Usage: TokenUsage{PromptTokens: 5}},
+	}
+	w := NewUsageRecordingLLM(llm, rec, resolver)
+
+	callerUser := uuid.New()
+	callerProject := uuid.New()
+	ns := uuid.New()
+	ctx := WithOperation(context.Background(), OperationEmbedding)
+	// Partial: user+project stamped, org nil.
+	ctx = WithUsageContext(ctx, &model.UsageContext{UserID: &callerUser, ProjectID: &callerProject})
+	ctx = WithNamespaceID(ctx, ns)
+
+	_, _ = w.Complete(ctx, &CompletionRequest{Model: "gpt-4o"})
+
+	got := rec.last()
+	if got == nil {
+		t.Fatal("expected a recorded row")
+	}
+	if resolver.calls != 1 {
+		t.Errorf("expected exactly one resolver lookup, got %d", resolver.calls)
+	}
+	if got.OrgID == nil || *got.OrgID != resolverOrg {
+		t.Errorf("OrgID: got %v want resolver-supplied %v", got.OrgID, resolverOrg)
+	}
+	if got.UserID == nil || *got.UserID != callerUser {
+		t.Errorf("UserID: got %v want caller stamp %v (must not be clobbered)", got.UserID, callerUser)
+	}
+	if got.ProjectID == nil || *got.ProjectID != callerProject {
+		t.Errorf("ProjectID: got %v want caller stamp %v (must not be clobbered)", got.ProjectID, callerProject)
+	}
+}
+
+// TestUsageRecordingLLM_FullContextSkipsResolver verifies a fully stamped
+// context passes through unchanged and never triggers a resolver DB lookup.
+func TestUsageRecordingLLM_FullContextSkipsResolver(t *testing.T) {
+	rec := &captureRecorder{}
+	otherOrg := uuid.New()
+	resolver := &resolverStub{
+		uc: &model.UsageContext{OrgID: &otherOrg, UserID: &otherOrg, ProjectID: &otherOrg},
+	}
+	llm := &stubLLM{
+		name: "openai",
+		resp: &CompletionResponse{Model: "gpt-4o", Usage: TokenUsage{PromptTokens: 5}},
+	}
+	w := NewUsageRecordingLLM(llm, rec, resolver)
+
+	orgID := uuid.New()
+	userID := uuid.New()
+	projectID := uuid.New()
+	ns := uuid.New()
+	ctx := WithOperation(context.Background(), OperationFactExtraction)
+	ctx = WithUsageContext(ctx, &model.UsageContext{OrgID: &orgID, UserID: &userID, ProjectID: &projectID})
+	ctx = WithNamespaceID(ctx, ns)
+
+	_, _ = w.Complete(ctx, &CompletionRequest{Model: "gpt-4o"})
+
+	got := rec.last()
+	if got == nil {
+		t.Fatal("expected a recorded row")
+	}
+	if resolver.calls != 0 {
+		t.Errorf("expected no resolver lookup for a full context, got %d", resolver.calls)
+	}
+	if got.OrgID == nil || *got.OrgID != orgID {
+		t.Errorf("OrgID: got %v want %v", got.OrgID, orgID)
+	}
+	if got.UserID == nil || *got.UserID != userID {
+		t.Errorf("UserID mismatch")
+	}
+	if got.ProjectID == nil || *got.ProjectID != projectID {
+		t.Errorf("ProjectID mismatch")
 	}
 }
 
