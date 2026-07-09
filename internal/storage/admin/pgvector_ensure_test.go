@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +15,17 @@ import (
 	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/storage"
 )
+
+// withDatabase returns dsn rewritten to point at a different database name,
+// preserving the user, host, port, and query (sslmode) of the original.
+func withDatabase(dsn, dbName string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + dbName
+	return u.String(), nil
+}
 
 // TestVectorDimsMatchPreflightTables is the drift guard: every vector table that
 // EnsureVectorTables provisions from storage.OrderedVectorDimensions must appear
@@ -71,38 +83,58 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 
 // TestEnsureVectorTables_SelfHealsTrap drives the degenerate "migrated without
 // pgvector, enabled it later" trap against a live pgvector Postgres (gated on
-// PGVECTOR_TEST_DSN, which must point at a throwaway superuser database):
-// migrations record 000006/000007 as applied, the vector tables are then dropped
-// to reproduce the trap, and EnsureVectorTables must recreate all twelve at the
-// current schema (memory vectors carrying facet_id) idempotently.
+// PGVECTOR_TEST_DSN, whose role must be able to CREATE DATABASE + CREATE
+// EXTENSION vector): migrations record 000006/000007 as applied, the vector
+// tables are then dropped to reproduce the trap, and EnsureVectorTables must
+// recreate all twelve at the current schema (memory vectors carrying facet_id)
+// idempotently.
+//
+// It runs on a dedicated throwaway database it creates and drops, because it
+// destructively resets and re-migrates the whole schema — doing that on the
+// shared PGVECTOR_TEST_DSN database would collide with the other integration
+// tests that run concurrently (Go runs package test binaries in parallel). A
+// separate database also isolates the migrator's pg_advisory_lock(1).
 func TestEnsureVectorTables_SelfHealsTrap(t *testing.T) {
 	dsn := os.Getenv("PGVECTOR_TEST_DSN")
 	if dsn == "" {
-		t.Skip("set PGVECTOR_TEST_DSN (throwaway superuser pgvector database) to run the self-heal test")
+		t.Skip("set PGVECTOR_TEST_DSN (CREATEDB + superuser pgvector server) to run the self-heal test")
 	}
 	ctx := context.Background()
-	db, err := sql.Open("pgx", dsn)
+
+	const tmpDB = "nram_selfheal_test"
+	admin, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open pgvector dsn: %v", err)
 	}
+	_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+tmpDB+" WITH (FORCE)")
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+tmpDB); err != nil {
+		_ = admin.Close()
+		t.Skipf("cannot create throwaway database (role needs CREATEDB): %v", err)
+	}
+	_ = admin.Close()
+	t.Cleanup(func() {
+		c, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = c.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+tmpDB+" WITH (FORCE)")
+	})
+
+	tmpDSN, err := withDatabase(dsn, tmpDB)
+	if err != nil {
+		t.Fatalf("derive throwaway dsn: %v", err)
+	}
+	db, err := sql.Open("pgx", tmpDSN)
+	if err != nil {
+		t.Fatalf("open throwaway db: %v", err)
+	}
 	defer func() { _ = db.Close() }()
 
-	// Clean slate: drop every nram table plus schema_migrations so the migrator
-	// starts from zero on this throwaway DB.
-	existing, err := existingNramTables(ctx, db)
-	if err != nil {
-		t.Fatalf("enumerate tables: %v", err)
-	}
-	for _, tbl := range existing {
-		if _, err := db.Exec("DROP TABLE IF EXISTS " + quoteIdent(tbl) + " CASCADE"); err != nil {
-			t.Fatalf("drop %s: %v", tbl, err)
-		}
-	}
-	_, _ = db.Exec("DROP TABLE IF EXISTS schema_migrations")
-
-	// Enable pgvector (role must be a superuser) and apply the full schema.
+	// Enable pgvector (role must be a superuser) and apply the full schema on the
+	// fresh, isolated database.
 	if err := EnsurePgvector(ctx, db); err != nil {
-		t.Fatalf("EnsurePgvector: %v (PGVECTOR_TEST_DSN role must be able to CREATE EXTENSION vector)", err)
+		t.Fatalf("EnsurePgvector: %v (role must be able to CREATE EXTENSION vector)", err)
 	}
 	mg, err := migration.NewMigrator(db, "postgres")
 	if err != nil {
