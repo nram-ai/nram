@@ -41,13 +41,7 @@ func (s *AskService) decomposeQuery(
 
 	user := provider.Fence("question", strings.TrimSpace(req.Query))
 
-	pid := primaryProjectID
-	uc := &model.UsageContext{UserID: req.UserID, ProjectID: &pid}
-	if req.OrgID != uuid.Nil {
-		org := req.OrgID
-		uc.OrgID = &org
-	}
-	usageCtx := provider.WithUsageContext(ctx, uc)
+	usageCtx := provider.WithUsageContext(ctx, model.NewUsageContext(req.UserID, primaryProjectID, req.OrgID))
 	usageCtx = provider.WithNamespaceID(usageCtx, primaryNS)
 	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)
 	usageCtx = provider.WithOperation(usageCtx, provider.OperationAskSynthesis)

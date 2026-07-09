@@ -242,12 +242,7 @@ func (s *ExtractionService) Extract(ctx context.Context, req *StoreRequest) (*Ex
 	// Stamp ownership/correlation context once so the UsageRecordingProvider
 	// middleware can attribute every downstream provider call to the right
 	// org/user/project/namespace/api-key/memory without a per-call DB hit.
-	projectIDForCtx := project.ID
-	usageCtx := provider.WithUsageContext(ctx, &model.UsageContext{
-		OrgID:     req.OrgID,
-		UserID:    req.UserID,
-		ProjectID: &projectIDForCtx,
-	})
+	usageCtx := provider.WithUsageContext(ctx, model.NewUsageContextPtr(req.UserID, project.ID, req.OrgID))
 	usageCtx = provider.WithNamespaceID(usageCtx, ns.ID)
 	usageCtx = provider.WithMemoryID(usageCtx, rawMemID)
 	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)

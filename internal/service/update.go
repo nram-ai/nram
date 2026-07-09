@@ -276,12 +276,7 @@ func (s *UpdateService) updateSupersede(
 		ep := s.embedProvider()
 		if ep != nil {
 			dim := bestEmbeddingDimension(ep.Dimensions())
-			projectIDForCtx := project.ID
-			embCtx := provider.WithUsageContext(ctx, &model.UsageContext{
-				OrgID:     req.OrgID,
-				UserID:    req.UserID,
-				ProjectID: &projectIDForCtx,
-			})
+			embCtx := provider.WithUsageContext(ctx, model.NewUsageContextPtr(req.UserID, project.ID, req.OrgID))
 			embCtx = provider.WithNamespaceID(embCtx, mem.NamespaceID)
 			embCtx = provider.WithMemoryID(embCtx, newID)
 			embCtx = provider.WithAPIKeyID(embCtx, req.APIKeyID)

@@ -26,6 +26,17 @@ func NewUsageContext(userID *uuid.UUID, projectID, orgID uuid.UUID) *UsageContex
 	return uc
 }
 
+// NewUsageContextPtr is a convenience wrapper for callers whose orgID is a
+// pointer (nil = no org). It applies the same NULL-org drop rule as
+// NewUsageContext.
+func NewUsageContextPtr(userID *uuid.UUID, projectID uuid.UUID, orgID *uuid.UUID) *UsageContext {
+	var org uuid.UUID
+	if orgID != nil {
+		org = *orgID
+	}
+	return NewUsageContext(userID, projectID, org)
+}
+
 type TokenUsage struct {
 	ID           uuid.UUID  `json:"id"`
 	OrgID        *uuid.UUID `json:"org_id"`
