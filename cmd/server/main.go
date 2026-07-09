@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -150,6 +151,17 @@ func main() {
 
 	// Auto-migrate on startup if configured.
 	if cfg.Database.MigrateOnStart {
+		// On Postgres, enable pgvector before migrations create the vector
+		// tables so the startup path fails fast with an actionable message
+		// instead of the opaque `type "vector" does not exist`. A genuinely
+		// absent extension (ErrPgvectorUnavailable) is not fatal here: the
+		// migration guards skip the vector tables and the vector-store boot
+		// guard below refuses to serve a degraded deployment.
+		if db.Backend() == storage.BackendPostgres {
+			if err := adminstore.EnsurePgvector(context.Background(), db.WriteDB()); err != nil && !errors.Is(err, adminstore.ErrPgvectorUnavailable) {
+				log.Fatalf("boot: %v", err)
+			}
+		}
 		m, err := migration.NewMigrator(db.WriteDB(), db.Backend())
 		if err != nil {
 			log.Fatalf("failed to create migrator: %v", err)
@@ -517,14 +529,27 @@ func main() {
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendPostgres && cfg.Database.URL != "" {
-		pgvStore, pgvErr := storage.NewPgVectorStore(cfg.Database.URL)
-		if pgvErr != nil {
-			slog.Warn("boot: pgvector connection failed, vector search disabled", "err", pgvErr)
+		// Enable pgvector and self-heal the vector tables before adopting the
+		// store. golang-migrate will not re-create the vector tables once
+		// 000006/000007 are recorded as applied (even if their guard skipped
+		// them while pgvector was unavailable), so EnsureVectorTables closes
+		// that trap. If the extension cannot be enabled or the tables cannot be
+		// ensured, leave vectorStore nil so the boot guard below refuses to
+		// serve a degraded, non-self-healing Postgres deployment.
+		if err := adminstore.EnsurePgvector(bootCtx, db.WriteDB()); err != nil {
+			slog.Warn("boot: pgvector not enabled, vector search unavailable", "err", err)
+		} else if err := adminstore.EnsureVectorTables(bootCtx, db.WriteDB()); err != nil {
+			slog.Warn("boot: could not ensure pgvector tables, vector search unavailable", "err", err)
 		} else {
-			vectorStore = pgvStore
-			pgvStore.SetMaxFacetsResolver(maxFacetsResolver)
-			pgvStore.SetFacetGate(facetsEnabledResolver, facetPresenceTTLResolver)
-			slog.Info("boot: pgvector store initialized")
+			pgvStore, pgvErr := storage.NewPgVectorStore(cfg.Database.URL)
+			if pgvErr != nil {
+				slog.Warn("boot: pgvector connection failed, vector search disabled", "err", pgvErr)
+			} else {
+				vectorStore = pgvStore
+				pgvStore.SetMaxFacetsResolver(maxFacetsResolver)
+				pgvStore.SetFacetGate(facetsEnabledResolver, facetPresenceTTLResolver)
+				slog.Info("boot: pgvector store initialized")
+			}
 		}
 	}
 	if vectorStore == nil && db.Backend() == storage.BackendSQLite {
@@ -536,6 +561,14 @@ func main() {
 		slog.Info("boot: hnsw vector store initialized (SQLite backend)",
 			"m", hnswCfg.M, "ef_construction", hnswCfg.EfConstruction,
 			"ef_search", hnswCfg.EfSearch, "max_loaded", hnswCfg.MaxLoadedIndexes)
+	}
+
+	// Boot guard: a Postgres backend with no usable vector store is a degraded,
+	// non-self-healing dead-end (HNSW is SQLite-only, so recall would silently
+	// have no vectors). Refuse to serve so the operator enables pgvector or
+	// configures Qdrant rather than discovering it via failing recalls later.
+	if vectorStore == nil && db.Backend() == storage.BackendPostgres {
+		log.Fatalf("boot: Postgres backend has no usable vector store; enable pgvector (CREATE EXTENSION vector, then restart) or configure Qdrant (Admin -> Settings -> Vector Database). Vector recall is unavailable otherwise.")
 	}
 
 	// Activation guard: if Qdrant is the active store but holds no memory

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -275,6 +276,22 @@ func newDataMigrator(ctx context.Context, src *sql.DB, targetURL string) (*DataM
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
+	// Ensure pgvector is enabled before the schema migrations create the vector
+	// tables, turning the opaque `type "vector" does not exist` failure into a
+	// clean auto-enable (when the role can) or an actionable error. When
+	// pgvector is genuinely absent, proceed in text-only mode: the migration
+	// guards skip the vector tables, matching the pre-existing no-pgvector
+	// Postgres support and the embedded-postgres migrator tests.
+	pgvEnabled := false
+	if err := EnsurePgvector(ctx, dst); err != nil {
+		if !errors.Is(err, ErrPgvectorUnavailable) {
+			_ = dst.Close()
+			return nil, err
+		}
+	} else {
+		pgvEnabled = true
+	}
+
 	// Run schema migrations on the target database.
 	mg, err := migration.NewMigrator(dst, storage.BackendPostgres)
 	if err != nil {
@@ -287,6 +304,17 @@ func newDataMigrator(ctx context.Context, src *sql.DB, targetURL string) (*DataM
 		return nil, fmt.Errorf("postgres migrations: %w", err)
 	}
 	_ = mg.Close()
+
+	// Self-heal the vector tables when pgvector is enabled: golang-migrate will
+	// not re-run 000006/000007 if they were recorded as applied while pgvector
+	// was unavailable, so re-migrating into such a target would otherwise leave
+	// the vector tables missing and the subsequent vector copy would fail.
+	if pgvEnabled {
+		if err := EnsureVectorTables(ctx, dst); err != nil {
+			_ = dst.Close()
+			return nil, err
+		}
+	}
 
 	return &DataMigrator{
 		src:                src,

@@ -8,9 +8,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver
 	"github.com/nram-ai/nram/internal/api"
+	"github.com/nram-ai/nram/internal/storage"
 )
+
+// ErrPgvectorUnavailable is returned by EnsurePgvector when the pgvector
+// extension is not installed on the server at all (not merely disabled). It is
+// a sentinel so callers can distinguish "operator has no pgvector, run in
+// text-only / Qdrant-backed mode" from "pgvector is present but the connecting
+// role cannot enable it" (the latter is a hard, actionable failure).
+var ErrPgvectorUnavailable = errors.New("pgvector extension is not available on this server")
+
+// pgvectorHNSWMaxDims is pgvector's HNSW/IVFFlat index dimension ceiling; tables
+// wider than this (3072) use sequential scan, matching migrations 000006/000007.
+// The dimension set itself is storage.OrderedVectorDimensions (the canonical list).
+const pgvectorHNSWMaxDims = 2000
 
 // preflightTables enumerates every table nram would populate on a
 // SQLite→Postgres migration. Used for target-state checks and reset operations.
@@ -177,27 +191,37 @@ func checkServerVersion(ctx context.Context, db *sql.DB) api.PreflightCheck {
 // If missing but available, returns an error with CREATE EXTENSION remediation.
 // If unavailable entirely, returns an error with install-at-OS-level remediation.
 func checkPgvector(ctx context.Context, db *sql.DB) api.PreflightCheck {
-	var installedVersion sql.NullString
-	err := db.QueryRowContext(ctx, "SELECT extversion FROM pg_extension WHERE extname = 'vector'").Scan(&installedVersion)
-	if err == nil && installedVersion.Valid {
+	if version, enabled, err := pgvectorEnabled(ctx, db); err == nil && enabled {
 		return api.PreflightCheck{
 			Name:    "pgvector",
 			Status:  api.PreflightStatusOK,
-			Message: fmt.Sprintf("pgvector %s enabled", installedVersion.String),
+			Message: fmt.Sprintf("pgvector %s enabled", version),
 		}
 	}
 
-	// Not installed in this DB. Is it available on the server?
-	var availableVersion sql.NullString
-	availErr := db.QueryRowContext(ctx,
-		"SELECT default_version FROM pg_available_extensions WHERE name = 'vector'",
-	).Scan(&availableVersion)
-	if availErr == nil && availableVersion.Valid {
+	// Not enabled in this DB. Is it available on the server?
+	if available, ok, err := pgvectorAvailable(ctx, db); err == nil && ok {
+		// pgvector is a non-trusted extension (verified against pgvector 0.8.2's
+		// vector.control, which carries no `trusted = true`), so CREATE EXTENSION
+		// requires a superuser. Probe rolsuper to tell the operator up front
+		// whether nram can auto-enable it during migration (EnsurePgvector) or
+		// whether a superuser must run CREATE EXTENSION first. If a future
+		// pgvector ships trusted, this advisory signal needs refining; the
+		// migration path (EnsurePgvector) is empirical and stays correct either way.
+		user, isSuper, _ := roleSuperuser(ctx, db)
+		if isSuper {
+			return api.PreflightCheck{
+				Name:        "pgvector",
+				Status:      api.PreflightStatusWarn,
+				Message:     fmt.Sprintf("pgvector %s is available but not enabled; nram will enable it during migration", available),
+				Remediation: fmt.Sprintf("No action needed: %s is a superuser, so nram runs CREATE EXTENSION vector automatically.", roleDesc(user)),
+			}
+		}
 		return api.PreflightCheck{
 			Name:        "pgvector",
 			Status:      api.PreflightStatusError,
-			Message:     fmt.Sprintf("pgvector %s is available but not enabled on this database", availableVersion.String),
-			Remediation: "Run: CREATE EXTENSION vector; (requires superuser or a role with CREATEEXTENSION privilege).",
+			Message:     fmt.Sprintf("pgvector %s is available but not enabled, and %s cannot create it", available, roleDesc(user)),
+			Remediation: "Have a superuser run: CREATE EXTENSION vector; (pgvector is not a trusted extension, so a non-superuser cannot create it).",
 		}
 	}
 
@@ -207,6 +231,190 @@ func checkPgvector(ctx context.Context, db *sql.DB) api.PreflightCheck {
 		Message:     "pgvector extension is not available on this server",
 		Remediation: "Install the pgvector package at the OS level (e.g. apt-get install postgresql-16-pgvector) and restart Postgres, then CREATE EXTENSION vector.",
 	}
+}
+
+// pgvectorEnabled reports whether the pgvector extension is enabled (created) in
+// the connected database, returning its version. The single source of the
+// "is pgvector enabled?" query shared by the preflight and the ensure paths.
+func pgvectorEnabled(ctx context.Context, db *sql.DB) (version string, enabled bool, err error) {
+	var v sql.NullString
+	err = db.QueryRowContext(ctx, "SELECT extversion FROM pg_extension WHERE extname = 'vector'").Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return v.String, v.Valid, err
+}
+
+// pgvectorAvailable reports whether the pgvector extension is available to
+// install on the server (present in pg_available_extensions), returning its
+// default version.
+func pgvectorAvailable(ctx context.Context, db *sql.DB) (version string, available bool, err error) {
+	var v sql.NullString
+	err = db.QueryRowContext(ctx, "SELECT default_version FROM pg_available_extensions WHERE name = 'vector'").Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return v.String, v.Valid, err
+}
+
+// roleDesc renders a role for an operator-facing message, falling back to a
+// generic phrase when the role name is unknown (roleSuperuser returns "" on error).
+func roleDesc(user string) string {
+	if user == "" {
+		return "the connecting role"
+	}
+	return fmt.Sprintf("role %q", user)
+}
+
+// roleSuperuser reports the connecting role's name and whether it is a Postgres
+// superuser. pgvector is a non-trusted extension, so only a superuser may
+// CREATE EXTENSION vector; this is the proactive "can we enable it?" probe.
+func roleSuperuser(ctx context.Context, db *sql.DB) (string, bool, error) {
+	var user string
+	var isSuper bool
+	err := db.QueryRowContext(ctx,
+		"SELECT current_user, COALESCE(rolsuper, false) FROM pg_roles WHERE rolname = current_user",
+	).Scan(&user, &isSuper)
+	return user, isSuper, err
+}
+
+// EnsurePgvector guarantees the pgvector extension is enabled on the target
+// Postgres database before schema migrations that use the `vector` type run,
+// turning the note's opaque `type "vector" does not exist` failure into either a
+// clean auto-enable or an actionable error.
+//
+// Contract: a nil return means the extension IS enabled on exit. Behavior:
+//   - Already enabled: no-op, nil.
+//   - Available but not enabled: attempts CREATE EXTENSION IF NOT EXISTS vector.
+//     Succeeds when the connecting role may create it (superuser); on
+//     insufficient_privilege (SQLSTATE 42501) returns an actionable error naming
+//     the fix (have a superuser run CREATE EXTENSION vector).
+//   - Not available on the server at all: returns ErrPgvectorUnavailable so
+//     callers can choose to proceed in text-only / Qdrant-backed mode (the
+//     migration guards skip the vector tables) rather than treat it as fatal.
+//
+// It must run before golang-migrate's Up(), which takes pg_advisory_lock(1);
+// EnsurePgvector holds no such lock.
+func EnsurePgvector(ctx context.Context, db *sql.DB) error {
+	if _, enabled, err := pgvectorEnabled(ctx, db); err == nil && enabled {
+		return nil // already enabled
+	}
+
+	available, ok, err := pgvectorAvailable(ctx, db)
+	if err != nil || !ok {
+		return ErrPgvectorUnavailable
+	}
+
+	// Available but not enabled: try to create it. IF NOT EXISTS keeps this
+	// idempotent under a race with a concurrent creator.
+	if _, err := db.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42501" { // insufficient_privilege
+			user, _, _ := roleSuperuser(ctx, db)
+			return fmt.Errorf("pgvector %s is available but not enabled and %s cannot create it: have a superuser run CREATE EXTENSION vector (pgvector is not a trusted extension, so creation requires superuser)", available, roleDesc(user))
+		}
+		return fmt.Errorf("enable pgvector: %w", err)
+	}
+	return nil
+}
+
+// EnsureVectorTables idempotently (re)creates every memory_vectors_<dim> and
+// entity_vectors_<dim> table at its current schema (memory vectors carry the
+// facet_id column and (memory_id, facet_id) primary key added in migration
+// 000057). It self-heals the "migrated without pgvector, enabled it later" trap:
+// golang-migrate records 000006/000007 as applied even when their
+// pg_available_extensions guard skipped the tables, and never re-runs them, so
+// nothing else recreates the vector tables once the extension is finally enabled.
+//
+// The caller must ensure the pgvector extension is enabled first (e.g. via
+// EnsurePgvector returning nil); EnsureVectorTables re-checks and returns an
+// error rather than emitting the opaque `type "vector" does not exist`.
+//
+// Each table is created only when it is actually MISSING (checked via
+// to_regclass). This matters because Postgres checks the CREATE-on-schema
+// privilege BEFORE the IF NOT EXISTS existence check, so issuing CREATE TABLE
+// unconditionally would fail with "permission denied for schema" on every boot
+// for a non-superuser role that lacks CREATE on the schema (the common PG15+
+// default) even though the tables already exist. Skipping present tables keeps
+// the steady-state boot a pure read: it needs CREATE privilege only in the
+// genuine self-heal case, where table creation is unavoidable anyway.
+func EnsureVectorTables(ctx context.Context, db *sql.DB) error {
+	if _, enabled, err := pgvectorEnabled(ctx, db); err != nil || !enabled {
+		return fmt.Errorf("cannot ensure vector tables: pgvector extension is not enabled")
+	}
+
+	// One round-trip to learn which vector tables already exist, so steady-state
+	// boots issue zero DDL (see the doc comment: unconditional CREATE would trip
+	// the schema-CREATE privilege check for non-superuser roles).
+	present, err := existingVectorTables(ctx, db)
+	if err != nil {
+		return fmt.Errorf("list vector tables: %w", err)
+	}
+
+	for _, dim := range storage.OrderedVectorDimensions {
+		specs := []struct{ table, createDDL, index string }{
+			{
+				table: fmt.Sprintf("memory_vectors_%d", dim),
+				createDDL: fmt.Sprintf(`CREATE TABLE memory_vectors_%d (
+					memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+					embedding vector(%d) NOT NULL,
+					facet_id smallint NOT NULL DEFAULT 0,
+					PRIMARY KEY (memory_id, facet_id)
+				)`, dim, dim),
+				index: fmt.Sprintf("idx_mv_%d_hnsw", dim),
+			},
+			{
+				table: fmt.Sprintf("entity_vectors_%d", dim),
+				createDDL: fmt.Sprintf(`CREATE TABLE entity_vectors_%d (
+					entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+					embedding vector(%d) NOT NULL
+				)`, dim, dim),
+				index: fmt.Sprintf("idx_ev_%d_hnsw", dim),
+			},
+		}
+		for _, s := range specs {
+			if present[s.table] {
+				continue // no DDL, so no CREATE-on-schema privilege needed
+			}
+			stmts := []string{s.createDDL}
+			// pgvector's HNSW index supports up to pgvectorHNSWMaxDims dimensions;
+			// wider tables (3072) rely on sequential scan, matching 000006/000007.
+			// Index names match the migrations.
+			if dim <= pgvectorHNSWMaxDims {
+				stmts = append(stmts, fmt.Sprintf(`CREATE INDEX %s ON %s USING hnsw (embedding vector_cosine_ops)`, s.index, s.table))
+			}
+			for _, stmt := range stmts {
+				if _, err := db.ExecContext(ctx, stmt); err != nil {
+					return fmt.Errorf("ensure %s: %w", s.table, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// existingVectorTables returns the set of memory_vectors_<dim>/entity_vectors_<dim>
+// tables present in the connection's current schema, in a single query so
+// EnsureVectorTables can gate DDL without a per-table round-trip.
+func existingVectorTables(ctx context.Context, db *sql.DB) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT tablename FROM pg_tables
+		WHERE schemaname = current_schema()
+		  AND (tablename LIKE 'memory_vectors_%' OR tablename LIKE 'entity_vectors_%')`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	present := make(map[string]bool)
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		present[t] = true
+	}
+	return present, rows.Err()
 }
 
 // checkPrivileges verifies the current role has CREATE privilege on the current schema.
