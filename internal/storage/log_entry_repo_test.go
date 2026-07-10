@@ -3,9 +3,11 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
 )
 
@@ -99,6 +101,92 @@ func TestLogEntryRepo_BatchCreateAndFilters(t *testing.T) {
 		page, err := repo.List(ctx, LogFilter{}, 1, 1)
 		if err != nil || len(page) != 1 || page[0].Message != "budget low" {
 			t.Fatalf("pagination: got %d err %v", len(page), err)
+		}
+	})
+}
+
+func TestLogEntryRepo_ListKeyset(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		resetLogEntries(t, ctx, db)
+		repo := NewLogEntryRepo(db)
+
+		base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+		var entries []*model.LogEntry
+		// Three rows share the exact same ts to exercise the (ts, id) tiebreak.
+		for i := range 3 {
+			entries = append(entries, &model.LogEntry{
+				ID: uuid.New(), Timestamp: base, Level: model.LogLevelInfo,
+				Component: "shared", Message: fmt.Sprintf("tie %d", i),
+				Attrs: json.RawMessage(`{}`),
+			})
+		}
+		// Distinct-ts rows on both sides of the shared instant.
+		offsets := []time.Duration{-2 * time.Minute, -1 * time.Minute, 1 * time.Minute, 2 * time.Minute, 3 * time.Minute}
+		for i, off := range offsets {
+			entries = append(entries, &model.LogEntry{
+				ID: uuid.New(), Timestamp: base.Add(off), Level: model.LogLevelInfo,
+				Component: "spread", Message: fmt.Sprintf("row %d", i),
+				Attrs: json.RawMessage(`{}`),
+			})
+		}
+		if err := repo.BatchCreate(ctx, entries); err != nil {
+			t.Fatalf("batch create: %v", err)
+		}
+		total := len(entries)
+
+		// Reference: the whole set in a single page.
+		want, err := repo.ListKeyset(ctx, LogFilter{}, nil, 1000)
+		if err != nil {
+			t.Fatalf("keyset full: %v", err)
+		}
+		if len(want) != total {
+			t.Fatalf("full scan: want %d rows, got %d", total, len(want))
+		}
+		// Ordering invariant: strictly descending by (ts, id). Lexical id
+		// comparison matches Postgres UUID ordering (canonical lowercase form)
+		// and the SQLite TEXT column, so the check holds on both backends.
+		for i := 1; i < len(want); i++ {
+			prev, cur := want[i-1], want[i]
+			if cur.Timestamp.After(prev.Timestamp) ||
+				(cur.Timestamp.Equal(prev.Timestamp) && cur.ID.String() >= prev.ID.String()) {
+				t.Fatalf("not strictly (ts DESC, id DESC) at %d: %v/%s then %v/%s",
+					i, prev.Timestamp, prev.ID, cur.Timestamp, cur.ID)
+			}
+		}
+
+		// Paging with a small limit must reproduce the same sequence exactly,
+		// with no gaps and no duplicates.
+		var paged []model.LogEntry
+		var cursor *LogCursor
+		for {
+			batch, err := repo.ListKeyset(ctx, LogFilter{}, cursor, 2)
+			if err != nil {
+				t.Fatalf("keyset page: %v", err)
+			}
+			paged = append(paged, batch...)
+			if len(batch) < 2 {
+				break
+			}
+			last := batch[len(batch)-1]
+			cursor = &LogCursor{TS: last.Timestamp, ID: last.ID}
+		}
+		if len(paged) != total {
+			t.Fatalf("paged: want %d rows, got %d", total, len(paged))
+		}
+		for i := range want {
+			if paged[i].ID != want[i].ID {
+				t.Fatalf("paged sequence diverges at %d: want %s, got %s", i, want[i].ID, paged[i].ID)
+			}
+		}
+
+		// A filter still narrows the keyset walk.
+		spread, err := repo.ListKeyset(ctx, LogFilter{Component: "spread"}, nil, 1000)
+		if err != nil {
+			t.Fatalf("keyset filtered: %v", err)
+		}
+		if len(spread) != len(offsets) {
+			t.Fatalf("filtered: want %d rows, got %d", len(offsets), len(spread))
 		}
 	})
 }

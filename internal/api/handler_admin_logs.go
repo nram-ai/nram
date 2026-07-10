@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 // *storage.LogEntryRepo satisfies it.
 type LogAdminStore interface {
 	List(ctx context.Context, f storage.LogFilter, limit, offset int) ([]model.LogEntry, error)
+	ListKeyset(ctx context.Context, f storage.LogFilter, cursor *storage.LogCursor, limit int) ([]model.LogEntry, error)
 	Count(ctx context.Context, f storage.LogFilter) (int, error)
 	Components(ctx context.Context) ([]string, error)
 }
@@ -28,10 +31,11 @@ type LogAdminConfig struct {
 const (
 	logsDefaultLimit = 100
 	logsMaxLimit     = 500
-	// logsExportMax bounds an export so a single request cannot load the whole
-	// rolling window into memory. When hit, the response is truncated and a
-	// header + log line flag it rather than silently capping.
-	logsExportMax = 50000
+	// logsExportPageSize is how many rows the streaming export pulls per DB
+	// page. The export pages through the whole result set with a keyset cursor
+	// and writes each page straight to the response, so peak memory is one page
+	// regardless of how large the filtered window is.
+	logsExportPageSize = 5000
 )
 
 // logFacetsResponse lists the values available for the Logs page filter
@@ -162,31 +166,62 @@ func handleAdminExportLogs(w http.ResponseWriter, r *http.Request, store LogAdmi
 	}
 
 	f := parseLogFilter(r)
-	// Fetch one past the cap so truncation is detectable.
-	entries, err := store.List(r.Context(), f, logsExportMax+1, 0)
+	// Fetch the first page before writing any status so an early DB error still
+	// surfaces as a real 500. Once the first byte of the body is written the
+	// response is committed, so a later-page error can only be logged and the
+	// body cut short.
+	first, err := store.ListKeyset(r.Context(), f, nil, logsExportPageSize)
 	if err != nil {
 		WriteError(w, ErrInternal("failed to export logs"))
 		return
 	}
-	truncated := len(entries) > logsExportMax
-	if truncated {
-		entries = entries[:logsExportMax]
-		w.Header().Set("X-Truncated", "true")
-	}
 
 	stamp := time.Now().UTC().Format("20060102-150405")
 	if format == "json" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="logs-`+stamp+`.json"`)
-		writeJSON(w, http.StatusOK, entries)
+		streamLogsJSON(w, r.Context(), store, f, first)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="logs-`+stamp+`.csv"`)
+	streamLogsCSV(w, r.Context(), store, f, first)
+}
+
+// exportLogPages walks the keyset-paged result set, invoking emit for every row
+// and afterPage once per page (the flush point). The first page is fetched by
+// the caller (so an early error can still set a 500); subsequent pages are
+// pulled here. A mid-stream DB error is logged and ends the walk, since the
+// response body is already committed by then.
+func exportLogPages(ctx context.Context, store LogAdminStore, f storage.LogFilter, first []model.LogEntry, emit func(model.LogEntry), afterPage func()) {
+	batch := first
+	for {
+		for _, e := range batch {
+			emit(e)
+		}
+		if afterPage != nil {
+			afterPage()
+		}
+		if len(batch) < logsExportPageSize {
+			return
+		}
+		last := batch[len(batch)-1]
+		next, err := store.ListKeyset(ctx, f, &storage.LogCursor{TS: last.Timestamp, ID: last.ID}, logsExportPageSize)
+		if err != nil {
+			slog.Error("api: log export paging failed mid-stream", "err", err)
+			return
+		}
+		batch = next
+	}
+}
+
+func streamLogsCSV(w http.ResponseWriter, ctx context.Context, store LogAdminStore, f storage.LogFilter, first []model.LogEntry) {
 	w.WriteHeader(http.StatusOK)
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"ts", "level", "component", "message", "attrs", "project_id", "namespace_id", "user_id"})
-	for _, e := range entries {
+	flusher, _ := w.(http.Flusher)
+	emit := func(e model.LogEntry) {
 		_ = cw.Write([]string{
 			e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.Level,
@@ -198,7 +233,38 @@ func handleAdminExportLogs(w http.ResponseWriter, r *http.Request, store LogAdmi
 			uuidPtrString(e.UserID),
 		})
 	}
+	exportLogPages(ctx, store, f, first, emit, func() {
+		cw.Flush()
+		if flusher != nil {
+			flusher.Flush()
+		}
+	})
 	cw.Flush()
+}
+
+func streamLogsJSON(w http.ResponseWriter, ctx context.Context, store LogAdminStore, f storage.LogFilter, first []model.LogEntry) {
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	_, _ = w.Write([]byte("["))
+	firstRow := true
+	emit := func(e model.LogEntry) {
+		row, err := json.Marshal(e)
+		if err != nil {
+			slog.Error("api: log export row marshal failed", "err", err)
+			return
+		}
+		if !firstRow {
+			_, _ = w.Write([]byte(","))
+		}
+		firstRow = false
+		_, _ = w.Write(row)
+	}
+	exportLogPages(ctx, store, f, first, emit, func() {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	})
+	_, _ = w.Write([]byte("]"))
 }
 
 func uuidPtrString(id *uuid.UUID) string {

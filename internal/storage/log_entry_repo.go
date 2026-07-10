@@ -108,6 +108,47 @@ func (r *LogEntryRepo) List(ctx context.Context, f LogFilter, limit, offset int)
 	return scanLogEntries(rows)
 }
 
+// LogCursor is the keyset position for streaming exports: the (ts, id) of the
+// last row already emitted. ts alone is not unique (batch inserts can share a
+// timestamp), so id is the tiebreak.
+type LogCursor struct {
+	TS time.Time
+	ID uuid.UUID
+}
+
+// ListKeyset returns up to limit rows matching f, ordered ts DESC, id DESC,
+// strictly after cursor. A nil cursor starts from the newest row. Unlike List's
+// LIMIT/OFFSET paging, this is stable under concurrent inserts at the head of
+// the window (new logs land at the newest ts), which the streaming export in
+// the admin API relies on to page the full result set without skips or
+// duplicates. The (ts, id) comparison uses the same per-backend ordering as the
+// ORDER BY, keeping the two self-consistent: Postgres compares TIMESTAMPTZ/UUID
+// natively, SQLite compares the stored RFC3339Nano/UUID text lexically.
+func (r *LogEntryRepo) ListKeyset(ctx context.Context, f LogFilter, cursor *LogCursor, limit int) ([]model.LogEntry, error) {
+	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
+	r.applyFilter(wb, f)
+	if cursor != nil {
+		tsVal := cursor.TS.UTC().Format(time.RFC3339Nano)
+		tsLt := wb.bindOnly(tsVal)
+		tsEq := wb.bindOnly(tsVal)
+		idLt := wb.bindOnly(cursor.ID.String())
+		wb.clauses = append(wb.clauses,
+			"(ts < "+tsLt+" OR (ts = "+tsEq+" AND id < "+idLt+"))")
+	}
+
+	limitPH := wb.bindOnly(limit)
+
+	query := `SELECT ` + logEntryColumns + ` FROM log_entries` + whereClause(wb) +
+		` ORDER BY ts DESC, id DESC LIMIT ` + limitPH
+
+	rows, err := r.db.Query(ctx, query, wb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("log_entries list keyset: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanLogEntries(rows)
+}
+
 // Count returns the number of log entries matching the filter.
 func (r *LogEntryRepo) Count(ctx context.Context, f LogFilter) (int, error) {
 	wb := &whereBuilder{postgres: r.db.Backend() == BackendPostgres}
