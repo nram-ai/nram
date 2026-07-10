@@ -232,7 +232,7 @@ func (p *ParaphraseDedupPhase) Execute(ctx context.Context, cycle *model.DreamCy
 		}
 		visited++
 		if shouldEmitProgress(visited-1, len(eligible), progressStep) {
-			slog.Info("dreaming: paraphrase dedup progress",
+			slog.Debug("dreaming: paraphrase dedup progress",
 				"cycle", cycle.ID,
 				"anchor", visited, "of", len(eligible))
 		}

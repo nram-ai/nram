@@ -323,7 +323,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 			continue
 		}
 
-		slog.Info("dreaming: contradiction check",
+		slog.Debug("dreaming: contradiction check",
 			"cycle", cycle.ID, "pair", idx+1, "of", len(pairs),
 			"a", pair[0].ID, "b", pair[1].ID,
 			"found", found, "duration_ms", pairDur.Milliseconds(),

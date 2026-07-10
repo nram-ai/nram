@@ -210,7 +210,7 @@ func (p *WeightAdjustmentPhase) Execute(ctx context.Context, cycle *model.DreamC
 			if tracker != nil {
 				tracker.EmitPhaseProgress(ctx, i+1, len(rels), "relationships")
 			}
-			slog.Info("dreaming: weight adjust progress",
+			slog.Debug("dreaming: weight adjust progress",
 				"cycle", cycle.ID,
 				"relationship", i+1, "of", len(rels))
 		}

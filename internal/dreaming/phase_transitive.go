@@ -185,7 +185,7 @@ func (p *TransitivePhase) Execute(ctx context.Context, cycle *model.DreamCycle, 
 			if tracker != nil {
 				tracker.EmitPhaseProgress(ctx, entityIdx+1, len(entities), "entities")
 			}
-			slog.Info("dreaming: transitive progress",
+			slog.Debug("dreaming: transitive progress",
 				"cycle", cycle.ID,
 				"entity", entityIdx+1, "of", len(entities))
 		}

@@ -88,7 +88,7 @@ func (p *PruningPhase) Execute(ctx context.Context, cycle *model.DreamCycle, bud
 
 		// No "of": iterateMemoriesByNamespace streams via cursor and the
 		// namespace total is not known upfront.
-		slog.Info("dreaming: pruning progress",
+		slog.Debug("dreaming: pruning progress",
 			"cycle", cycle.ID, "batch_size", len(batch),
 			"visited", visited, "decayed", decayed, "pruned", pruned)
 		return nil

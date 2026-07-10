@@ -908,7 +908,7 @@ func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
 // breaker is allowed to probe again instead of hot-spinning.
 func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []*model.EnrichmentJob) time.Time {
 	started := time.Now()
-	slog.Info("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
+	slog.Debug("enrichment: batch claimed", "worker", workerID, "jobs", len(jobs))
 
 	preEmbedFanOut := max(wp.settings.ResolveIntWithDefault(ctx,
 		service.SettingEnrichmentWorkerLLMConcurrency, "global"), 1)
@@ -971,7 +971,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 			pendings = append(pendings, p)
 		}
 	}
-	slog.Info("enrichment: pre-embed done",
+	slog.Debug("enrichment: pre-embed done",
 		"worker", workerID,
 		"claimed", len(jobs),
 		"kept", len(pendings),
@@ -1025,7 +1025,7 @@ func (wp *WorkerPool) processBatch(ctx context.Context, workerID string, jobs []
 		wp.progress.JobCompleted(ctx, p.job.ID, p.job.MemoryID, p.job.NamespaceID,
 			workerID, startedAt, 0, 0, 0, err)
 	}
-	slog.Info("enrichment: batch done",
+	slog.Debug("enrichment: batch done",
 		"worker", workerID,
 		"jobs", len(jobs),
 		"finalized", len(pendings),
@@ -1944,7 +1944,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			}
 			copy(embeddings[start:end], vecs)
 		}
-		slog.Info("enrichment: embedded",
+		slog.Debug("enrichment: embedded",
 			"jobs", len(pendings),
 			"inputs", len(inputs),
 			"duration_ms", time.Since(embedStarted).Milliseconds(),
@@ -2021,7 +2021,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		}
 		return nil
 	}
-	slog.Info("enrichment: vectors upserted",
+	slog.Debug("enrichment: vectors upserted",
 		"jobs", len(pendings),
 		"items", len(items),
 		"duration_ms", time.Since(upsertStarted).Milliseconds(),
@@ -2128,7 +2128,7 @@ func (wp *WorkerPool) extractAndWriteFacets(ctx context.Context, fs storage.Face
 		}
 		// Structured line so the multi-vector pass is visible in the logs
 		// alongside the other enrichment phases (facets = facet 0 + topic facets).
-		slog.Info("enrichment: facets written", "memory", mem.ID, "facets", len(facets))
+		slog.Debug("enrichment: facets written", "memory", mem.ID, "facets", len(facets))
 	}
 	wp.stampFacetState(ctx, mem, len(facets))
 }

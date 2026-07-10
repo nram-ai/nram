@@ -421,7 +421,7 @@ func (p *ConsolidationPhase) reinforce(
 			callTokens = usage.TotalTokens
 		}
 		stats["alignment_calls"] = stats["alignment_calls"].(int) + 1
-		slog.Info("dreaming: alignment call",
+		slog.Debug("dreaming: alignment call",
 			"cycle", cycle.ID, "synthesis", synthesis.ID,
 			"alignment", visited, "of", len(stale),
 			"latency_ms", r.dur.Milliseconds(),
@@ -722,7 +722,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			p.demoteDream(ctx, logger, &mem, meta, "orphan_no_sources")
 			stats["orphans_demoted"] = stats["orphans_demoted"].(int) + 1
 			stats["demoted"] = stats["demoted"].(int) + 1
-			slog.Info("dreaming: backfill audit result",
+			slog.Debug("dreaming: backfill audit result",
 				"cycle", cycle.ID, "memory", mem.ID,
 				"audit", processed, "of", eligible,
 				"reason", "orphan_no_sources",
@@ -748,7 +748,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			p.demoteDream(ctx, logger, &mem, meta, "orphan_sources_missing")
 			stats["orphans_demoted"] = stats["orphans_demoted"].(int) + 1
 			stats["demoted"] = stats["demoted"].(int) + 1
-			slog.Info("dreaming: backfill audit result",
+			slog.Debug("dreaming: backfill audit result",
 				"cycle", cycle.ID, "memory", mem.ID,
 				"audit", processed, "of", eligible,
 				"reason", "orphan_sources_missing",
@@ -769,7 +769,7 @@ func (p *ConsolidationPhase) AuditExistingDreams(
 			stats["embedding_calls"] = stats["embedding_calls"].(int) + 1
 			stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 		}
-		slog.Info("dreaming: backfill audit result",
+		slog.Debug("dreaming: backfill audit result",
 			"cycle", cycle.ID, "memory", mem.ID,
 			"audit", processed, "of", eligible,
 			"reason", reason,
@@ -1459,7 +1459,7 @@ func (p *ConsolidationPhase) consolidate(
 			synthTokens = usage.TotalTokens
 		}
 		stats["synthesis_calls"] = stats["synthesis_calls"].(int) + 1
-		slog.Info("dreaming: synthesis call",
+		slog.Debug("dreaming: synthesis call",
 			"cycle", cycle.ID, "cluster_size", len(cluster),
 			"cluster", clustersVisited, "of", len(stale),
 			"latency_ms", r.synthDur.Milliseconds(),
@@ -1499,7 +1499,7 @@ func (p *ConsolidationPhase) consolidate(
 				stats["embedding_calls"] = stats["embedding_calls"].(int) + 1
 				stats["embedding_tokens_spent"] = stats["embedding_tokens_spent"].(int) + embedTokens
 			}
-			slog.Info("dreaming: synthesis novelty audit",
+			slog.Debug("dreaming: synthesis novelty audit",
 				"cycle", cycle.ID,
 				"cluster", clustersVisited, "of", len(stale),
 				"reason", reason, "passed", passed,

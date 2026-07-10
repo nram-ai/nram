@@ -147,7 +147,7 @@ func (p *EmbeddingBackfillPhase) Execute(ctx context.Context, cycle *model.Dream
 		for k := range toProcess {
 			visited++
 			if shouldEmitProgress(visited-1, cap, progressStep) {
-				slog.Info("dreaming: embedding backfill progress",
+				slog.Debug("dreaming: embedding backfill progress",
 					"cycle", cycle.ID, "dim", dim,
 					"memory", visited, "of", cap)
 			}

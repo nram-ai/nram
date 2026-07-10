@@ -222,7 +222,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 			"final_len", len(augmented))
 	}
 
-	slog.Info("enrichment: query_augment",
+	slog.Debug("enrichment: query_augment",
 		"job", job.ID,
 		"memory", mem.ID,
 		"queries", len(queries),

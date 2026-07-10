@@ -176,7 +176,7 @@ func (p *EntityDedupPhase) findAndMergeDuplicates(
 			if tracker != nil {
 				tracker.EmitPhaseProgress(ctx, i+1, len(entities), progressLabel)
 			}
-			slog.Info("dreaming: entity dedup progress",
+			slog.Debug("dreaming: entity dedup progress",
 				"cycle", cycle.ID, "type", entityType,
 				"entity", i+1, "of", len(entities))
 		}
