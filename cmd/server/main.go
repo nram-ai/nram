@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -31,6 +32,25 @@ import (
 	"github.com/nram-ai/nram/internal/ui"
 	"github.com/nram-ai/nram/internal/version"
 )
+
+// ensurePgvectorForMigrate enables pgvector before a forward Postgres migration
+// creates the vector(N) tables, so `nram migrate up` and the startup auto-migrate
+// never abort with the opaque `type "vector" does not exist` on a database where
+// pgvector is available but not yet enabled. A genuinely absent extension is not
+// fatal: the 000006/000007/000057 guards skip the vector tables and the deployment
+// runs text-only. Non-Postgres backends are a no-op.
+func ensurePgvectorForMigrate(ctx context.Context, backend string, db *sql.DB) error {
+	if backend != storage.BackendPostgres {
+		return nil
+	}
+	// A genuinely absent extension is tolerated (the guards skip the vector
+	// tables, text-only mode); any other failure is fatal to the migrate.
+	err := adminstore.EnsurePgvector(ctx, db)
+	if errors.Is(err, adminstore.ErrPgvectorUnavailable) {
+		return nil
+	}
+	return err
+}
 
 // runHeadlessBootstrap creates the first administrator from the bootstrap
 // admin credentials when the database is empty. Returns true when setup is
@@ -140,7 +160,16 @@ func main() {
 		return
 	}
 
-	// Handle migration CLI commands before starting the server.
+	// Handle migration CLI commands before starting the server. A `migrate up`
+	// on Postgres must enable pgvector before the migrator creates the vector
+	// tables. RunCLI lives in internal/migration, which cannot import
+	// internal/storage/admin (that package imports the migrator), so this seam
+	// runs in main, mirroring the auto-migrate path below.
+	if len(os.Args) >= 3 && os.Args[1] == "migrate" && os.Args[2] == "up" {
+		if err := ensurePgvectorForMigrate(context.Background(), db.Backend(), db.WriteDB()); err != nil {
+			log.Fatalf("migration command failed: %v", err)
+		}
+	}
 	handled, err := migration.RunCLI(os.Args, db.WriteDB(), db.Backend())
 	if err != nil {
 		log.Fatalf("migration command failed: %v", err)
@@ -157,10 +186,8 @@ func main() {
 		// absent extension (ErrPgvectorUnavailable) is not fatal here: the
 		// migration guards skip the vector tables and the vector-store boot
 		// guard below refuses to serve a degraded deployment.
-		if db.Backend() == storage.BackendPostgres {
-			if err := adminstore.EnsurePgvector(context.Background(), db.WriteDB()); err != nil && !errors.Is(err, adminstore.ErrPgvectorUnavailable) {
-				log.Fatalf("boot: %v", err)
-			}
+		if err := ensurePgvectorForMigrate(context.Background(), db.Backend(), db.WriteDB()); err != nil {
+			log.Fatalf("boot: %v", err)
 		}
 		m, err := migration.NewMigrator(db.WriteDB(), db.Backend())
 		if err != nil {
