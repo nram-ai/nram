@@ -185,8 +185,12 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// this memory (query augmentation runs from the batch-level ctx, which
 	// otherwise carries no memory_id, so the query_augment phase would be
 	// unattributable in per-memory views).
+	// runQueryAugment runs off the batch-level ctx, so it re-derives the
+	// per-memory usage ctx (namespace + memory + run key) before adding the
+	// query-augment operation, keeping this phase's token_usage row attributed
+	// and joined to the same run as the job's other phases.
 	augmentCtx := provider.WithOperation(
-		provider.WithMemoryID(provider.WithNamespaceID(ctx, mem.NamespaceID), mem.ID),
+		enrichmentUsageCtx(ctx, mem, job),
 		provider.OperationQueryAugment)
 	resp, err := llm.Complete(augmentCtx, req)
 	latency := time.Since(start)

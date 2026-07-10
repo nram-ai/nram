@@ -102,6 +102,7 @@ func TestWriteMemoryFacets_WritesFacetsForMultiTopicMemory(t *testing.T) {
 	whole := make([]float32, dim)
 	whole[0] = 1
 	pending := &pendingJob{
+		job:        &model.EnrichmentJob{ID: uuid.New()},
 		mem:        &model.Memory{ID: memID, NamespaceID: uuid.New(), Content: "PRICE one. PRICE two. DEPLOY one."},
 		embedStart: 0,
 	}
@@ -157,6 +158,7 @@ func TestWriteMemoryFacets_AttributesEmbedToMemory(t *testing.T) {
 	whole := make([]float32, 8)
 	whole[0] = 1
 	pending := &pendingJob{
+		job:        &model.EnrichmentJob{ID: uuid.New()},
 		mem:        &model.Memory{ID: memID, NamespaceID: nsID, Content: "Topic alpha sentence. Different beta sentence. Third gamma sentence."},
 		embedStart: 0,
 	}
@@ -210,6 +212,7 @@ func TestWriteMemoryFacets_DisabledIsNoOp(t *testing.T) {
 	whole := make([]float32, 8)
 	whole[0] = 1
 	pending := &pendingJob{
+		job:        &model.EnrichmentJob{ID: uuid.New()},
 		mem:        &model.Memory{ID: memID, NamespaceID: uuid.New(), Content: "PRICE one. DEPLOY two."},
 		embedStart: 0,
 	}
@@ -231,6 +234,7 @@ func TestWriteMemoryFacets_SingleTopicWritesNoFacets(t *testing.T) {
 	// All sentences share the PRICE topic -> one cluster -> facet 0 only, so
 	// UpsertFacets is skipped (the batch already wrote facet 0).
 	pending := &pendingJob{
+		job:        &model.EnrichmentJob{ID: uuid.New()},
 		mem:        &model.Memory{ID: memID, NamespaceID: uuid.New(), Content: "PRICE one. PRICE two. PRICE three."},
 		embedStart: 0,
 	}

@@ -185,6 +185,92 @@ func TestEnrichment_QueueStatus_AttachesPhaseMetrics(t *testing.T) {
 	}
 }
 
+// TestEnrichment_QueueStatus_PhaseMetricsPreferRunKey asserts the read-time
+// join scopes metrics to the exact run via token_usage.request_id (the
+// model.EnrichmentRunKey stamped by the worker) rather than the timestamp
+// window. A prior run of the same job wrote a fact_extraction row INSIDE the 5s
+// slack window; the current run's row must win purely on the run key, and the
+// prior run's tokens must not surface. The nil-request_id timestamp fallback is
+// covered by TestEnrichment_QueueStatus_AttachesPhaseMetrics.
+func TestEnrichment_QueueStatus_PhaseMetricsPreferRunKey(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+
+	queueRepo := storage.NewEnrichmentQueueRepo(db)
+	settingsRepo := storage.NewSettingsRepo(db)
+	store := NewEnrichmentAdminStore(queueRepo, settingsRepo, nil, db)
+
+	_, nsID := insertOrgWithNamespace(t, db, ctx)
+
+	memID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO memories (id, namespace_id, content) VALUES (?, ?, ?)",
+		memID.String(), nsID.String(), "x")
+
+	// The job is on its second attempt (attempts=1): attempt 0 failed, attempt 1
+	// succeeded. The read side reconstructs EnrichmentRunKey(jobID, 1).
+	jobID := uuid.New()
+	execSeed(t, db, ctx,
+		"INSERT INTO enrichment_queue (id, memory_id, namespace_id, status, attempts) VALUES (?, ?, ?, ?, ?)",
+		jobID.String(), memID.String(), nsID.String(), "completed", 1)
+
+	currentKey := model.EnrichmentRunKey(jobID, 1)
+	priorKey := model.EnrichmentRunKey(jobID, 0)
+
+	tokenRepo := storage.NewTokenUsageRepo(db)
+	rec := func(op, reqID string, in, out int) {
+		t.Helper()
+		id := memID
+		r := reqID
+		l := 100
+		if err := tokenRepo.Record(ctx, &model.TokenUsage{
+			NamespaceID:  nsID,
+			Operation:    op,
+			Provider:     "ollama",
+			Model:        "qwen3:8b-extract",
+			TokensInput:  in,
+			TokensOutput: out,
+			MemoryID:     &id,
+			LatencyMs:    &l,
+			Success:      true,
+			RequestID:    &r,
+		}); err != nil {
+			t.Fatalf("record %s: %v", op, err)
+		}
+	}
+	// Prior run (attempt 0) and current run (attempt 1) rows are recorded in the
+	// same second, so both sit inside the 5s timestamp window; only the run key
+	// distinguishes them.
+	rec("fact_extraction", priorKey, 999, 999)   // stale run; must be excluded
+	rec("fact_extraction", currentKey, 600, 120) // current run; must win
+	rec("entity_extraction", currentKey, 580, 90)
+
+	resp, err := store.QueueStatus(ctx, api.QueueListParams{})
+	if err != nil {
+		t.Fatalf("QueueStatus: %v", err)
+	}
+	if resp == nil || len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", resp)
+	}
+
+	pm := resp.Items[0].PhaseMetrics
+	wantOrder := []string{"fact_extraction", "entity_extraction"}
+	if len(pm) != len(wantOrder) {
+		t.Fatalf("expected %d phase metrics, got %d: %+v", len(wantOrder), len(pm), pm)
+	}
+	for i, w := range wantOrder {
+		if pm[i].Operation != w {
+			t.Fatalf("phase_metrics[%d].Operation = %q, want %q", i, pm[i].Operation, w)
+		}
+	}
+	// The current run's fact_extraction tokens win; the prior run's 999/999 must
+	// not appear despite falling inside the 5s window.
+	if pm[0].PromptTokens != 600 || pm[0].CompletionTokens != 120 {
+		t.Fatalf("fact_extraction tokens: got %d/%d want 600/120 (prior run bled through)",
+			pm[0].PromptTokens, pm[0].CompletionTokens)
+	}
+}
+
 // TestEnrichment_SetPaused_InvalidatesResolverCache guards the production
 // wiring gap: workers and the SSE tick read enrichment.paused through the
 // cached SettingsService resolver, but SetPaused writes via settingsRepo

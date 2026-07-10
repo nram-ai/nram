@@ -1064,6 +1064,22 @@ func earlierBreakerRetry(cooldown time.Time, err error) time.Time {
 	return cooldown
 }
 
+// enrichmentUsageCtx stamps the three values every enrichment provider call
+// needs for token_usage attribution as one unit: the namespace and memory (so
+// the row attributes to the right owner) and the per-run correlation key (so the
+// enrichment monitor can join phase metrics to the exact run via request_id).
+// The phases fan in from more than one base ctx (runPreEmbed's own ctx vs
+// processBatch's batch ctx), so each per-memory call re-derives its ctx through
+// this helper rather than sharing one; keeping the three stamps together here
+// means the invariant "namespace + memory + run key travel as a set" lives in a
+// single place instead of a hand-maintained triple at every site. job is always
+// set on these paths (a pendingJob is never built without one).
+func enrichmentUsageCtx(ctx context.Context, mem *model.Memory, job *model.EnrichmentJob) context.Context {
+	ctx = provider.WithNamespaceID(ctx, mem.NamespaceID)
+	ctx = provider.WithMemoryID(ctx, mem.ID)
+	return provider.WithRequestID(ctx, model.EnrichmentRunKey(job.ID, job.Attempts))
+}
+
 // runPreEmbed runs fact/entity extraction, child-memory creation, and
 // entity/relationship upsert for a single job. On fatal failure it marks the
 // job failed and returns an error; on success returns a pendingJob with
@@ -1140,13 +1156,14 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		return nil, nil
 	}
 
-	// Stamp namespace + memory context for the UsageRecordingProvider
-	// middleware so every provider call emitted by this job lands a
-	// token_usage row attributed to the right namespace and memory. The
-	// middleware resolves org/user/project lazily via its injected
-	// resolver when no UsageContext is pre-stamped on ctx.
-	ctx = provider.WithNamespaceID(ctx, mem.NamespaceID)
-	ctx = provider.WithMemoryID(ctx, mem.ID)
+	// Stamp namespace + memory + run key for the UsageRecordingProvider
+	// middleware so every provider call emitted by this job lands a token_usage
+	// row attributed to the right namespace/memory and carrying the run's
+	// request_id. The middleware resolves org/user/project lazily via its
+	// injected resolver when no UsageContext is pre-stamped on ctx. The embed and
+	// facet phases run off processBatch's ctx (not this one) and re-stamp the same
+	// way through enrichmentUsageCtx.
+	ctx = enrichmentUsageCtx(ctx, mem, job)
 
 	// Ingestion-decision phase. Runs first so a DELETE decision can short-
 	// circuit fact/entity extraction (no point spending LLM tokens on a
@@ -1930,7 +1947,11 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			if start >= end {
 				continue // parent reused from the ingestion phase and no entities
 			}
-			embedCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, p.mem.NamespaceID), p.mem.ID)
+			// This step runs off processBatch's ctx (not runPreEmbed's), so it
+			// re-derives the per-memory usage ctx (namespace + memory + run key)
+			// to attribute the embedding token_usage row to the same run as the
+			// job's LLM phases.
+			embedCtx := enrichmentUsageCtx(ctx, p.mem, p.job)
 			vecs, _, _, err := wp.embedChunked(embedCtx, ep, inputs[start:end], dim)
 			if err != nil {
 				wp.logBreakerOrError(ctx, "enrichment: batched embed",
@@ -2077,7 +2098,7 @@ func (wp *WorkerPool) writeMemoryFacets(ctx context.Context, pendings []*pending
 		} else if p.embedStart < len(embeddings) {
 			parentVec = embeddings[p.embedStart]
 		}
-		wp.extractAndWriteFacets(ctx, fs, embedder, p.mem, parentVec, threshold, maxFacets, sem)
+		wp.extractAndWriteFacets(enrichmentUsageCtx(ctx, p.mem, p.job), fs, embedder, p.mem, parentVec, threshold, maxFacets, sem)
 	}
 }
 
@@ -2097,11 +2118,11 @@ func (wp *WorkerPool) extractAndWriteFacets(ctx context.Context, fs storage.Face
 		return
 	}
 	dim := len(parentVec)
-	// Stamp namespace + memory so the facet sentence-embed's token_usage row
-	// attributes to this memory, matching the parent embed (writeMemoryVectors
-	// stamps the same per pending); the bare batch ctx would record the cost
-	// with null ownership. ExtractFacets adds the embedding operation itself.
-	facetCtx := provider.WithMemoryID(provider.WithNamespaceID(ctx, mem.NamespaceID), mem.ID)
+	// ctx already carries this memory's usage stamps (namespace + memory + run
+	// key) from the caller's enrichmentUsageCtx, so the facet sentence-embed's
+	// token_usage row attributes to the right memory and joins to the run.
+	// ExtractFacets adds the embedding operation itself.
+	//
 	// Bound concurrent facet sentence-embedding across the pool so a bulk
 	// backfill cannot stampede the embedder. The acquire/release is wrapped so
 	// the slot is freed even if ExtractFacets panics; the slot covers only the
@@ -2110,7 +2131,7 @@ func (wp *WorkerPool) extractAndWriteFacets(ctx context.Context, fs storage.Face
 	facets, err := func() ([][]float32, error) {
 		sem <- struct{}{}
 		defer func() { <-sem }()
-		return ExtractFacets(facetCtx, embedder, mem.Content, parentVec, dim, threshold, maxFacets)
+		return ExtractFacets(ctx, embedder, mem.Content, parentVec, dim, threshold, maxFacets)
 	}()
 	if err != nil {
 		slog.Warn("enrichment: facet extraction failed", "memory", mem.ID, "err", err)
@@ -2190,7 +2211,7 @@ func (wp *WorkerPool) runMultiVectorFacetSweep(ctx context.Context, job *model.E
 	threshold := wp.settings.ResolveFloatWithDefault(ctx, service.SettingMultiVectorFacetThreshold, "global")
 	maxFacets := wp.settings.ResolveIntWithDefault(ctx, service.SettingMultiVectorMaxFacets, "global")
 	sem := wp.facetEmbedSemaphore(ctx)
-	wp.extractAndWriteFacets(ctx, fs, embedder, mem, parentVec, threshold, maxFacets, sem)
+	wp.extractAndWriteFacets(enrichmentUsageCtx(ctx, mem, job), fs, embedder, mem, parentVec, threshold, maxFacets, sem)
 	return nil
 }
 

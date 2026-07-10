@@ -70,11 +70,23 @@ func NewEnrichmentAdminStore(
 // any failure it logs and leaves PhaseMetrics empty rather than failing the
 // queue request. Batched into one query over the page's memory IDs.
 //
-// For each item it keeps the most recent row per operation (rows arrive
-// created_at DESC), scoped to the current run by discarding rows older than the
-// job's claimed_at (or created_at when not processing), minus a small slack.
-// This yields empty metrics for pending jobs (no rows yet) and the latest run's
-// metrics otherwise.
+// Rows are scoped to the item's run in one of two ways, tried in order:
+//
+//  1. Run-key match. The worker stamps model.EnrichmentRunKey(job.ID, attempts)
+//     into token_usage.request_id for every phase of a run, so a row whose
+//     request_id equals the item's key belongs to exactly that run. When any
+//     such row exists this is authoritative: metrics come only from run-key
+//     matches, which excludes prior runs/jobs of the same memory even when their
+//     rows fall inside the old timestamp slack.
+//  2. Timestamp fallback. For rows written before request_id stamping (nil
+//     request_id) and for terminally-failed jobs whose attempts advanced past
+//     the failed run's key, no run-key row matches; the item falls back to the
+//     legacy window: the most recent row per operation, discarding rows older
+//     than the job's claimed_at (or created_at), minus phaseMetricLowerBoundSlack.
+//
+// Either way it keeps the most recent row per operation (rows arrive created_at
+// DESC), yields empty metrics for pending jobs (no rows yet), and surfaces the
+// phases the displayed run actually executed.
 func (s *EnrichmentAdminStore) attachPhaseMetrics(ctx context.Context, items []api.EnrichmentQueueItem) {
 	if len(items) == 0 {
 		return
@@ -112,23 +124,45 @@ func (s *EnrichmentAdminStore) attachPhaseMetrics(ctx context.Context, items []a
 			continue
 		}
 
+		// Prefer the per-run correlation key stamped into request_id; only fall
+		// back to the timestamp window when no row carries this item's key.
+		want := model.EnrichmentRunKey(items[i].ID, items[i].Attempts)
+		haveRunKey := false
+		for j := range memRows {
+			if memRows[j].RequestID != nil && *memRows[j].RequestID == want {
+				haveRunKey = true
+				break
+			}
+		}
+
 		lower := items[i].CreatedAt
 		if items[i].ClaimedAt != nil {
 			lower = *items[i].ClaimedAt
 		}
 		lower = lower.Add(-phaseMetricLowerBoundSlack)
 
-		// memRows are created_at DESC, so the first row matching an operation
-		// is its most recent. Walking operations in canonical pipeline order
-		// yields metrics already ordered and deduped, no order-map or sort.
+		// keep reports whether a row belongs to the item's run under the active
+		// scoping mode: exact request_id equality when a run-key row exists,
+		// otherwise the timestamp lower bound.
+		keep := func(r model.TokenUsage) bool {
+			if haveRunKey {
+				return r.RequestID != nil && *r.RequestID == want
+			}
+			return !r.CreatedAt.Before(lower)
+		}
+
+		// memRows are created_at DESC, so the first kept row matching an
+		// operation is its most recent (the append+break below takes it).
+		// Walking operations in canonical pipeline order yields metrics already
+		// ordered and deduped, no order-map or sort.
 		metrics := make([]api.EnrichmentPhaseMetric, 0, len(enrichmentPhaseOperations))
 		for _, op := range enrichmentPhaseOperations {
 			for _, r := range memRows {
 				if r.Operation != op {
 					continue
 				}
-				if r.CreatedAt.Before(lower) {
-					break // its newest row predates this run; skip the op
+				if !keep(r) {
+					continue // wrong run (run-key mode) or predates the window
 				}
 				metrics = append(metrics, api.EnrichmentPhaseMetric{
 					Operation:        r.Operation,

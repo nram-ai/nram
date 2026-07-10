@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,4 +85,20 @@ type EnrichmentJob struct {
 	CompletedAt            *time.Time      `json:"completed_at"`
 	CreatedAt              time.Time       `json:"created_at"`
 	UpdatedAt              time.Time       `json:"updated_at"`
+}
+
+// EnrichmentRunKey is the per-run correlation key for a single enrichment job
+// attempt. The worker stamps it onto the provider context (via
+// provider.WithRequestID) before each phase's LLM/embedding call so every
+// token_usage row that run records carries it in request_id; the enrichment
+// monitor's read side reconstructs the same key from the queue item's id and
+// attempts to join phase metrics to the exact run instead of a timestamp window.
+//
+// (job.ID, attempts) is a stable run identity because a claim does not bump
+// attempts (only Fail/RequeueStale do), so the value is fixed for the lifetime
+// of one attempt on both the write and read sides. The "enrich:" prefix keeps
+// the key from colliding with HTTP X-Request-ID UUIDs that also land in
+// token_usage.request_id.
+func EnrichmentRunKey(jobID uuid.UUID, attempts int) string {
+	return "enrich:" + jobID.String() + ":" + strconv.Itoa(attempts)
 }

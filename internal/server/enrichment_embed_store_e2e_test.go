@@ -313,6 +313,51 @@ func TestE2E_EnrichmentEmbedAndStore(t *testing.T) {
 	if mem.EmbeddingDim == nil || *mem.EmbeddingDim != embedDim {
 		t.Fatalf("memory embedding_dim = %v, want %d", mem.EmbeddingDim, embedDim)
 	}
+
+	// Run correlation: the worker stamps model.EnrichmentRunKey(job.ID, attempts)
+	// into token_usage.request_id for every phase of the run, which the
+	// enrichment monitor joins on instead of the timestamp window. Assert the
+	// end-to-end wiring by locating the job for this memory and confirming at
+	// least one of its phase token_usage rows carries that exact key.
+	var job *model.EnrichmentJob
+	if jobs, lerr := enrichmentQueueRepo.ListRecent(ctx, 10); lerr == nil {
+		for i := range jobs {
+			if jobs[i].MemoryID == memID {
+				job = &jobs[i]
+				break
+			}
+		}
+	}
+	if job == nil {
+		t.Fatal("no enrichment job found for the embedded memory")
+	}
+	wantKey := model.EnrichmentRunKey(job.ID, job.Attempts)
+	ops := make([]string, 0)
+	for _, op := range provider.EnrichmentPhaseOperations() {
+		ops = append(ops, string(op))
+	}
+	usageRows, uerr := tokenUsageRepo.ListByMemoryIDs(ctx, []uuid.UUID{memID}, ops)
+	if uerr != nil {
+		t.Fatalf("list token usage by memory: %v", uerr)
+	}
+	foundKey := false
+	for _, r := range usageRows {
+		if r.RequestID != nil && *r.RequestID == wantKey {
+			foundKey = true
+			break
+		}
+	}
+	if !foundKey {
+		got := make([]string, 0, len(usageRows))
+		for _, r := range usageRows {
+			rid := "<nil>"
+			if r.RequestID != nil {
+				rid = *r.RequestID
+			}
+			got = append(got, r.Operation+"="+rid)
+		}
+		t.Fatalf("no enrichment token_usage row carried run key %q; got %v", wantKey, got)
+	}
 }
 
 // writeJSON encodes v as a JSON response body, failing the test on error.
