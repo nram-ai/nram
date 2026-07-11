@@ -286,6 +286,35 @@ func (p *pendingJob) applyIngestion(res *ingestionDecisionResult) {
 // instead of issuing a second embed for the same content.
 func (p *pendingJob) parentEmbedFromPhase() bool { return len(p.parentEmbedding) > 0 }
 
+// reuseStoredParentVector is true when the memory already carries a finalized
+// vector (Enriched with embedding_dim set) and the augmentation phase produced
+// no new blob to embed (augmentedContent empty — either the already-augmented
+// skip fired, or augmentation is disabled/failed). The parent slot is then
+// neither re-embedded nor re-upserted, preserving the stored vector. Excludes
+// the ingestion-decision pre-embed reuse path (parentEmbedFromPhase supplies
+// its own vector). A cleared embedding_dim (model-switch cascade via
+// ClearAllEmbeddingDims) makes this false, so a genuine re-embed still runs.
+func (p *pendingJob) reuseStoredParentVector() bool {
+	return !p.parentEmbedFromPhase() &&
+		p.augmentedContent == "" &&
+		p.mem.Enriched && p.mem.EmbeddingDim != nil
+}
+
+// parentVector resolves the memory's parent embedding for the post-embed upsert
+// and facet passes, centralizing the resolution so those two readers cannot
+// drift: the ingestion-decision pre-embed when present, nil when the stored
+// vector is being reused (reuseStoredParentVector) or the parent occupied no
+// slot, otherwise the freshly embedded slot at embedStart.
+func (p *pendingJob) parentVector(embeddings [][]float32) []float32 {
+	if p.parentEmbedFromPhase() {
+		return p.parentEmbedding
+	}
+	if p.reuseStoredParentVector() || p.embedStart >= len(embeddings) {
+		return nil
+	}
+	return embeddings[p.embedStart]
+}
+
 // shortCircuitDelete reports whether the LLM judge marked the new memory as
 // redundant; pre-embed exits early, runEmbedBatch skips, and finalizeJob
 // soft-deletes.

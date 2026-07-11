@@ -457,6 +457,7 @@ const QUERY_AUGMENT_SKIP_LABELS: Record<string, string> = {
   provider_unavailable: "fact provider unavailable",
   llm_error: "LLM error",
   parse_error: "LLM response unparseable",
+  already_augmented: "already augmented",
 };
 
 // Human labels for the canonical token_usage operation names carried in

@@ -887,6 +887,16 @@ func (wp *WorkerPool) applyQueryAugment(ctx context.Context, p *pendingJob) {
 		p.queryAugmentSkipReason = model.QueryAugmentSkipDeleted
 		return
 	}
+	// Durable idempotency: a memory already carrying a finalized augmented
+	// vector needs no re-augmentation. embedding_dim != nil is load-bearing —
+	// the model-switch cascade NULLs it while leaving augmented_embedding_at
+	// set, and that case MUST re-augment, so the nil check keeps the cascade
+	// correct. runEmbedBatch then reuses the stored vector (reuseStoredParentVector)
+	// rather than re-embedding raw content over it.
+	if p.mem.EmbeddingDim != nil && p.mem.AugmentedEmbeddingAt != nil && len(p.mem.AugmentedQueries) > 0 {
+		p.queryAugmentSkipReason = model.QueryAugmentSkipAlreadyDone
+		return
+	}
 	res, skip := wp.runQueryAugment(ctx, p.job, p.mem)
 	if res == nil {
 		p.queryAugmentSkipReason = skip
@@ -1911,7 +1921,7 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 		// embeds it against its augmented blob, so embedding it inline would
 		// produce a redundant raw vector that the child's job immediately
 		// supersedes.
-		if !p.parentEmbedFromPhase() {
+		if !p.parentEmbedFromPhase() && !p.reuseStoredParentVector() {
 			parentInput := p.mem.Content
 			if p.augmentedContent != "" {
 				parentInput = p.augmentedContent
@@ -1978,14 +1988,10 @@ func (wp *WorkerPool) runEmbedBatch(ctx context.Context, pendings []*pendingJob)
 			continue
 		}
 
-		// Parent vector: either reused from the ingestion-decision phase
-		// or read out of the freshly produced embeddings slice.
-		var parentVec []float32
-		if p.parentEmbedFromPhase() {
-			parentVec = p.parentEmbedding
-		} else if p.embedStart < len(embeddings) {
-			parentVec = embeddings[p.embedStart]
-		}
+		// Parent vector: reused from the ingestion-decision phase, reused from
+		// the stored vector (nil here), or read out of the freshly produced
+		// embeddings slice. See pendingJob.parentVector.
+		parentVec := p.parentVector(embeddings)
 		if d := len(parentVec); d > 0 {
 			p.mem.EmbeddingDim = &d
 			items = append(items, storage.VectorUpsertItem{
@@ -2092,12 +2098,7 @@ func (wp *WorkerPool) writeMemoryFacets(ctx context.Context, pendings []*pending
 		if p.shortCircuitDelete() {
 			continue
 		}
-		var parentVec []float32
-		if p.parentEmbedFromPhase() {
-			parentVec = p.parentEmbedding
-		} else if p.embedStart < len(embeddings) {
-			parentVec = embeddings[p.embedStart]
-		}
+		parentVec := p.parentVector(embeddings)
 		wp.extractAndWriteFacets(enrichmentUsageCtx(ctx, p.mem, p.job), fs, embedder, p.mem, parentVec, threshold, maxFacets, sem)
 	}
 }

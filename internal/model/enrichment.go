@@ -56,6 +56,11 @@ const (
 	// DELETE: the memory is being discarded, so augmenting it would burn an LLM
 	// call on a row that is about to be soft-deleted.
 	QueryAugmentSkipDeleted = "deleted"
+	// QueryAugmentSkipAlreadyDone marks a re-enqueued job whose memory already
+	// carries a finalized augmented vector (embedding_dim set AND
+	// augmented_embedding_at stamped AND augmented_queries present). The phase is
+	// skipped and the stored vector reused rather than recomputed.
+	QueryAugmentSkipAlreadyDone = "already_augmented"
 )
 
 // EnrichmentJob.Status values. Mirrors the schema's set; using these

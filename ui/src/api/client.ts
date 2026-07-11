@@ -1527,9 +1527,9 @@ export interface EnrichmentQueueItem {
   steps_completed: string[];
   // Why the query-augmentation step is absent from steps_completed on a
   // completed job. One of: "disabled", "content_empty",
-  // "provider_unavailable", "llm_error", "parse_error". Omitted when the
-  // step ran successfully (look in steps_completed) or the row predates the
-  // column.
+  // "provider_unavailable", "llm_error", "parse_error", "deleted",
+  // "already_augmented". Omitted when the step ran successfully (look in
+  // steps_completed) or the row predates the column.
   query_augment_skip_reason?: string;
   // Mirror of the joined memory row so EnrichmentMonitor's "Augmentation"
   // accordion can render the persisted badge ("✓ Augmented · N queries")
