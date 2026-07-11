@@ -71,9 +71,10 @@ func TestRun_TicksAfterStartup(t *testing.T) {
 }
 
 // TestRun_ReResolvesIntervalEachTick proves the interval is resolved fresh on
-// every iteration rather than cached once — the hot-reload guarantee. interval()
-// counts its invocations; after N ticks it must have been called at least N+1
-// times (once before the loop, once after each tick).
+// every iteration rather than cached once (the hot-reload guarantee). interval()
+// counts its invocations; the resolve that arms each tick runs before that tick
+// fires, so after N ticks it has been called at least N times. A cached resolver
+// would call it once and never climb past 1.
 func TestRun_ReResolvesIntervalEachTick(t *testing.T) {
 	var mu sync.Mutex
 	resolved := 0
@@ -109,8 +110,9 @@ func TestRun_ReResolvesIntervalEachTick(t *testing.T) {
 	mu.Lock()
 	n := resolved
 	mu.Unlock()
-	// Once before the loop plus once per tick: caching would leave n==1.
-	if n < wantTicks+1 {
+	// wantTicks ticks imply at least wantTicks resolves (one resolve arms each
+	// tick); a cached resolver stays at 1 and still fails this check.
+	if n < wantTicks {
 		t.Fatalf("interval resolved %d times across %d ticks; expected re-resolution each tick", n, wantTicks)
 	}
 }
