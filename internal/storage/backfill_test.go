@@ -12,19 +12,25 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory verifies the
-// post-write-path-refactor contract for existing deployments:
+// TestEnqueueUncoveredMemories_OnlyNeverEnriched verifies the durable-coverage
+// contract: "uncovered" is keyed on the memories.enriched flag, NOT on the
+// presence of an enrichment_queue row. This is the regression guard for the
+// whole-corpus re-queue bug where a completed memory whose queue row had been
+// cleared read as uncovered and got re-enqueued every dream cycle.
 //
-//  1. Memories with no enrichment job at all get one enqueued.
-//  2. Memories whose only existing job is already pending or in-flight
+//  1. A never-enriched memory (enriched = false) with no job gets one enqueued.
+//  2. An enriched memory (enriched = true) with NO queue row at all (its
+//     completed row cleared by the admin clear-completed endpoint) is NOT
+//     re-enqueued — the durable flag survives clearing the queue.
+//  3. An enriched memory with a completed queue row still present is NOT
+//     re-enqueued either.
+//  4. Never-enriched memories whose only job is pending or in-flight
 //     (processing) are NOT double-enqueued.
-//  3. Memories whose only existing job is completed DO get re-enqueued;
-//     those are the rows that may have the old worker's fact-as-parent-vector
-//     bug, and re-embedding is the only way to fix it.
-//  4. Running the backfill twice is a no-op the second time (idempotent).
-//  5. Backfill jobs land at priority -1 so the worker drains them after any
+//  5. Soft-deleted memories are skipped regardless of state.
+//  6. Running the backfill twice is a no-op the second time (idempotent).
+//  7. Backfill jobs land at priority -1 so the worker drains them after any
 //     newly-stored memories (priority 0 or higher).
-func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T) {
+func TestEnqueueUncoveredMemories_OnlyNeverEnriched(t *testing.T) {
 	forEachDB(t, func(t *testing.T, db DB) {
 		ctx := context.Background()
 		memRepo := NewMemoryRepo(db)
@@ -32,62 +38,38 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 
 		nsID := createTestNamespace(t, ctx, db)
 
-		// Seed fixtures:
-		//   a. Plain memory, no existing job.
-		//   b. Memory with an already-pending job (should be skipped).
-		//   c. Memory with a completed job (should be re-enqueued).
-		//   d. Soft-deleted memory (must be skipped regardless of job state).
 		var ids struct {
-			plainA, withPending, completed, processing, softDeleted uuid.UUID
+			plainUnenriched, pendingUnenriched, processingUnenriched,
+			enrichedCleared, enrichedCompleted, softDeleted uuid.UUID
 		}
 
+		// a. Never-enriched, no job → the only memory that should be enqueued.
 		memA := newTestMemory(nsID)
 		if err := memRepo.Create(ctx, memA); err != nil {
-			t.Fatalf("create plain memory: %v", err)
+			t.Fatalf("create plain unenriched memory: %v", err)
 		}
-		ids.plainA = memA.ID
+		ids.plainUnenriched = memA.ID
 
+		// b. Never-enriched, already-pending job → skipped (active job).
 		memB := newTestMemory(nsID)
 		if err := memRepo.Create(ctx, memB); err != nil {
 			t.Fatalf("create memory-with-pending: %v", err)
 		}
-		ids.withPending = memB.ID
+		ids.pendingUnenriched = memB.ID
 		existingPending := &model.EnrichmentJob{MemoryID: memB.ID, NamespaceID: nsID}
 		if _, err := queueRepo.Enqueue(ctx, existingPending); err != nil {
 			t.Fatalf("seed pending job: %v", err)
 		}
 
+		// c. Never-enriched, in-flight (processing) job → skipped (active job).
+		//    Regression guard for the dedup predicate: the claimed status is
+		//    'processing', not 'running'.
 		memC := newTestMemory(nsID)
 		if err := memRepo.Create(ctx, memC); err != nil {
-			t.Fatalf("create memory-with-completed: %v", err)
-		}
-		ids.completed = memC.ID
-		completedJob := &model.EnrichmentJob{MemoryID: memC.ID, NamespaceID: nsID}
-		if _, err := queueRepo.Enqueue(ctx, completedJob); err != nil {
-			t.Fatalf("seed completed job: %v", err)
-		}
-		if err := queueRepo.Complete(ctx, completedJob.ID, ""); err != nil {
-			t.Fatalf("mark completed: %v", err)
-		}
-
-		memD := newTestMemory(nsID)
-		if err := memRepo.Create(ctx, memD); err != nil {
-			t.Fatalf("create soft-deleted memory: %v", err)
-		}
-		ids.softDeleted = memD.ID
-		if err := memRepo.SoftDelete(ctx, memD.ID, nsID); err != nil {
-			t.Fatalf("soft-delete memory: %v", err)
-		}
-
-		// e. Memory with an in-flight (processing) job, already covered, so it
-		//    must be skipped. Regression guard for the dedup predicate: the
-		//    claimed status is 'processing', not 'running'.
-		memE := newTestMemory(nsID)
-		if err := memRepo.Create(ctx, memE); err != nil {
 			t.Fatalf("create in-flight memory: %v", err)
 		}
-		ids.processing = memE.ID
-		processingJob := &model.EnrichmentJob{MemoryID: memE.ID, NamespaceID: nsID}
+		ids.processingUnenriched = memC.ID
+		processingJob := &model.EnrichmentJob{MemoryID: memC.ID, NamespaceID: nsID}
 		if _, err := queueRepo.Enqueue(ctx, processingJob); err != nil {
 			t.Fatalf("seed in-flight job: %v", err)
 		}
@@ -99,21 +81,59 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Fatalf("mark processing: %v", err)
 		}
 
+		// d. Enriched, NO queue row (completed row cleared) → must NOT re-enqueue.
+		//    This is the core regression: durable coverage survives clearing the
+		//    queue.
+		memD := newTestMemory(nsID)
+		if err := memRepo.Create(ctx, memD); err != nil {
+			t.Fatalf("create enriched-cleared memory: %v", err)
+		}
+		ids.enrichedCleared = memD.ID
+		if err := memRepo.MarkEnriched(ctx, memD.ID, nsID, nil, nil, nil, nil, nil); err != nil {
+			t.Fatalf("mark enriched (cleared): %v", err)
+		}
+
+		// e. Enriched, completed queue row still present → must NOT re-enqueue.
+		memE := newTestMemory(nsID)
+		if err := memRepo.Create(ctx, memE); err != nil {
+			t.Fatalf("create enriched-completed memory: %v", err)
+		}
+		ids.enrichedCompleted = memE.ID
+		completedJob := &model.EnrichmentJob{MemoryID: memE.ID, NamespaceID: nsID}
+		if _, err := queueRepo.Enqueue(ctx, completedJob); err != nil {
+			t.Fatalf("seed completed job: %v", err)
+		}
+		if err := queueRepo.Complete(ctx, completedJob.ID, ""); err != nil {
+			t.Fatalf("mark completed: %v", err)
+		}
+		if err := memRepo.MarkEnriched(ctx, memE.ID, nsID, nil, nil, nil, nil, nil); err != nil {
+			t.Fatalf("mark enriched (completed): %v", err)
+		}
+
+		// f. Soft-deleted (never-enriched) → skipped regardless.
+		memF := newTestMemory(nsID)
+		if err := memRepo.Create(ctx, memF); err != nil {
+			t.Fatalf("create soft-deleted memory: %v", err)
+		}
+		ids.softDeleted = memF.ID
+		if err := memRepo.SoftDelete(ctx, memF.ID, nsID); err != nil {
+			t.Fatalf("soft-delete memory: %v", err)
+		}
+
 		// Run the backfill.
 		enqueued, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("backfill failed: %v", err)
 		}
-		// Expect 2 new jobs: one for plainA, one for completed. The pending and
-		// the in-flight (processing) memories are skipped (each already has a
-		// live job). The soft-deleted memory is skipped (deleted_at is not null).
-		if enqueued != 2 {
-			t.Fatalf("first backfill: expected 2 new jobs, got %d", enqueued)
+		// Expect exactly 1 new job: only plainUnenriched. The enriched memories
+		// (cleared and completed) are not re-enqueued; the pending and in-flight
+		// memories already have a live job; the soft-deleted one is excluded.
+		if enqueued != 1 {
+			t.Fatalf("first backfill: expected 1 new job, got %d", enqueued)
 		}
 
-		// Idempotency: running again must insert zero rows. The jobs created
-		// in the first pass are themselves pending and will satisfy the
-		// LEFT JOIN ... IS NULL guard.
+		// Idempotency: running again must insert zero rows. The job created in
+		// the first pass is pending and satisfies the LEFT JOIN ... IS NULL guard.
 		enqueuedAgain, err := EnqueueUncoveredMemories(ctx, db)
 		if err != nil {
 			t.Fatalf("second backfill failed: %v", err)
@@ -122,10 +142,7 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Fatalf("idempotency broken: second backfill enqueued %d jobs, expected 0", enqueuedAgain)
 		}
 
-		// Verify which memories actually got new jobs. We expect plainA and
-		// completed to each now have a priority=-1 pending job; withPending
-		// should have exactly its original priority-0 job; softDeleted
-		// should have none at all.
+		// Verify which memories actually got jobs.
 		type jobRow struct {
 			memID    uuid.UUID
 			priority int
@@ -160,50 +177,39 @@ func TestEnqueueUncoveredMemories_EnqueuesOneJobPerUncoveredMemory(t *testing.T)
 			t.Fatalf("rows err: %v", err)
 		}
 
-		// plainA: exactly one new backfill job at priority -1, status pending.
-		if got := byMem[ids.plainA]; len(got) != 1 {
-			t.Errorf("plainA: expected 1 job, got %d (%v)", len(got), got)
+		// plainUnenriched: exactly one new backfill job at priority -1, pending.
+		if got := byMem[ids.plainUnenriched]; len(got) != 1 {
+			t.Errorf("plainUnenriched: expected 1 job, got %d (%v)", len(got), got)
 		} else if got[0].priority != -1 || got[0].status != "pending" {
-			t.Errorf("plainA: expected priority=-1 status=pending, got %+v", got[0])
+			t.Errorf("plainUnenriched: expected priority=-1 status=pending, got %+v", got[0])
 		}
 
-		// withPending: still exactly one job, the original priority-0
-		// pending one. Backfill MUST NOT have added a duplicate.
-		if got := byMem[ids.withPending]; len(got) != 1 {
-			t.Errorf("withPending: expected 1 job (no duplicate), got %d (%v)", len(got), got)
+		// pendingUnenriched: still exactly its original priority-0 pending job.
+		if got := byMem[ids.pendingUnenriched]; len(got) != 1 {
+			t.Errorf("pendingUnenriched: expected 1 job (no duplicate), got %d (%v)", len(got), got)
 		} else if got[0].priority != 0 || got[0].status != "pending" {
-			t.Errorf("withPending: expected original priority=0 status=pending, got %+v", got[0])
+			t.Errorf("pendingUnenriched: expected original priority=0 status=pending, got %+v", got[0])
 		}
 
-		// completed: now has 2 jobs, the original completed one and the
-		// new backfill one at priority -1.
-		if got := byMem[ids.completed]; len(got) != 2 {
-			t.Errorf("completed: expected 2 jobs (original + backfill), got %d (%v)", len(got), got)
-		} else {
-			foundBackfill := false
-			foundCompleted := false
-			for _, j := range got {
-				switch {
-				case j.priority == -1 && j.status == "pending":
-					foundBackfill = true
-				case j.priority == 0 && j.status == "completed":
-					foundCompleted = true
-				}
-			}
-			if !foundBackfill {
-				t.Errorf("completed: missing new backfill job at priority=-1")
-			}
-			if !foundCompleted {
-				t.Errorf("completed: missing original completed job")
-			}
-		}
-
-		// processing: still exactly one job, the in-flight one. Backfill MUST
-		// NOT add a duplicate for a memory that already has a live job.
-		if got := byMem[ids.processing]; len(got) != 1 {
-			t.Errorf("processing: expected 1 job (no duplicate), got %d (%v)", len(got), got)
+		// processingUnenriched: still exactly the in-flight job (no duplicate).
+		if got := byMem[ids.processingUnenriched]; len(got) != 1 {
+			t.Errorf("processingUnenriched: expected 1 job (no duplicate), got %d (%v)", len(got), got)
 		} else if got[0].status != "processing" {
-			t.Errorf("processing: expected the in-flight job to remain, got %+v", got[0])
+			t.Errorf("processingUnenriched: expected the in-flight job to remain, got %+v", got[0])
+		}
+
+		// enrichedCleared: no jobs at all — the durable flag kept it out even
+		// with the queue empty.
+		if got := byMem[ids.enrichedCleared]; len(got) != 0 {
+			t.Errorf("enrichedCleared: expected 0 jobs (durable coverage), got %d (%v)", len(got), got)
+		}
+
+		// enrichedCompleted: still exactly its original completed job, no
+		// re-enqueue.
+		if got := byMem[ids.enrichedCompleted]; len(got) != 1 {
+			t.Errorf("enrichedCompleted: expected 1 job (no re-enqueue), got %d (%v)", len(got), got)
+		} else if got[0].status != "completed" {
+			t.Errorf("enrichedCompleted: expected the completed job to remain, got %+v", got[0])
 		}
 
 		// softDeleted: no jobs at all.

@@ -8,10 +8,37 @@ import (
 )
 
 // buildEnqueueLiveMemoriesQuery returns the SQL that inserts a priority-(-1)
-// pending enrichment job for every live memory. When dedupe is true, memories
-// that already have a pending or in-flight (processing) job are skipped via a
-// LEFT JOIN guard. Both backends share this builder so the column list, dialect
-// quirks, and `deleted_at IS NULL` filter stay in lockstep.
+// pending enrichment job for live memories. When dedupe is true (the uncovered
+// backfill), coverage is defined by the DURABLE memories.enriched flag: only
+// memories that have never been enriched (enriched = false) are candidates, and
+// a LEFT JOIN additionally skips any that already hold a pending or in-flight
+// (processing) job so we do not double-enqueue in-flight work. enriched is the
+// only correct signal here — it is stamped true at finalizeJob (MarkEnriched)
+// and survives clearing the enrichment_queue (completed rows are pruned by the
+// admin clear-completed endpoint and by memory/namespace deletion), so a
+// queue-row-presence test would re-flag every completed memory and re-enqueue
+// the whole corpus. When dedupe is false (EnqueueAllLiveMemories, the
+// embedding-model-switch cascade) every live memory is re-enqueued regardless of
+// enriched. Both backends share this builder so the column list, dialect quirks,
+// and filters stay in lockstep.
+// boolLiteral renders a boolean as a raw-SQL literal for the backend: postgres
+// uses true/false, sqlite stores booleans as 0/1. Used where the value is a
+// compile-time constant interpolated into SQL rather than bound as a parameter,
+// so the predicate can prove a partial index such as idx_memories_enriched
+// (a bound $1 is not guaranteed to prove it under a generic plan).
+func boolLiteral(backend string, v bool) string {
+	if backend == BackendPostgres {
+		if v {
+			return "true"
+		}
+		return "false"
+	}
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
 func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) {
 	var insertCols, idExpr, nowExpr string
 	switch backend {
@@ -34,7 +61,7 @@ func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) 
 		q += `
 		LEFT JOIN enrichment_queue q
 		  ON q.memory_id = m.id AND q.status IN ('pending','processing')
-		WHERE m.deleted_at IS NULL AND q.id IS NULL`
+		WHERE m.deleted_at IS NULL AND m.enriched = ` + boolLiteral(backend, false) + ` AND q.id IS NULL`
 	} else {
 		q += `
 		WHERE m.deleted_at IS NULL`
@@ -54,13 +81,15 @@ func buildEnqueueLiveMemoriesQuery(backend string, dedupe bool) (string, error) 
 	return q, nil
 }
 
-// EnqueueUncoveredMemories enqueues a priority-(-1) enrichment job for
-// every live memory that does not already have a pending or in-flight job.
-// Idempotent. Exposed via the --backfill-enrichment CLI flag. The worker skips
-// fact/entity extraction
-// when prior lineage/relationship rows already exist for the memory, so
-// re-running this against fully-enriched memories costs only the embed
-// call.
+// EnqueueUncoveredMemories enqueues a priority-(-1) enrichment job for every
+// live memory that has never been enriched (durable memories.enriched = false)
+// and does not already hold a pending or in-flight job. Idempotent, and a no-op
+// in steady state (every completed memory is enriched = true). Coverage is keyed
+// on the enriched flag, NOT on the presence of an enrichment_queue row: completed
+// queue rows are pruned by the admin clear-completed endpoint and by
+// memory/namespace deletion, so a queue-row test would re-flag every completed
+// memory and re-enqueue the whole corpus. Exposed via the --backfill-enrichment
+// CLI flag and the dreaming uncovered-backfill phase.
 func EnqueueUncoveredMemories(ctx context.Context, db DB) (int64, error) {
 	// Short-circuit avoids the full-table INSERT...SELECT in steady state.
 	present, err := hasUncoveredMemory(ctx, db)
@@ -101,13 +130,18 @@ func (b *UncoveredBackfiller) EnqueueUncoveredMemories(ctx context.Context) (int
 	return EnqueueUncoveredMemories(ctx, b.db)
 }
 
-// hasUncoveredMemory returns true iff at least one live memory lacks a
-// pending or in-flight (processing) enrichment job.
+// hasUncoveredMemory returns true iff at least one live, never-enriched memory
+// (durable memories.enriched = false) lacks a pending or in-flight (processing)
+// enrichment job. The enriched gate is what keeps this from matching every
+// completed memory once its queue row is cleared; the LEFT JOIN only skips
+// memories already being worked.
 func hasUncoveredMemory(ctx context.Context, db DB) (bool, error) {
+	// enriched as an interpolated literal (not a bound param) so the predicate
+	// matches idx_memories_enriched and stays in lockstep with the INSERT builder.
 	query := `SELECT 1 FROM memories m
 		LEFT JOIN enrichment_queue q
 		  ON q.memory_id = m.id AND q.status IN ('pending','processing')
-		WHERE m.deleted_at IS NULL AND q.id IS NULL
+		WHERE m.deleted_at IS NULL AND m.enriched = ` + boolLiteral(db.Backend(), false) + ` AND q.id IS NULL
 		LIMIT 1`
 	rows, err := db.Query(ctx, query)
 	if err != nil {

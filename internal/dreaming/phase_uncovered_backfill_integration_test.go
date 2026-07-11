@@ -139,6 +139,38 @@ func TestUncoveredBackfillPhase_Integration_EnqueuesAndLogs(t *testing.T) {
 	}
 }
 
+// TestUncoveredBackfillPhase_Integration_EnrichedNotReenqueued is the durable-
+// coverage regression guard: a memory already stamped enriched = true is NOT
+// re-enqueued, even though it has no enrichment_queue row (mirroring a completed
+// job whose queue row was cleared by the admin clear-completed endpoint). Proves
+// the phase keys on memories.enriched, not on queue-row presence.
+func TestUncoveredBackfillPhase_Integration_EnrichedNotReenqueued(t *testing.T) {
+	ctx := context.Background()
+	db := newMigratedTestDB(t)
+	memID, cycle := seedUncoveredMemory(t, ctx, db)
+
+	// Stamp the (only) memory enriched, as finalizeJob would, leaving no queue row.
+	if err := storage.NewMemoryRepo(db).MarkEnriched(ctx, memID, cycle.NamespaceID, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("mark enriched: %v", err)
+	}
+
+	logger := NewDreamLogWriter(storage.NewDreamLogRepo(db), cycle.ID, cycle.ProjectID)
+	phase := NewUncoveredBackfillPhase(storage.NewUncoveredBackfiller(db), uncoveredSettings(true))
+
+	if _, err := phase.Execute(ctx, cycle, NewTokenBudget(10000, 2048), logger); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if got := countPendingJobs(t, ctx, db, memID); got != 0 {
+		t.Errorf("enriched memory was re-enqueued: %d pending jobs, want 0", got)
+	}
+	// The phase still runs (enrichment enabled) and writes a summary, but with a
+	// zero enqueue count since nothing is uncovered.
+	if got := uncoveredSummaryEnqueued(t, ctx, db, cycle.ID); got != 0 {
+		t.Errorf("persisted uncovered_backfill summary enqueued = %d, want 0", got)
+	}
+}
+
 // TestUncoveredBackfillPhase_Integration_DisabledEnqueuesNothing proves the
 // runtime gate: with enrichment.enabled false, a real cycle enqueues nothing and
 // writes no uncovered_backfill dream_logs row.
