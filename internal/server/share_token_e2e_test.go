@@ -693,17 +693,31 @@ func TestShareE2E_BearerDirect_RestRejected(t *testing.T) {
 		t.Fatalf("/mcp should accept share-bearer credentials, got 401")
 	}
 
-	// Share creds must NOT reach /v1/me/profile (a REST endpoint).
-	req, _ = http.NewRequest(http.MethodGet, env.Server.URL+"/v1/me/profile", nil)
-	req.Header.Set("Authorization", "Bearer "+result.RawSecret)
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("rest probe: %v", err)
+	// expectRejected fires an authenticated share-bearer request at a REST path
+	// and asserts the guard returns 403. The body is irrelevant: the guard rejects
+	// before any handler (or AskGate) reads it.
+	expectRejected := func(method, path string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, env.Server.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+result.RawSecret)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s must reject share-bearer with 403, got %d", path, resp.StatusCode)
+		}
 	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("/v1/me/profile must reject share-bearer with 403, got %d", resp.StatusCode)
-	}
+
+	// Share creds must NOT reach REST endpoints: /v1/me/profile is a plain owner
+	// route, and the ask routes sit under the same blanket guard, which rejects
+	// before AskGate runs, so the 403 holds regardless of the ask feature flag.
+	// Probing the ask routes explicitly locks in that they stay inside the guarded
+	// group (a future move outside it, or a bespoke bypass, breaks here).
+	expectRejected(http.MethodGet, "/v1/me/profile")
+	expectRejected(http.MethodPost, "/v1/me/memories/ask")
+	expectRejected(http.MethodPost, "/v1/projects/"+env.ProjectA.ID.String()+"/memories/ask")
 }
 
 // mcpPostTo posts a JSON-RPC request to an explicit MCP URL (used to target a
