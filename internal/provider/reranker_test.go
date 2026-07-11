@@ -212,6 +212,54 @@ func TestCrossEncoderRerank_SigmoidNormalizesLogits(t *testing.T) {
 	}
 }
 
+// TestCrossEncoderRerank_BareArrayShape verifies the forgiving decode of the
+// bare-array /v1/rerank body emitted by a stock SGLang launch server (no router):
+// a top-level JSON array of {index, score, meta_info.prompt_tokens} with raw
+// (possibly negative) logits and no top-level usage object. Results must remap to
+// input order, the sigmoid must bound the logits to (0,1), and Usage.PromptTokens
+// must sum the per-item counts.
+func TestCrossEncoderRerank_BareArrayShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/rerank" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// Bare array, descending by score, out of input order, with a negative
+		// logit and per-item prompt_tokens (mirrors the live SGLang response).
+		_, _ = w.Write([]byte(`[
+			{"score": 8.8125, "document": "d1", "index": 1, "meta_info": {"prompt_tokens": 18}},
+			{"score": -2.0, "document": "d0", "index": 0, "meta_info": {"prompt_tokens": 18}},
+			{"score": -11.0, "document": "d2", "index": 2, "meta_info": {"prompt_tokens": 23}}
+		]`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAIProvider(OpenAIConfig{BaseURL: srv.URL, DefaultModel: "bge"})
+	resp, err := p.Rerank(context.Background(), "q", []string{"d0", "d1", "d2"})
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if len(resp.Scores) != 3 {
+		t.Fatalf("got %d scores, want 3", len(resp.Scores))
+	}
+	// Every score sigmoid-bounded to (0,1) since a logit (8.8125) is outside [0,1].
+	for i, s := range resp.Scores {
+		if s <= 0 || s >= 1 {
+			t.Errorf("score[%d] = %v not in (0,1) after sigmoid", i, s)
+		}
+	}
+	// Remapped to input order d0,d1,d2 from logits -2.0, 8.8125, -11.0: d1 highest, d2 lowest.
+	if !(resp.Scores[1] > resp.Scores[0] && resp.Scores[0] > resp.Scores[2]) {
+		t.Errorf("expected d1 > d0 > d2, got %v", resp.Scores)
+	}
+	if resp.Usage.PromptTokens != 59 { // 18 + 18 + 23
+		t.Errorf("usage prompt tokens = %d, want 59", resp.Usage.PromptTokens)
+	}
+	if resp.Usage.TotalTokens != 59 {
+		t.Errorf("usage total tokens = %d, want 59", resp.Usage.TotalTokens)
+	}
+}
+
 func TestCrossEncoderRerank_EmptyDocs(t *testing.T) {
 	p := NewOpenAIProvider(OpenAIConfig{BaseURL: "http://unused", DefaultModel: "bge"})
 	resp, err := p.Rerank(context.Background(), "q", nil)

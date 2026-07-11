@@ -52,6 +52,55 @@ type openaiRerankResponse struct {
 	Usage   openaiUsage          `json:"usage"`
 }
 
+// sglangRerankItem is one element of the bare-array /v1/rerank response emitted by
+// a stock SGLang launch server (no router). Score is a raw cross-encoder logit;
+// per-item prompt_tokens under meta_info carry the prefill cost.
+type sglangRerankItem struct {
+	Index    int     `json:"index"`
+	Score    float64 `json:"score"`
+	MetaInfo struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"meta_info"`
+}
+
+// parseRerankResponse decodes a /v1/rerank body of either wire shape: the
+// OpenAI-style object {"results":[{"index","relevance_score"}],"usage":{...}}
+// emitted by sglang_router / llama-server / Jina, or the bare JSON array
+// [{"index","score","meta_info":{"prompt_tokens"}}] emitted by a stock SGLang
+// launch server. It sniffs the first non-whitespace byte to pick the shape and
+// returns results already normalized to []openaiRerankResult plus the token
+// usage (summed from per-item prompt_tokens for the bare-array form, which has
+// no top-level usage object).
+func parseRerankResponse(raw []byte) ([]openaiRerankResult, TokenUsage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, TokenUsage{}, fmt.Errorf("empty rerank response")
+	}
+	if trimmed[0] == '[' { // bare SGLang launch server
+		var items []sglangRerankItem
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, TokenUsage{}, err
+		}
+		results := make([]openaiRerankResult, len(items))
+		var usage TokenUsage
+		for i, it := range items {
+			results[i] = openaiRerankResult{Index: it.Index, RelevanceScore: it.Score}
+			usage.PromptTokens += it.MetaInfo.PromptTokens
+		}
+		usage.TotalTokens = usage.PromptTokens
+		return results, usage, nil
+	}
+	var rr openaiRerankResponse // sglang_router / llama-server / Jina object shape
+	if err := json.Unmarshal(trimmed, &rr); err != nil {
+		return nil, TokenUsage{}, err
+	}
+	return rr.Results, TokenUsage{
+		PromptTokens:     rr.Usage.PromptTokens,
+		CompletionTokens: rr.Usage.CompletionTokens,
+		TotalTokens:      rr.Usage.TotalTokens,
+	}, nil
+}
+
 // Rerank scores each document's relevance to query via the OpenAI-style
 // /v1/rerank endpoint. Scores are remapped to input order and normalized to
 // [0,1]: servers differ in score shape (bge XLM-RoBERTa returns raw, possibly
@@ -66,13 +115,20 @@ func (p *OpenAIProvider) Rerank(ctx context.Context, query string, docs []string
 
 	body := openaiRerankRequest{Model: p.config.DefaultModel, Query: query, Documents: docs}
 
-	var rr openaiRerankResponse
-	if err := p.doRequest(ctx, http.MethodPost, "/v1/rerank", body, &rr); err != nil {
+	// Decode into raw bytes so parseRerankResponse can accept either the
+	// object or bare-array wire shape; doRequest still enforces status-code and
+	// streamed-response handling.
+	var raw json.RawMessage
+	if err := p.doRequest(ctx, http.MethodPost, "/v1/rerank", body, &raw); err != nil {
 		return nil, fmt.Errorf("openai: rerank request failed: %w", err)
+	}
+	results, usage, err := parseRerankResponse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("openai: parse rerank response: %w", err)
 	}
 
 	scores := make([]float64, len(docs))
-	for _, res := range rr.Results {
+	for _, res := range results {
 		if res.Index < 0 || res.Index >= len(docs) {
 			continue // ignore out-of-range indices rather than panic
 		}
@@ -85,11 +141,7 @@ func (p *OpenAIProvider) Rerank(ctx context.Context, query string, docs []string
 	return &RerankResponse{
 		Scores: scores,
 		Model:  p.config.DefaultModel,
-		Usage: TokenUsage{
-			PromptTokens:     rr.Usage.PromptTokens,
-			CompletionTokens: rr.Usage.CompletionTokens,
-			TotalTokens:      rr.Usage.TotalTokens,
-		},
+		Usage:  usage,
 	}, nil
 }
 
