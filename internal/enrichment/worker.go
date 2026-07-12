@@ -2143,14 +2143,30 @@ func (wp *WorkerPool) extractAndWriteFacets(ctx context.Context, fs storage.Face
 	// way the memory is stamped at the end so it leaves the backfill candidate
 	// set and the monitor shows it was processed (facet_count = 1 for a single
 	// topic). An upsert failure returns early without stamping so the job retries.
-	if len(facets) > 1 {
+	//
+	// The single-topic branch still calls UpsertFacets (which deletes the whole
+	// facet set then rewrites just facet 0) when the memory PREVIOUSLY produced
+	// topic facets: the base whole-memory Upsert only rewrites facet 0 and never
+	// clears facet_id>0 rows, so a memory that re-embeds at the same dimension
+	// (e.g. an embedding-model switch, which NULLs embedding_dim but leaves
+	// faceted_at set so the backfill sweep never revisits it) and now clusters to
+	// a single topic would otherwise keep its stale topic vectors and rank on
+	// them. First-time single-topic memories (FacetCount nil) skip the clear.
+	priorMultiTopic := mem.FacetCount != nil && *mem.FacetCount > 1
+	if len(facets) > 1 || priorMultiTopic {
 		if err := fs.UpsertFacets(ctx, mem.ID, mem.NamespaceID, dim, facets); err != nil {
 			slog.Warn("enrichment: upsert facets failed", "memory", mem.ID, "err", err)
 			return
 		}
-		// Structured line so the multi-vector pass is visible in the logs
-		// alongside the other enrichment phases (facets = facet 0 + topic facets).
-		slog.Debug("enrichment: facets written", "memory", mem.ID, "facets", len(facets))
+		// Structured line so the multi-vector pass is visible in the logs alongside
+		// the other enrichment phases. Distinguish a normal write (facet 0 + topic
+		// facets) from a stale-clear, where a previously multi-topic memory now
+		// clusters to a single topic and the delete-all rewrites just facet 0.
+		if len(facets) > 1 {
+			slog.Debug("enrichment: facets written", "memory", mem.ID, "facets", len(facets))
+		} else {
+			slog.Debug("enrichment: stale topic facets cleared on single-topic re-facet", "memory", mem.ID, "prior_facets", *mem.FacetCount)
+		}
 	}
 	wp.stampFacetState(ctx, mem, len(facets))
 }

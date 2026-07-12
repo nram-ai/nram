@@ -505,18 +505,53 @@ func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []f
 		return nil, err
 	}
 
-	// Memory points are faceted: over-fetch and collapse to the best facet per
-	// memory. A topic-facet point carries its memory_id in the payload; a
-	// facet-0 point (or any pre-facet point) does not, so its point ID is the
-	// memory_id. Entity points are unaffected (no facets, no memory_id payload).
-	faceted := isFacetedKind(kind)
-	limit := uint64(topK)
-	if faceted {
-		of := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
-			return s.hasTopicFacets(pctx, collection, namespaceID)
-		})
-		limit = uint64(topK * of)
+	// Entity points are not faceted: one point per id, no over-fetch, no collapse.
+	if !isFacetedKind(kind) {
+		best, _, err := s.queryAndFold(ctx, collection, embedding, namespaceID, uint64(topK), nil)
+		if err != nil {
+			return nil, err
+		}
+		return collapseFacets(best, namespaceID, topK), nil
 	}
+
+	// Memory points are faceted: over-fetch and collapse to the best facet per
+	// memory. A topic-facet point carries its memory_id in the payload; a facet-0
+	// point does not (its point ID is the memory_id). When the multi-vector
+	// feature is disabled, restrict to whole-memory (facet 0) points so recall
+	// matches HNSW's disabled behavior and the 1x window is exact; facet 0 carries
+	// facet_id=0 and pre-facet points carry no facet_id, so excluding facet_id>0
+	// keeps exactly the whole-memory points. When enabled with topic facets
+	// present, start at overFetchFor(max_facets) and grow the window up to
+	// facetOverFetchCeiling if a pass under-fills (fewer than topK distinct
+	// memories while the window was saturated) — covering a max_facets setting
+	// lowered below the stored facet count.
+	of, wholeMemoryOnly := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
+		return s.hasTopicFacets(pctx, collection, namespaceID)
+	})
+	var mustNot []*qdrant.Condition
+	if wholeMemoryOnly {
+		gtZero := 0.0
+		mustNot = []*qdrant.Condition{qdrant.NewRange("facet_id", &qdrant.Range{Gt: &gtZero})}
+	}
+	best, err := retryGrowingOverFetch(topK, of, func(overFetch int) (map[uuid.UUID]float64, int, int, error) {
+		b, rawCount, err := s.queryAndFold(ctx, collection, embedding, namespaceID, uint64(topK*overFetch), mustNot)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		return b, len(b), rawCount, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return collapseFacets(best, namespaceID, topK), nil
+}
+
+// queryAndFold runs one namespace-scoped ANN query (optionally restricted by
+// mustNot conditions) and folds the scored points into a best-score-per-memory
+// map, resolving each point to its memory id via the memory_id payload (topic
+// facets) or the point ID (facet 0 / pre-facet). It returns the fold map and the
+// number of raw candidate points the query returned (for saturation detection).
+func (s *QdrantStore) queryAndFold(ctx context.Context, collection string, embedding []float32, namespaceID uuid.UUID, limit uint64, mustNot []*qdrant.Condition) (map[uuid.UUID]float64, int, error) {
 	scored, err := s.client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: collection,
 		Query:          qdrant.NewQueryDense(embedding),
@@ -524,19 +559,20 @@ func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []f
 			Must: []*qdrant.Condition{
 				qdrant.NewMatch("namespace_id", namespaceID.String()),
 			},
+			MustNot: mustNot,
 		},
 		Limit:       &limit,
 		WithPayload: qdrant.NewWithPayload(true),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("qdrant: search query failed: %w", err)
+		return nil, 0, fmt.Errorf("qdrant: search query failed: %w", err)
 	}
 
 	best := make(map[uuid.UUID]float64, len(scored))
 	for _, pt := range scored {
 		mid, err := pointIDToUUID(pt.GetId())
 		if err != nil {
-			return nil, fmt.Errorf("qdrant: invalid point ID in search result: %w", err)
+			return nil, 0, fmt.Errorf("qdrant: invalid point ID in search result: %w", err)
 		}
 		if mv, ok := pt.GetPayload()["memory_id"]; ok {
 			if s := mv.GetStringValue(); s != "" {
@@ -550,8 +586,7 @@ func (s *QdrantStore) Search(ctx context.Context, kind VectorKind, embedding []f
 			best[mid] = score
 		}
 	}
-
-	return collapseFacets(best, namespaceID, topK), nil
+	return best, len(scored), nil
 }
 
 func (s *QdrantStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {

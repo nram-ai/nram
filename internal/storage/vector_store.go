@@ -178,6 +178,21 @@ func isFacetedKind(kind VectorKind) bool {
 // max_facets * topK rows to guarantee topK distinct memories after collapse.
 const facetSearchOverFetch = 8
 
+// MaxFacetsUpperBound is the registered maximum of the
+// enrichment.multi_vector.max_facets setting; the settings registration
+// (internal/storage/admin/settings_store.go) references this constant for its Max
+// bound, so the two cannot silently diverge. It is the most facets any single
+// memory can ever carry.
+const MaxFacetsUpperBound = 32
+
+// facetOverFetchCeiling caps the retry-grown over-fetch multiplier for the
+// in-band faceted backends (pgvector, Qdrant). It equals MaxFacetsUpperBound
+// because a window of topK*facetOverFetchCeiling is then guaranteed to yield topK
+// distinct memories after the best-facet collapse even if the max_facets setting
+// was later lowered below the stored facet count. See effectiveOverFetch and
+// retryGrowingOverFetch.
+const facetOverFetchCeiling = MaxFacetsUpperBound
+
 // overFetchFor returns the candidate over-fetch multiplier for a faceted Search.
 // It is max(facetSearchOverFetch, configured max_facets): the window must hold at
 // least max_facets * topK rows so that even if the top topK-1 memories each
@@ -195,16 +210,59 @@ func overFetchFor(maxFacetsFn func() int) int {
 	return of
 }
 
-// effectiveOverFetch is the candidate over-fetch multiplier for an in-band
-// faceted Search (pgvector, Qdrant), after consulting the facet gate: 1x when
-// the gate is inactive (feature off or the namespace/dimension has no topic
-// facets, so the collapse is a no-op) and overFetchFor(maxFacetsFn) when active.
-// It keeps the "1x unless active" policy in one place beside overFetchFor rather
-// than pasted into each backend's Search. probe is the backend's native
-// topic-facet presence probe.
-func effectiveOverFetch(ctx context.Context, gate *facetGate, namespaceID uuid.UUID, dimension int, maxFacetsFn func() int, probe func(context.Context) (bool, error)) int {
-	if !gate.active(ctx, namespaceID, dimension, probe) {
-		return 1
+// effectiveOverFetch returns the starting candidate over-fetch multiplier for an
+// in-band faceted Search (pgvector, Qdrant) and whether the search should be
+// restricted to whole-memory (facet 0) rows. It folds the two inactive reasons
+// the gate reports into distinct behavior:
+//
+//   - Feature disabled: return (1, true). Recall behaves as whole-memory-only,
+//     matching HNSW (which skips its topic scan when disabled). The caller adds a
+//     facet-0-only filter, so exactly one row per memory is scanned and the 1x
+//     window is provably safe even though topic-facet rows still physically exist.
+//   - No topic facets present (or probe error → fail-safe active): return the
+//     over-fetch floor with wholeMemoryOnly=false. With zero topic facets the
+//     collapse is a no-op; when active, the caller's Search retry loop grows the
+//     window up to facetOverFetchCeiling if the first pass under-fills (which
+//     covers a max_facets setting lowered below the stored facet count).
+//
+// probe is the backend's native topic-facet presence probe.
+func effectiveOverFetch(ctx context.Context, gate *facetGate, namespaceID uuid.UUID, dimension int, maxFacetsFn func() int, probe func(context.Context) (bool, error)) (startOverFetch int, wholeMemoryOnly bool) {
+	if !gate.featureEnabled() {
+		return 1, true
 	}
-	return overFetchFor(maxFacetsFn)
+	if !gate.active(ctx, namespaceID, dimension, probe) {
+		return 1, false
+	}
+	return overFetchFor(maxFacetsFn), false
+}
+
+// grownOverFetch returns the next over-fetch multiplier for a Search retry that
+// under-filled: double it, capped at facetOverFetchCeiling. Returns of unchanged
+// once the ceiling is reached so the caller can detect it cannot grow further.
+func grownOverFetch(of int) int {
+	return min(of*2, facetOverFetchCeiling)
+}
+
+// retryGrowingOverFetch drives the in-band faceted Search retry (pgvector,
+// Qdrant): it runs the backend's query at a growing over-fetch multiplier until
+// enough distinct memories collapse out, the candidate window is no longer
+// saturated (true scarcity, so more candidates cannot exist), or the ceiling is
+// reached. run executes one query at the given over-fetch and returns the
+// backend's result, the number of distinct memories it collapsed to, and the raw
+// candidate count the query returned (which equals topK*overFetch when the window
+// is saturated). Centralizing the loop and this three-part termination test keeps
+// the two backends from silently diverging on the subtle saturated-vs-scarce
+// distinction.
+func retryGrowingOverFetch[R any](topK, startOverFetch int, run func(overFetch int) (out R, distinct, rawCount int, err error)) (R, error) {
+	of := startOverFetch
+	for {
+		out, distinct, rawCount, err := run(of)
+		if err != nil {
+			return out, err
+		}
+		if distinct >= topK || rawCount < topK*of || of >= facetOverFetchCeiling {
+			return out, nil
+		}
+		of = grownOverFetch(of)
+	}
 }

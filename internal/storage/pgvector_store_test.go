@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -788,6 +789,112 @@ func TestPgVectorStore_Delete_RemovesAllFacets(t *testing.T) {
 	}
 	if rowCount != 0 {
 		t.Errorf("after Delete facet count = %d, want 0", rowCount)
+	}
+}
+
+// TestPgVectorStore_Search_FeatureDisabledIsWholeMemoryOnly guards fix 2: when
+// the multi-vector feature is disabled but topic-facet rows still physically
+// exist, faceted Search must behave as whole-memory-only (facet 0), matching
+// HNSW's disabled behavior — topic facets must not participate in ranking. A
+// query aligned to a memory's topic facet (axis 5) but orthogonal to its facet-0
+// (axis 0) must therefore score that memory ~0, not ~1. Before the fix the
+// collapse ran over all facets even when disabled, so the topic facet scored ~1.
+func TestPgVectorStore_Search_FeatureDisabledIsWholeMemoryOnly(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+	alwaysTTL := func() time.Duration { return time.Hour }
+	store.SetFacetGate(func() bool { return false }, alwaysTTL) // feature DISABLED
+
+	nsID := uuid.New()
+	mem := uuid.New()
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "disabled-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", mem, nsID, "m"); err != nil {
+		t.Fatalf("insert memory: %v", err)
+	}
+	dim := 384
+	// facet 0 on axis 0 (the whole-memory vector); topic facet on axis 5.
+	if err := store.UpsertFacets(ctx, mem, nsID, dim, [][]float32{orthEmbedding(dim, 0), orthEmbedding(dim, 5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+
+	// Query on axis 5 (the topic facet). With the feature disabled the topic
+	// facet must be excluded, so the memory scores on its axis-0 facet 0 (~0).
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 5), nsID, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	seen := 0
+	var score float64
+	for _, r := range results {
+		if r.ID == mem {
+			seen++
+			score = r.Score
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("memory appeared %d times, want exactly 1", seen)
+	}
+	if score > 0.5 {
+		t.Errorf("feature disabled: memory scored %f on an axis-5 query, want ~0 (facet 0 = axis 0 only; topic facet must be excluded)", score)
+	}
+}
+
+// TestPgVectorStore_Search_OverFetchGrowsWhenMaxFacetsLowered guards fix 3: if
+// max_facets is lowered below the facet count some memories were written with,
+// the initial over-fetch window can be smaller than a single memory's facet set,
+// collapsing to fewer than topK distinct memories. The Search retry must grow the
+// window (up to the ceiling) so topK distinct memories are still returned. Before
+// the fix the window was fixed at topK*max(8, max_facets) and under-returned.
+func TestPgVectorStore_Search_OverFetchGrowsWhenMaxFacetsLowered(t *testing.T) {
+	store := setupPgVectorTestWithSchema(t)
+	ctx := context.Background()
+	alwaysTTL := func() time.Duration { return time.Hour }
+	store.SetFacetGate(func() bool { return true }, alwaysTTL) // feature ENABLED
+	store.SetMaxFacetsResolver(func() int { return 1 })        // lowered: over-fetch floor stays 8
+
+	nsID := uuid.New()
+	dominant := uuid.New() // written with 20 facets, all nearest to the query
+	other := uuid.New()    // one whole-memory vector, slightly farther
+	pool := store.pool
+	if _, err := pool.Exec(ctx, "INSERT INTO namespaces (id, name) VALUES ($1, $2)", nsID, "overfetch-ns"); err != nil {
+		t.Fatalf("insert namespace: %v", err)
+	}
+	for _, id := range []uuid.UUID{dominant, other} {
+		if _, err := pool.Exec(ctx, "INSERT INTO memories (id, namespace_id, content) VALUES ($1, $2, $3)", id, nsID, "m"); err != nil {
+			t.Fatalf("insert memory: %v", err)
+		}
+	}
+	dim := 384
+	// dominant: 20 facets all exactly on axis 5 (distance 0 to the query), so the
+	// top-16 candidate window (topK=2 * of=8) is entirely dominant's facets.
+	dominantFacets := make([][]float32, 20)
+	for i := range dominantFacets {
+		dominantFacets[i] = orthEmbedding(dim, 5)
+	}
+	if err := store.UpsertFacets(ctx, dominant, nsID, dim, dominantFacets); err != nil {
+		t.Fatalf("UpsertFacets dominant: %v", err)
+	}
+	// other: near axis 5 but strictly farther than dominant's exact-axis facets.
+	near := make([]float32, dim)
+	near[5] = 1
+	near[6] = 0.1
+	if err := store.Upsert(ctx, VectorKindMemory, other, nsID, near, dim); err != nil {
+		t.Fatalf("Upsert other: %v", err)
+	}
+
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 5), nsID, dim, 2)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	distinct := map[uuid.UUID]bool{}
+	for _, r := range results {
+		distinct[r.ID] = true
+	}
+	if len(distinct) != 2 {
+		t.Fatalf("Search returned %d distinct memories, want 2 (retry must grow the window past dominant's 20 facets to reach %s)", len(distinct), other)
 	}
 }
 

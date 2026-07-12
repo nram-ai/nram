@@ -315,51 +315,20 @@ func (s *PgVectorStore) Search(ctx context.Context, kind VectorKind, embedding [
 		whereExtra = " AND p.deleted_at IS NULL"
 	}
 
-	var query string
-	var args []any
 	if spec.faceted {
-		// Multiple facet rows can share a memory_id. Scan the index-ordered top
-		// (topK * overFetch) candidate facet rows, keep the best (nearest) facet
-		// per memory via ROW_NUMBER, then take topK distinct memories. The inner
-		// ORDER BY ... LIMIT uses the hnsw index; the window runs over only that
-		// bounded candidate set. Score = 1 - min(distance) = best facet.
-		query = fmt.Sprintf(
-			`SELECT %s, score, namespace_id FROM (
-			   SELECT %s, score, namespace_id,
-			          ROW_NUMBER() OVER (PARTITION BY %s ORDER BY score DESC) AS rn
-			   FROM (
-			     SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
-			     FROM %s v
-			     JOIN %s p ON v.%s = p.id
-			     WHERE p.namespace_id = $2%s
-			     ORDER BY v.embedding <=> $1
-			     LIMIT $3
-			   ) cand
-			 ) ranked
-			 WHERE rn = 1
-			 ORDER BY score DESC
-			 LIMIT $4`,
-			spec.idColumn, spec.idColumn, spec.idColumn, spec.idColumn,
-			spec.table, spec.parent, spec.idColumn, whereExtra,
-		)
-		of := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
-			return s.hasTopicFacets(pctx, spec, namespaceID)
-		})
-		args = []any{pgvector.NewVector(embedding), namespaceID, topK * of, topK}
-	} else {
-		query = fmt.Sprintf(
-			`SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
-			 FROM %s v
-			 JOIN %s p ON v.%s = p.id
-			 WHERE p.namespace_id = $2%s
-			 ORDER BY v.embedding <=> $1
-			 LIMIT $3`,
-			spec.idColumn, spec.table, spec.parent, spec.idColumn, whereExtra,
-		)
-		args = []any{pgvector.NewVector(embedding), namespaceID, topK}
+		return s.searchFaceted(ctx, spec, embedding, namespaceID, dimension, topK, whereExtra)
 	}
 
-	rows, err := s.pool.Query(ctx, query, args...)
+	query := fmt.Sprintf(
+		`SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id
+		 FROM %s v
+		 JOIN %s p ON v.%s = p.id
+		 WHERE p.namespace_id = $2%s
+		 ORDER BY v.embedding <=> $1
+		 LIMIT $3`,
+		spec.idColumn, spec.table, spec.parent, spec.idColumn, whereExtra,
+	)
+	rows, err := s.pool.Query(ctx, query, pgvector.NewVector(embedding), namespaceID, topK)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector: search query failed: %w", err)
 	}
@@ -378,6 +347,74 @@ func (s *PgVectorStore) Search(ctx context.Context, kind VectorKind, embedding [
 	}
 
 	return results, nil
+}
+
+// searchFaceted runs the faceted memory search. Multiple facet rows can share a
+// memory_id, so it scans the index-ordered top (topK * overFetch) candidate facet
+// rows, keeps the best (nearest) facet per memory via ROW_NUMBER, then takes topK
+// distinct memories. Score = 1 - min(distance) = best facet.
+//
+// When the multi-vector feature is disabled the search is restricted to facet 0
+// (whole-memory) rows so recall matches HNSW's disabled behavior and the 1x
+// window is exact. When enabled with topic facets present, the candidate window
+// starts at overFetchFor(max_facets) and, if it under-fills (fewer than topK
+// distinct memories while the window was saturated), grows up to
+// facetOverFetchCeiling and re-queries — this covers a max_facets setting lowered
+// below the facet count some memories were written with, without paying the
+// larger window on the common path.
+func (s *PgVectorStore) searchFaceted(ctx context.Context, spec pgvectorTableSpec, embedding []float32, namespaceID uuid.UUID, dimension, topK int, whereExtra string) ([]VectorSearchResult, error) {
+	of, wholeMemoryOnly := effectiveOverFetch(ctx, s.gate, namespaceID, dimension, s.maxFacetsFn, func(pctx context.Context) (bool, error) {
+		return s.hasTopicFacets(pctx, spec, namespaceID)
+	})
+	facetFilter := ""
+	if wholeMemoryOnly {
+		facetFilter = " AND v.facet_id = 0"
+	}
+	// raw_count is the count of candidate rows the inner LIMIT actually returned;
+	// it equals the LIMIT when the window is saturated (more candidates may exist)
+	// and is smaller when the namespace has fewer matching rows (true scarcity, so
+	// growing the window cannot add distinct memories).
+	query := fmt.Sprintf(
+		`SELECT %s, score, namespace_id, raw_count FROM (
+		   SELECT %s, score, namespace_id, raw_count,
+		          ROW_NUMBER() OVER (PARTITION BY %s ORDER BY score DESC) AS rn
+		   FROM (
+		     SELECT v.%s, 1 - (v.embedding <=> $1) AS score, p.namespace_id,
+		            COUNT(*) OVER () AS raw_count
+		     FROM %s v
+		     JOIN %s p ON v.%s = p.id
+		     WHERE p.namespace_id = $2%s%s
+		     ORDER BY v.embedding <=> $1
+		     LIMIT $3
+		   ) cand
+		 ) ranked
+		 WHERE rn = 1
+		 ORDER BY score DESC
+		 LIMIT $4`,
+		spec.idColumn, spec.idColumn, spec.idColumn, spec.idColumn,
+		spec.table, spec.parent, spec.idColumn, whereExtra, facetFilter,
+	)
+
+	return retryGrowingOverFetch(topK, of, func(overFetch int) ([]VectorSearchResult, int, int, error) {
+		rows, err := s.pool.Query(ctx, query, pgvector.NewVector(embedding), namespaceID, topK*overFetch, topK)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("pgvector: faceted search query failed: %w", err)
+		}
+		defer rows.Close()
+		var results []VectorSearchResult
+		var rawCount int
+		for rows.Next() {
+			var r VectorSearchResult
+			if err := rows.Scan(&r.ID, &r.Score, &r.NamespaceID, &rawCount); err != nil {
+				return nil, 0, 0, fmt.Errorf("pgvector: faceted search scan failed: %w", err)
+			}
+			results = append(results, r)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, 0, 0, fmt.Errorf("pgvector: faceted search rows error: %w", err)
+		}
+		return results, len(results), rawCount, nil
+	})
 }
 
 func (s *PgVectorStore) GetByIDs(ctx context.Context, kind VectorKind, ids []uuid.UUID, dimension int) (map[uuid.UUID][]float32, error) {

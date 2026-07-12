@@ -132,6 +132,19 @@ func (g *facetGate) active(ctx context.Context, ns uuid.UUID, dim int, probe fun
 	return present
 }
 
+// featureEnabled reports whether the multi-vector feature switch is on. A nil
+// gate or nil enabledFn reports true (pre-gate behavior). Search uses this to
+// distinguish the two inactive reasons: a disabled feature means recall should
+// behave as whole-memory-only (facet 0), whereas merely-absent topic facets
+// means the facet path is a no-op. Kept separate from active() so the caller can
+// apply a facet-0-only filter only when the feature is genuinely disabled.
+func (g *facetGate) featureEnabled() bool {
+	if g == nil || g.enabledFn == nil {
+		return true
+	}
+	return g.enabledFn()
+}
+
 // invalidate drops the cached presence answer for one namespace/dimension.
 // Nil-safe so unwired stores can call it unconditionally.
 func (g *facetGate) invalidate(ns uuid.UUID, dim int) {

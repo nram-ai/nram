@@ -246,6 +246,49 @@ func TestWriteMemoryFacets_SingleTopicWritesNoFacets(t *testing.T) {
 	}
 }
 
+// TestWriteMemoryFacets_SingleTopicClearsStalePriorFacets guards the stale-facet
+// leak fix: a memory that PREVIOUSLY produced topic facets (FacetCount > 1) but
+// now re-clusters to a single topic must still call UpsertFacets — which deletes
+// the whole facet set and rewrites just facet 0 — so its old facet_id>0 rows
+// cannot linger in a different vector space (e.g. after a same-dimension
+// embedding-model switch) and pollute recall. The base whole-memory Upsert only
+// rewrites facet 0 and never clears topic rows, so without this the stale topics
+// would survive while facet_count is stamped back to 1.
+func TestWriteMemoryFacets_SingleTopicClearsStalePriorFacets(t *testing.T) {
+	store := newRecordingFacetStore()
+	pool := newMultiVectorTestPool(t, store, true)
+
+	memID := uuid.New()
+	whole := make([]float32, 8)
+	whole[0] = 1
+	priorFacetCount := 3
+	pending := &pendingJob{
+		job: &model.EnrichmentJob{ID: uuid.New()},
+		mem: &model.Memory{
+			ID:          memID,
+			NamespaceID: uuid.New(),
+			Content:     "PRICE one. PRICE two. PRICE three.", // single topic now
+			FacetCount:  &priorFacetCount,                     // was multi-topic before
+		},
+		embedStart: 0,
+	}
+
+	pool.writeMemoryFacets(context.Background(), []*pendingJob{pending}, [][]float32{whole})
+
+	facets, ok := store.facetCalls[memID]
+	if !ok {
+		t.Fatal("UpsertFacets must be called to clear stale topic facets when a previously multi-topic memory re-clusters to a single topic")
+	}
+	if len(facets) != 1 {
+		t.Fatalf("clear-on-shrink must rewrite exactly facet 0 (len 1), got %d facets", len(facets))
+	}
+	// facet_count must be re-stamped to 1 to match the now-single facet set.
+	marks := facetStateMarksOf(t, pool)
+	if len(marks) != 1 || marks[0].facetCount != 1 {
+		t.Fatalf("facet state stamps = %+v, want exactly one stamp with count 1", marks)
+	}
+}
+
 // failIfCalledLLM is a provider.LLMProvider that fails the test if Complete is
 // invoked. Wired into the pool's fact/entity slots so the facet-only sweep can
 // prove it makes no LLM (SGLang) calls, only facet sentence-embeds.

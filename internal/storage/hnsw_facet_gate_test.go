@@ -87,6 +87,37 @@ func TestHNSWStore_FacetScanGate(t *testing.T) {
 		}
 	})
 
+	// Result-level lock parallel to the pgvector/qdrant fix-2 tests: with the
+	// feature off, HNSW recall must be whole-memory-only (facet 0), so a query on
+	// a memory's topic-facet axis (5) but orthogonal to its facet 0 (axis 0) scores
+	// that memory on facet 0 (~0), never on the excluded topic facet (~1).
+	t.Run("topic facets present + feature off: recall is whole-memory-only", func(t *testing.T) {
+		store := newStore(t, false)
+		nsID := uuid.New()
+		multi := uuid.New()
+		if err := store.UpsertFacets(ctx, multi, nsID, dim, [][]float32{axis(0), axis(5)}); err != nil {
+			t.Fatalf("UpsertFacets: %v", err)
+		}
+		results, err := store.Search(ctx, storage.VectorKindMemory, axis(5), nsID, dim, 10)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		seen := 0
+		var score float64
+		for _, r := range results {
+			if r.ID == multi {
+				seen++
+				score = r.Score
+			}
+		}
+		if seen != 1 {
+			t.Fatalf("memory appeared %d times, want exactly 1", seen)
+		}
+		if score > 0.5 {
+			t.Errorf("feature off: memory scored %f on an axis-5 query, want ~0 (facet 0 = axis 0 only; topic facet must be excluded)", score)
+		}
+	})
+
 	// Writing facets must invalidate a cached "no facets" answer immediately, not
 	// after the TTL. The store uses a 1-hour TTL, so only cache invalidation (not
 	// expiry) can make the post-write recall run the scan and surface the facet.

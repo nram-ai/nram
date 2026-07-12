@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
@@ -688,6 +689,110 @@ func TestQdrantStore_UpsertFacets_CollapsesToBestFacet(t *testing.T) {
 		if r.ID == multi {
 			t.Errorf("multi still present after delete")
 		}
+	}
+}
+
+// TestQdrantStore_Search_FeatureDisabledIsWholeMemoryOnly guards fix 2 on Qdrant:
+// with the multi-vector feature disabled but topic-facet points still present,
+// Search must restrict to whole-memory points (facet 0, facet_id=0, plus pre-facet
+// points with no facet_id) via a must-not facet_id>0 filter, so a topic facet
+// never participates in ranking. A query aligned to the topic facet (axis 5) but
+// orthogonal to facet 0 (axis 0) must score the memory ~0. Before the fix the
+// collapse ran over all points even when disabled, scoring the topic facet ~1.
+func TestQdrantStore_Search_FeatureDisabledIsWholeMemoryOnly(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+	store.SetFacetGate(func() bool { return false }, func() time.Duration { return time.Hour }) // DISABLED
+
+	ns := uuid.New()
+	dim := 384
+	mem := uuid.New()
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Delete(ctx, VectorKindMemory, mem) })
+
+	if err := store.UpsertFacets(ctx, mem, ns, dim, [][]float32{orthEmbedding(dim, 0), orthEmbedding(dim, 5)}); err != nil {
+		t.Fatalf("UpsertFacets: %v", err)
+	}
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 5), ns, dim, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	seen := 0
+	var score float64
+	for _, r := range results {
+		if r.ID == mem {
+			seen++
+			score = r.Score
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("memory appeared %d times, want exactly 1", seen)
+	}
+	if score > 0.5 {
+		t.Errorf("feature disabled: memory scored %f on an axis-5 query, want ~0 (facet 0 = axis 0 only; topic facet must be excluded)", score)
+	}
+}
+
+// TestQdrantStore_Search_OverFetchGrowsWhenMaxFacetsLowered guards fix 3 on
+// Qdrant: when max_facets is lowered below a memory's stored facet count, the
+// initial over-fetch window can be entirely one memory's facets, collapsing to
+// fewer than topK distinct memories. The Search retry must grow the window until
+// topK distinct memories are returned. Before the fix the window was fixed and
+// under-returned.
+func TestQdrantStore_Search_OverFetchGrowsWhenMaxFacetsLowered(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+	store.SetFacetGate(func() bool { return true }, func() time.Duration { return time.Hour }) // ENABLED
+	store.SetMaxFacetsResolver(func() int { return 1 })                                        // lowered: over-fetch floor stays 8
+
+	ns := uuid.New()
+	dim := 384
+	dominant := uuid.New()
+	other := uuid.New()
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		_ = store.Delete(ctx, VectorKindMemory, dominant)
+		_ = store.Delete(ctx, VectorKindMemory, other)
+	})
+
+	dominantFacets := make([][]float32, 20)
+	for i := range dominantFacets {
+		dominantFacets[i] = orthEmbedding(dim, 5) // all exactly on axis 5: nearest to the query
+	}
+	if err := store.UpsertFacets(ctx, dominant, ns, dim, dominantFacets); err != nil {
+		t.Fatalf("UpsertFacets dominant: %v", err)
+	}
+	near := make([]float32, dim)
+	near[5] = 1
+	near[6] = 0.1 // near axis 5 but strictly farther than dominant's exact-axis facets
+	if err := store.Upsert(ctx, VectorKindMemory, other, ns, near, dim); err != nil {
+		t.Fatalf("Upsert other: %v", err)
+	}
+
+	results, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 5), ns, dim, 2)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	distinct := map[uuid.UUID]bool{}
+	for _, r := range results {
+		distinct[r.ID] = true
+	}
+	if len(distinct) != 2 {
+		t.Fatalf("Search returned %d distinct memories, want 2 (retry must grow the window past dominant's 20 facets)", len(distinct))
 	}
 }
 

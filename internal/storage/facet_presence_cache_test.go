@@ -154,18 +154,35 @@ func TestEffectiveOverFetch(t *testing.T) {
 	want := overFetchFor(maxFacets)
 
 	on := newFacetGate(func() bool { return true }, ttl)
-	if got := effectiveOverFetch(ctx, on, ns, 384, maxFacets, present); got != want {
-		t.Errorf("feature on + facets present: got %d, want %d (overFetchFor)", got, want)
+	if got, whole := effectiveOverFetch(ctx, on, ns, 384, maxFacets, present); got != want || whole {
+		t.Errorf("feature on + facets present: got (%d, %v), want (%d, false)", got, whole, want)
 	}
-	if got := effectiveOverFetch(ctx, on, uuid.New(), 384, maxFacets, absent); got != 1 {
-		t.Errorf("feature on + no facets: got %d, want 1", got)
+	if got, whole := effectiveOverFetch(ctx, on, uuid.New(), 384, maxFacets, absent); got != 1 || whole {
+		t.Errorf("feature on + no facets: got (%d, %v), want (1, false)", got, whole)
 	}
 	off := newFacetGate(func() bool { return false }, ttl)
-	if got := effectiveOverFetch(ctx, off, ns, 384, maxFacets, present); got != 1 {
-		t.Errorf("feature off: got %d, want 1", got)
+	if got, whole := effectiveOverFetch(ctx, off, ns, 384, maxFacets, present); got != 1 || !whole {
+		t.Errorf("feature off: got (%d, %v), want (1, true) — whole-memory-only", got, whole)
 	}
-	if got := effectiveOverFetch(ctx, nil, ns, 384, maxFacets, present); got != want {
-		t.Errorf("nil gate (pre-gate behavior): got %d, want %d", got, want)
+	if got, whole := effectiveOverFetch(ctx, nil, ns, 384, maxFacets, present); got != want || whole {
+		t.Errorf("nil gate (pre-gate behavior): got (%d, %v), want (%d, false)", got, whole, want)
+	}
+}
+
+func TestFacetGate_FeatureEnabled(t *testing.T) {
+	ttl := func() time.Duration { return time.Hour }
+	if on := newFacetGate(func() bool { return true }, ttl); !on.featureEnabled() {
+		t.Error("feature on: featureEnabled should be true")
+	}
+	if off := newFacetGate(func() bool { return false }, ttl); off.featureEnabled() {
+		t.Error("feature off: featureEnabled should be false")
+	}
+	var nilGate *facetGate
+	if !nilGate.featureEnabled() {
+		t.Error("nil gate: featureEnabled should be true (pre-gate behavior)")
+	}
+	if g := newFacetGate(nil, ttl); !g.featureEnabled() {
+		t.Error("nil enabledFn: featureEnabled should be true (pre-gate behavior)")
 	}
 }
 
