@@ -55,6 +55,85 @@ func (m *mockMemoryReaderRecall) ListByNamespaceFiltered(_ context.Context, _ uu
 	return []model.Memory{}, nil
 }
 
+// capturingRecallSvc records the RecallRequest the handler constructs so tests
+// can assert aperture/flag wiring the concrete RecallService would otherwise
+// absorb. Implements the RecallRunner seam.
+type capturingRecallSvc struct {
+	captured *service.RecallRequest
+}
+
+func (c *capturingRecallSvc) Recall(_ context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+	c.captured = req
+	return &service.RecallResponse{Memories: []service.RecallResult{}}, nil
+}
+
+func (c *capturingRecallSvc) ReinforceGraphEdgesAsync(_ []service.RelationshipRef) {}
+
+// TestHandleMemoryRecall_OriginDemotionByScope is the fail-before / pass-after
+// guard for the origin-demotion fix: a no-project recall treats global as a
+// structural seed and must set DemotePrimaryOrigin=true (so global does not
+// out-boost the joined about_me tier on origin alone), while a project-scoped
+// recall targets a deliberately chosen focus and must keep its origin boost.
+func TestHandleMemoryRecall_OriginDemotionByScope(t *testing.T) {
+	userID := uuid.New()
+	nsID := uuid.New()
+	user := &model.User{ID: userID, NamespaceID: nsID}
+
+	tests := []struct {
+		name       string
+		project    *model.Project
+		args       map[string]any
+		wantDemote bool
+	}{
+		{
+			name:       "no project: global is a structural seed, demote origin",
+			project:    &model.Project{ID: uuid.New(), NamespaceID: uuid.New(), Slug: model.ReservedProjectSlugGlobal},
+			args:       map[string]any{"query": "anything"},
+			wantDemote: true,
+		},
+		{
+			name:       "project-scoped: chosen focus keeps its origin boost",
+			project:    &model.Project{ID: uuid.New(), NamespaceID: uuid.New(), OwnerNamespaceID: nsID, Slug: "myproj"},
+			args:       map[string]any{"query": "anything", "project": "myproj"},
+			wantDemote: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spy := &capturingRecallSvc{}
+			srv := newTestServer(Dependencies{
+				Backend:       storage.BackendSQLite,
+				UserRepo:      &mockUserRepoStore{user: user},
+				ProjectRepo:   &mockProjectRepoStore{project: tt.project},
+				NamespaceRepo: &mockNamespaceRepoStore{ns: &model.Namespace{ID: nsID, Path: "/user"}},
+				Recall:        spy,
+			})
+
+			callReq := mcp.CallToolRequest{}
+			callReq.Params.Name = "recall"
+			callReq.Params.Arguments = tt.args
+
+			result, err := handleMemoryRecall(buildAuthCtx(userID), srv, callReq)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("unexpected tool error: %v", result.Content)
+			}
+			if spy.captured == nil {
+				t.Fatal("recall service not invoked")
+			}
+			if spy.captured.DemotePrimaryOrigin != tt.wantDemote {
+				t.Errorf("DemotePrimaryOrigin = %v, want %v", spy.captured.DemotePrimaryOrigin, tt.wantDemote)
+			}
+			if spy.captured.ProjectID != tt.project.ID {
+				t.Errorf("primary ProjectID = %s, want %s", spy.captured.ProjectID, tt.project.ID)
+			}
+		})
+	}
+}
+
 // --- schema tests ---
 
 // TestBuildMCPRecallResponse_SurfacesOrigin confirms the typed origin field is

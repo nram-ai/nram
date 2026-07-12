@@ -25,6 +25,15 @@ type ProjectRepo interface {
 	UpdateDescription(ctx context.Context, id uuid.UUID, description string) error
 }
 
+// RecallRunner defines the recall operations MCP tool handlers depend on.
+// It is an interface (not the concrete *service.RecallService) so tests can
+// capture the constructed RecallRequest; the concrete service satisfies it.
+// Mirrors the REST layer's RecallServicer seam.
+type RecallRunner interface {
+	Recall(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error)
+	ReinforceGraphEdgesAsync(refs []service.RelationshipRef)
+}
+
 // UserRepo defines the user lookup operations needed by MCP tool handlers.
 type UserRepo interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
@@ -87,7 +96,7 @@ type Dependencies struct {
 	// the advertisement.
 	InstanceID string
 	Store      *service.StoreService
-	Recall     *service.RecallService
+	Recall     RecallRunner
 	// Ask backs the ask synthesis tool. Optional: when nil the tool is not
 	// registered. When non-nil it is registered but its visibility is gated
 	// live by the ask.enabled setting via the tool-list filter, so toggling

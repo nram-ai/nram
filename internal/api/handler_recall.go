@@ -51,6 +51,41 @@ type UserReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
 }
 
+// applyOwnerAperture configures req to search the user's full owned corpus,
+// mirroring the ask tool's owner aperture (ask.go resolveOwnerAperture): the
+// reserved global project is the primary structural seed (origin-demoted so
+// world-knowledge does not outrank the caller's own project and persona
+// memories), and every other owned project namespace (including about_me and
+// every real project) unions into the aperture. Falls back to the first owned
+// project when no global exists, and to a bare owner-namespace search when the
+// user owns no projects at all.
+func applyOwnerAperture(req *service.RecallRequest, owned []model.Project, ownerNS uuid.UUID) {
+	if len(owned) == 0 {
+		req.NamespaceID = &ownerNS
+		return
+	}
+	var primary *model.Project
+	for i := range owned {
+		if owned[i].Slug == model.ReservedProjectSlugGlobal {
+			primary = &owned[i]
+			break
+		}
+	}
+	if primary != nil {
+		// global is only a structural search seed here, not a chosen focus:
+		// do not origin-boost it above the other tiers.
+		req.DemotePrimaryOrigin = true
+	} else {
+		primary = &owned[0]
+	}
+	req.ProjectID = primary.ID
+	for i := range owned {
+		if owned[i].NamespaceID != primary.NamespaceID {
+			req.ApertureNamespaceIDs = append(req.ApertureNamespaceIDs, owned[i].NamespaceID)
+		}
+	}
+}
+
 // recallRequestBody represents the JSON body for recall endpoints.
 type recallRequestBody struct {
 	Query                   string   `json:"query"`
@@ -141,8 +176,9 @@ func NewRecallHandler(svc RecallServicer) http.HandlerFunc {
 }
 
 // NewMeRecallHandler returns an http.HandlerFunc for user-scoped memory recall.
-// It looks up the authenticated user's namespace and searches across all projects.
-func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
+// It searches across all of the authenticated user's projects, building the same
+// owner aperture the ask tool uses (see applyOwnerAperture).
+func NewMeRecallHandler(svc RecallServicer, users UserReader, projects ProjectLister) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body recallRequestBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -178,8 +214,17 @@ func NewMeRecallHandler(svc RecallServicer, users UserReader) http.HandlerFunc {
 			GraphDepth:              body.GraphDepth,
 			IncludeLowNovelty:       body.IncludeLowNovelty,
 			DiversifyByTagPrefix:    body.DiversifyByTagPrefix,
-			NamespaceID:             &user.NamespaceID,
 		}
+
+		// Search the user's full owned corpus. Memories live in per-project
+		// child namespaces, so rooting the search on the owner namespace alone
+		// (the prior behavior) searched an empty namespace and returned nothing.
+		owned, err := projects.ListByUser(r.Context(), user.NamespaceID)
+		if err != nil {
+			WriteError(w, ErrInternal("list projects: "+err.Error()))
+			return
+		}
+		applyOwnerAperture(req, owned, user.NamespaceID)
 
 		uid := ac.UserID
 		req.UserID = &uid

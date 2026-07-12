@@ -1214,7 +1214,7 @@ func main() {
 		}),
 
 		// User-scoped handlers
-		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo),
+		MeRecall:            api.NewMeRecallHandler(recallSvc, userRepo, projectRepo),
 		MeAsk:               api.NewMeAskHandler(askSvc, userRepo),
 		MeProjects:          api.NewMeProjectsHandler(projectRepo, userRepo, namespaceRepo, eventBus),
 		MeProjectItem:       api.NewMeProjectItemHandler(projectRepo, userRepo, eventBus),

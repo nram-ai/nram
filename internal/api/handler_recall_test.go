@@ -196,9 +196,22 @@ func TestRecallHandler_InvalidProjectID(t *testing.T) {
 	}
 }
 
+// TestMeRecallHandler_Success verifies me-recall builds the owner-wide aperture:
+// the reserved global project is the origin-demoted primary seed and every other
+// owned project namespace (about_me + real projects) joins as aperture, so the
+// endpoint searches the full corpus instead of the (empty) owner namespace.
 func TestMeRecallHandler_Success(t *testing.T) {
 	namespaceID := uuid.New()
 	userID := uuid.New()
+
+	globalNS, aboutMeNS, projANS, projBNS := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	globalID := uuid.New()
+	owned := []model.Project{
+		{ID: uuid.New(), NamespaceID: aboutMeNS, Slug: model.ReservedProjectSlugAboutMe},
+		{ID: globalID, NamespaceID: globalNS, Slug: model.ReservedProjectSlugGlobal},
+		{ID: uuid.New(), NamespaceID: projANS, Slug: "proj-a"},
+		{ID: uuid.New(), NamespaceID: projBNS, Slug: "proj-b"},
+	}
 
 	users := &mockUserReader{
 		user: &model.User{
@@ -206,13 +219,40 @@ func TestMeRecallHandler_Success(t *testing.T) {
 			NamespaceID: namespaceID,
 		},
 	}
+	projects := &mockProjectLister{
+		listFn: func(_ context.Context, ownerNS uuid.UUID) ([]model.Project, error) {
+			if ownerNS != namespaceID {
+				t.Errorf("expected ListByUser on owner ns %s, got %s", namespaceID, ownerNS)
+			}
+			return owned, nil
+		},
+	}
 
 	svc := &mockRecallService{
 		recallFn: func(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
-			if req.NamespaceID == nil {
-				t.Error("expected NamespaceID to be set")
-			} else if *req.NamespaceID != namespaceID {
-				t.Errorf("expected namespace_id %s, got %s", namespaceID, *req.NamespaceID)
+			if req.ProjectID != globalID {
+				t.Errorf("expected primary ProjectID=global %s, got %s", globalID, req.ProjectID)
+			}
+			if !req.DemotePrimaryOrigin {
+				t.Error("expected DemotePrimaryOrigin=true (global is a structural seed)")
+			}
+			if req.NamespaceID != nil {
+				t.Errorf("expected NamespaceID nil (aperture drives the search), got %v", req.NamespaceID)
+			}
+			gotAperture := map[uuid.UUID]bool{}
+			for _, ns := range req.ApertureNamespaceIDs {
+				gotAperture[ns] = true
+			}
+			for _, want := range []uuid.UUID{aboutMeNS, projANS, projBNS} {
+				if !gotAperture[want] {
+					t.Errorf("expected aperture to include %s; got %v", want, req.ApertureNamespaceIDs)
+				}
+			}
+			if gotAperture[globalNS] {
+				t.Error("global (the primary seed) must not also appear in the aperture")
+			}
+			if len(req.ApertureNamespaceIDs) != 3 {
+				t.Errorf("expected 3 aperture namespaces, got %d", len(req.ApertureNamespaceIDs))
 			}
 			if req.UserID == nil || *req.UserID != userID {
 				t.Error("expected UserID to match authenticated user")
@@ -224,7 +264,7 @@ func TestMeRecallHandler_Success(t *testing.T) {
 		},
 	}
 
-	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users, projects))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
 	body := map[string]any{
@@ -243,6 +283,42 @@ func TestMeRecallHandler_Success(t *testing.T) {
 	}
 	if resp.LatencyMs < 0 {
 		t.Errorf("unexpected latency: %d", resp.LatencyMs)
+	}
+}
+
+// TestMeRecallHandler_NoProjectsFallback verifies the degenerate path: a user
+// who owns no projects still gets a valid (bare owner-namespace) recall rather
+// than an error or a global-primary aperture.
+func TestMeRecallHandler_NoProjectsFallback(t *testing.T) {
+	namespaceID := uuid.New()
+	userID := uuid.New()
+
+	users := &mockUserReader{user: &model.User{ID: userID, NamespaceID: namespaceID}}
+	projects := &mockProjectLister{
+		listFn: func(_ context.Context, _ uuid.UUID) ([]model.Project, error) {
+			return nil, nil
+		},
+	}
+	svc := &mockRecallService{
+		recallFn: func(ctx context.Context, req *service.RecallRequest) (*service.RecallResponse, error) {
+			if req.NamespaceID == nil || *req.NamespaceID != namespaceID {
+				t.Errorf("expected fallback NamespaceID=%s, got %v", namespaceID, req.NamespaceID)
+			}
+			if req.ProjectID != uuid.Nil {
+				t.Errorf("expected no primary project in fallback, got %s", req.ProjectID)
+			}
+			if req.DemotePrimaryOrigin {
+				t.Error("expected DemotePrimaryOrigin=false in fallback (no global seed)")
+			}
+			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
+		},
+	}
+
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users, projects))
+	ac := &auth.AuthContext{UserID: userID, Role: "user"}
+	w := doRecallRequest(router, "/v1/me/memories/recall", map[string]any{"query": "x"}, ac)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -364,7 +440,7 @@ func TestMeRecallHandler_DiversifyByTagPrefix_Forwarded(t *testing.T) {
 		},
 	}
 
-	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users, &mockProjectLister{}))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
 	body := map[string]any{
@@ -410,7 +486,7 @@ func TestRecallHandler_DiversifyByTagPrefix_OmittedFromJSON(t *testing.T) {
 func TestMeRecallHandler_NoAuth(t *testing.T) {
 	svc := &mockRecallService{}
 	users := &mockUserReader{}
-	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users, &mockProjectLister{}))
 
 	body := map[string]any{
 		"query": "test query",
@@ -506,7 +582,7 @@ func TestMeRecallHandler_SimilarityThreshold_Forwarded(t *testing.T) {
 			return &service.RecallResponse{Memories: []service.RecallResult{}, LatencyMs: 1}, nil
 		},
 	}
-	router := newMeRecallRouter(NewMeRecallHandler(svc, users))
+	router := newMeRecallRouter(NewMeRecallHandler(svc, users, &mockProjectLister{}))
 	ac := &auth.AuthContext{UserID: userID, Role: "user"}
 
 	body := map[string]any{

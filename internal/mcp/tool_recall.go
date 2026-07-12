@@ -172,6 +172,11 @@ func handleMemoryRecall(ctx context.Context, s *Server, request mcp.CallToolRequ
 		// the aperture by association.
 		if globalProject != nil {
 			req.ProjectID = globalProject.ID
+			// global here is only a structural search seed, not a deliberately
+			// chosen focus, so do not origin-boost it above the joined about_me
+			// tier: both compete on relevance alone. Mirrors ask.go's wide-aperture
+			// treatment (rr.DemotePrimaryOrigin when the primary IS the global tier).
+			req.DemotePrimaryOrigin = true
 			allowedNS = append(allowedNS, globalProject.NamespaceID)
 		} else {
 			// Fallback: no global project exists, search all user projects.

@@ -469,7 +469,7 @@ func newRRTestEnv(t *testing.T) *rrTestEnv {
 		BulkForget: api.NewBulkForgetHandler(forgetSvc, nil),
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 
-		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup, projectLookup),
 		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),

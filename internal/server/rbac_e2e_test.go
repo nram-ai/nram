@@ -638,7 +638,7 @@ func newRBACTestEnv(t *testing.T) *rbacTestEnv {
 		BatchStore: api.NewBatchStoreHandler(batchStoreSvc, nil),
 
 		// User-scoped handlers
-		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup, projectLookup),
 		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),
@@ -1607,7 +1607,7 @@ func newRBACFullTestEnv(t *testing.T) *rbacTestEnv {
 		Enrich:     api.NewEnrichHandler(enrichSvc, nil),
 
 		// User-scoped handlers
-		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup),
+		MeRecall:       api.NewMeRecallHandler(recallSvc, userLookup, projectLookup),
 		MeProjects:     api.NewMeProjectsHandler(projectLookup, userLookup, namespaceLookup, nil),
 		MeAPIKeys:      api.NewMeAPIKeysHandler(apiKeyRepo),
 		MeAPIKeyRevoke: api.NewMeAPIKeyRevokeHandler(apiKeyRepo),

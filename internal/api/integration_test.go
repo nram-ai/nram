@@ -446,7 +446,7 @@ func TestHTTP_MeRecall_Unauthenticated(t *testing.T) {
 	svc := &mockRecallService{}
 	users := &mockUserReader{}
 	router := newIntegrationRouter(t, integrationRouterConfig{
-		meRecall: NewMeRecallHandler(svc, users),
+		meRecall: NewMeRecallHandler(svc, users, &mockProjectLister{}),
 	})
 
 	body := map[string]any{"query": "anything"}
