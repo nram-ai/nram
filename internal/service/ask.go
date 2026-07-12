@@ -890,13 +890,40 @@ func (s *AskService) appendByIDs(
 	}
 }
 
-// relevantEmbedded returns the subset of ids whose stored embedding clears the
-// cosine floor against the query embedding. Returns an empty set when the
-// hydrator is unset, the query has no embedding, hydration fails, or an id has
-// no stored vector — in every such case the candidate cannot be vouched for, so
-// it is not admitted. This is what makes graph/sibling expansion safe to keep
-// on: a connected memory joins the neighborhood only when it actually matches
-// the question, not merely because it shares an entity or tag.
+// queryCosines scores each id against the query embedding on the best-facet scale
+// (the max cosine over the memory's facets, the same scale recall ranks by) when
+// the hydrator implements bestFacetScorer, and on the pooled facet-0 vector
+// otherwise. It is the single place the ask pipeline resolves "cosine of this
+// memory to the query": both the expansion admission gate (relevantEmbedded) and
+// the citation confidence scorer (citedQueryCosines) go through it, so a memory is
+// admitted and later scored on one measurement. Scoring on pooled facet-0 sits
+// 0.1-0.25 below best-facet for the same relevance, which would drop genuinely
+// relevant expansion evidence and drag decomposed-answer confidence down; the
+// pooled path is only the documented degradation for lexical-only / non-faceted
+// hydrators.
+//
+// Returns nil on a scoring error and omits any id with no stored vector, so a
+// candidate that cannot be vouched for simply carries no score. Callers must
+// nil-guard s.vectors and the query embedding before calling.
+func (s *AskService) queryCosines(ctx context.Context, ids []uuid.UUID, queryEmb []float32, dim int) map[uuid.UUID]float64 {
+	if bf, ok := s.vectors.(bestFacetScorer); ok {
+		cosines, err := bf.BestFacetCosines(ctx, storage.VectorKindMemory, ids, queryEmb, dim)
+		if err != nil {
+			return nil
+		}
+		return cosines
+	}
+	embs, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
+	if err != nil {
+		return nil
+	}
+	out := make(map[uuid.UUID]float64, len(embs))
+	for id, e := range embs {
+		out[id] = cosineSim(queryEmb, e)
+	}
+	return out
+}
+
 // citedQueryCosines returns, per cited memory, its absolute cosine to the
 // ORIGINAL question embedding, so confidence reflects the evidence the answer
 // actually drew on regardless of which channel surfaced each citation.
@@ -907,16 +934,11 @@ func (s *AskService) appendByIDs(
 // cited source (a decomposition sub-query candidate, whose own VectorCosine is
 // relative to the sub-query rather than the question; or a graph/sibling
 // expansion memory, which was never a recall candidate) is scored against the
-// question on the best-facet scale — the max cosine over the memory's facets,
-// the same scale recall ranks by — when the hydrator implements bestFacetScorer.
-// Scoring these on the pooled facet-0 vector instead would put them 0.1-0.25
-// below recall hits for the same relevance, dragging confidence down on exactly
-// the decomposed answers this path exists to serve; best-facet keeps both kinds
-// of cited cosine on one scale so the calibration band stays valid untouched. A
-// hydrator without the best-facet capability falls back to the pooled facet-0
-// GetByIDs + cosineSim path. Nil-safe: with no hydrator, no query embedding, or a
-// missing stored vector, the source simply carries no score (the prior behavior
-// for non-recall citations), so lexical-only deployments do not regress.
+// question via queryCosines, on the same best-facet scale recall ranks by, so
+// every cited cosine sits on one calibration band. Nil-safe: with no hydrator, no
+// query embedding, or a missing stored vector, the source simply carries no score
+// (the prior behavior for non-recall citations), so lexical-only deployments do
+// not regress.
 func (s *AskService) citedQueryCosines(ctx context.Context, cited []neighborMemory, recallResp *RecallResponse) map[uuid.UUID]*float64 {
 	out := make(map[uuid.UUID]*float64, len(cited))
 	orig := make(map[uuid.UUID]*float64, len(recallResp.Memories))
@@ -934,44 +956,31 @@ func (s *AskService) citedQueryCosines(ctx context.Context, cited []neighborMemo
 	if len(needHydrate) == 0 || s.vectors == nil || len(recallResp.QueryEmbedding) == 0 {
 		return out
 	}
-	if bf, ok := s.vectors.(bestFacetScorer); ok {
-		cosines, err := bf.BestFacetCosines(ctx, storage.VectorKindMemory, needHydrate, recallResp.QueryEmbedding, recallResp.QueryEmbeddingDim)
-		if err != nil {
-			return out
-		}
-		for _, id := range needHydrate {
-			if c, ok := cosines[id]; ok {
-				cc := c
-				out[id] = &cc
-			}
-		}
-		return out
-	}
-	// Fallback: hydrate the pooled facet-0 vector and score it directly.
-	embs, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, needHydrate, recallResp.QueryEmbeddingDim)
-	if err != nil {
-		return out
-	}
-	for _, id := range needHydrate {
-		if e, ok := embs[id]; ok {
-			c := cosineSim(recallResp.QueryEmbedding, e)
-			out[id] = &c
-		}
+	for id, c := range s.queryCosines(ctx, needHydrate, recallResp.QueryEmbedding, recallResp.QueryEmbeddingDim) {
+		cc := c
+		out[id] = &cc
 	}
 	return out
 }
 
+// relevantEmbedded returns the subset of ids whose cosine to the query embedding
+// clears the floor. This is the admission gate that makes graph/sibling expansion
+// safe to keep on: a connected memory joins the neighborhood only when it actually
+// matches the question, not merely because it shares an entity or tag.
+//
+// It gates on queryCosines, the same best-facet scale citedQueryCosines scores
+// cited sources on, so the admission floor and the confidence scale are one
+// measurement: a memory admitted here is later scored for confidence on the exact
+// scale it was admitted by. Returns an empty set when the hydrator is unset, the
+// query has no embedding, scoring fails, or an id has no stored vector: in every
+// such case the candidate cannot be vouched for, so it is not admitted.
 func (s *AskService) relevantEmbedded(ctx context.Context, ids []uuid.UUID, queryEmb []float32, dim int, floor float64) map[uuid.UUID]bool {
-	keep := make(map[uuid.UUID]bool)
+	keep := make(map[uuid.UUID]bool, len(ids))
 	if s.vectors == nil || len(queryEmb) == 0 || len(ids) == 0 {
 		return keep
 	}
-	embs, err := s.vectors.GetByIDs(ctx, storage.VectorKindMemory, ids, dim)
-	if err != nil {
-		return keep
-	}
-	for _, id := range ids {
-		if e, ok := embs[id]; ok && cosineSim(queryEmb, e) >= floor {
+	for id, c := range s.queryCosines(ctx, ids, queryEmb, dim) {
+		if c >= floor {
 			keep[id] = true
 		}
 	}

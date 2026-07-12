@@ -539,6 +539,66 @@ func TestAsk_SiblingsRelevanceGated(t *testing.T) {
 	}
 }
 
+// TestAsk_ExpansionGateUsesBestFacetScale pins the admission gate to the same
+// best-facet scale the confidence scorer uses. A sibling whose pooled facet-0
+// cosine sits below the expansion floor but whose best-facet cosine clears it is
+// genuinely relevant on the scale recall ranks by, so it must be admitted on a
+// faceted backend (best-facet gate) and gated out on a non-faceted one (pooled
+// fallback). Before the fix the gate used pooled facet-0 for both and dropped it
+// even on the faceted backend.
+func TestAsk_ExpansionGateUsesBestFacetScale(t *testing.T) {
+	newSettings := func() *SettingsService {
+		repo := newMockSettingsRepo()
+		repo.put(SettingAskSiblingsPerCandidate, "global", "3")
+		repo.put(SettingAskExpansionCosineFloor, "global", "0.5")
+		return NewSettingsService(repo)
+	}
+
+	projects := askTestProjects()
+	work := projects.bySlug["work"]
+	cand := askCandidate("aaaaaaaa", "work", 0.8)
+	cand.ProjectID = work.ID
+
+	// Pooled facet-0 cosine ~0.3 (below the 0.5 floor); best-facet cosine 0.8
+	// (above it): the 0.1-0.25 divergence the fix is about.
+	newRecaller := func() *askFakeRecaller {
+		return &askFakeRecaller{resp: &RecallResponse{
+			Memories:          []RecallResult{cand},
+			QueryEmbedding:    []float32{1, 0},
+			QueryEmbeddingDim: 2,
+		}}
+	}
+	pooled := []float32{0.3, 0.95}
+
+	// Faceted backend: gate scores on best-facet (0.8 ≥ 0.5) → sibling admitted.
+	sibFaceted := model.Memory{ID: uuid.New(), NamespaceID: work.NamespaceID, Content: "best-facet relevant sibling"}
+	facetVec := askFakeFacetVectors{
+		askFakeVectors: askFakeVectors{embs: map[uuid.UUID][]float32{sibFaceted.ID: pooled}},
+		best:           map[uuid.UUID]float64{sibFaceted.ID: 0.8},
+	}
+	facetSvc := newAskSvc(t, newRecaller(), &askFakeMem{siblings: []model.Memory{sibFaceted}}, projects, askFakeLLM{content: "ok"}, newSettings()).WithVectorHydrator(facetVec)
+	facetResp, err := facetSvc.Ask(context.Background(), &AskRequest{Query: "q", ProjectSlug: "work", OwnerNamespaceID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facetResp.SynthesisMeta.NeighborhoodSize != 2 {
+		t.Errorf("faceted backend: expected 2 (candidate + best-facet sibling admitted on best-facet scale), got %d", facetResp.SynthesisMeta.NeighborhoodSize)
+	}
+
+	// Non-faceted backend: pooled fallback (0.3 < 0.5) → sibling gated out, so
+	// lexical-only deployments keep their prior stricter behavior.
+	sibPooled := model.Memory{ID: uuid.New(), NamespaceID: work.NamespaceID, Content: "pooled-only sibling"}
+	pooledVec := askFakeVectors{embs: map[uuid.UUID][]float32{sibPooled.ID: pooled}}
+	pooledSvc := newAskSvc(t, newRecaller(), &askFakeMem{siblings: []model.Memory{sibPooled}}, projects, askFakeLLM{content: "ok"}, newSettings()).WithVectorHydrator(pooledVec)
+	pooledResp, err := pooledSvc.Ask(context.Background(), &AskRequest{Query: "q", ProjectSlug: "work", OwnerNamespaceID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pooledResp.SynthesisMeta.NeighborhoodSize != 1 {
+		t.Errorf("non-faceted backend: expected 1 (candidate only, sibling gated out on pooled scale), got %d", pooledResp.SynthesisMeta.NeighborhoodSize)
+	}
+}
+
 func TestAskConfidence(t *testing.T) {
 	const floor, ceiling = 0.35, 0.75
 
