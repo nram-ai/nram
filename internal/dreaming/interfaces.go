@@ -94,6 +94,13 @@ type EntityWriter interface {
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error)
 }
 
+// MentionCountRecomputer re-derives entity mention_count for a whole namespace
+// in one statement. Kept as a narrow interface, off EntityReader/EntityWriter,
+// so the broad phase-fake set is unaffected. Satisfied by *storage.EntityRepo.
+type MentionCountRecomputer interface {
+	RecomputeMentionCountsByNamespace(ctx context.Context, namespaceID uuid.UUID) (int64, error)
+}
+
 // EntityAliasWriter creates entity aliases.
 type EntityAliasWriter interface {
 	Create(ctx context.Context, alias *model.EntityAlias) error

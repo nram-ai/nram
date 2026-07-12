@@ -722,18 +722,22 @@ func (r *RelationshipRepo) DeleteBySourceMemory(ctx context.Context, namespaceID
 		return nil, fmt.Errorf("relationship delete by source memory: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	return scanEndpointIDs(rows, "relationship delete by source memory")
+	ids, _, err := scanEndpointIDs(rows, "relationship delete by source memory")
+	return ids, err
 }
 
-// DeleteByLostProvenance removes relationships matching lostProvenancePredicate.
-// Such an edge can never be tied back to a live memory and every read path now
-// drops it; reaping converges the stored graph and stops dream phases from
-// breeding more null-provenance edges off it.
+// DeleteByLostProvenance removes relationships matching lostProvenancePredicate
+// and returns the distinct entity IDs that were endpoints of the deleted edges
+// (so the caller can scope a mention_count recompute to exactly those entities)
+// alongside the raw number of rows deleted (so the batch loop knows when a short
+// batch ended it). Such an edge can never be tied back to a live memory and every
+// read path now drops it; reaping converges the stored graph and stops dream
+// phases from breeding more null-provenance edges off it.
 //
 // limit > 0 bounds one batch via an id subquery (neither backend supports
-// DELETE ... LIMIT portably); callers loop until 0 is returned. limit <= 0
-// deletes all matching rows in one statement.
-func (r *RelationshipRepo) DeleteByLostProvenance(ctx context.Context, limit int) (int64, error) {
+// DELETE ... LIMIT portably); callers loop until a short batch is returned.
+// limit <= 0 deletes all matching rows in one statement.
+func (r *RelationshipRepo) DeleteByLostProvenance(ctx context.Context, limit int) ([]uuid.UUID, int64, error) {
 	var query string
 	var args []any
 	if limit > 0 {
@@ -742,20 +746,19 @@ func (r *RelationshipRepo) DeleteByLostProvenance(ctx context.Context, limit int
 			ph = "$1"
 		}
 		query = `DELETE FROM relationships WHERE id IN (` +
-			`SELECT id FROM relationships WHERE ` + lostProvenancePredicate + ` LIMIT ` + ph + `)`
+			`SELECT id FROM relationships WHERE ` + lostProvenancePredicate + ` LIMIT ` + ph + `)` +
+			` RETURNING source_id, target_id`
 		args = []any{limit}
 	} else {
-		query = `DELETE FROM relationships WHERE ` + lostProvenancePredicate
+		query = `DELETE FROM relationships WHERE ` + lostProvenancePredicate +
+			` RETURNING source_id, target_id`
 	}
-	result, err := r.db.Exec(ctx, query, args...)
+	rows, err := r.db.WriteQuery(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("relationship delete by lost provenance: %w", err)
+		return nil, 0, fmt.Errorf("relationship delete by lost provenance: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("relationship delete by lost provenance rows: %w", err)
-	}
-	return rows, nil
+	defer func() { _ = rows.Close() }()
+	return scanEndpointIDs(rows, "relationship delete by lost provenance")
 }
 
 // CountLostProvenance returns the number of relationships matching
@@ -772,15 +775,21 @@ func (r *RelationshipRepo) CountLostProvenance(ctx context.Context) (int64, erro
 
 // scanEndpointIDs drains a *sql.Rows of (source_id, target_id) pairs and
 // returns the distinct entity IDs across both columns, preserving first-seen
-// order. Unparseable IDs are skipped rather than failing the whole reap.
-func scanEndpointIDs(rows *sql.Rows, errPrefix string) ([]uuid.UUID, error) {
+// order, plus the raw number of rows drained (which differs from the deduped
+// endpoint count: one deleted edge contributes up to two endpoints, and many
+// edges can share endpoints). Callers that batch on the delete count use the
+// drained total; callers that recompute use the deduped IDs. Unparseable IDs
+// are skipped rather than failing the whole reap.
+func scanEndpointIDs(rows *sql.Rows, errPrefix string) ([]uuid.UUID, int64, error) {
 	seen := make(map[uuid.UUID]struct{})
 	var out []uuid.UUID
+	var drained int64
 	for rows.Next() {
 		var srcStr, tgtStr string
 		if err := rows.Scan(&srcStr, &tgtStr); err != nil {
-			return nil, fmt.Errorf("%s scan: %w", errPrefix, err)
+			return nil, 0, fmt.Errorf("%s scan: %w", errPrefix, err)
 		}
+		drained++
 		for _, s := range [2]string{srcStr, tgtStr} {
 			id, err := uuid.Parse(s)
 			if err != nil {
@@ -793,9 +802,9 @@ func scanEndpointIDs(rows *sql.Rows, errPrefix string) ([]uuid.UUID, error) {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%s rows: %w", errPrefix, err)
+		return nil, 0, fmt.Errorf("%s rows: %w", errPrefix, err)
 	}
-	return out, nil
+	return out, drained, nil
 }
 
 // BatchCreate inserts (or upserts) the given relationships in one

@@ -22,8 +22,15 @@ type GraphReaper interface {
 	// FK ON DELETE SET NULL does not first erase the provenance link.
 	ReapMemoryFootprint(ctx context.Context, namespaceID, memoryID uuid.UUID) (int, error)
 	// ReapLostProvenance deletes every lost-provenance edge (batched) and then
-	// recomputes every entity's mention_count. Returns edges deleted.
+	// recomputes mention_count for exactly the entities those reaped edges
+	// touched (not the whole table). Returns edges deleted.
 	ReapLostProvenance(ctx context.Context) (int64, error)
+	// RecomputeAllMentionCounts re-derives mention_count for every entity across
+	// all namespaces from surviving live provenance. This is the full,
+	// whole-table self-heal; the operator-triggered RepairGraph runs it after
+	// reaping so a deliberate repair re-normalizes the entire graph. Returns
+	// entities updated.
+	RecomputeAllMentionCounts(ctx context.Context) (int64, error)
 	// CountLostProvenance reports how many lost-provenance edges exist, for the
 	// console graph-health display.
 	CountLostProvenance(ctx context.Context) (int64, error)
@@ -32,7 +39,7 @@ type GraphReaper interface {
 // relationshipReaper is the relationship-repo surface GraphReaper needs.
 type relationshipReaper interface {
 	DeleteBySourceMemory(ctx context.Context, namespaceID, memoryID uuid.UUID) ([]uuid.UUID, error)
-	DeleteByLostProvenance(ctx context.Context, limit int) (int64, error)
+	DeleteByLostProvenance(ctx context.Context, limit int) ([]uuid.UUID, int64, error)
 	CountLostProvenance(ctx context.Context) (int64, error)
 }
 
@@ -70,22 +77,38 @@ func (a *graphReaperAdapter) ReapMemoryFootprint(ctx context.Context, namespaceI
 
 func (a *graphReaperAdapter) ReapLostProvenance(ctx context.Context) (int64, error) {
 	var total int64
+	seen := make(map[uuid.UUID]struct{})
+	var affected []uuid.UUID
 	for {
-		n, err := a.relationships.DeleteByLostProvenance(ctx, lostProvenanceBatch)
+		endpoints, n, err := a.relationships.DeleteByLostProvenance(ctx, lostProvenanceBatch)
 		if err != nil {
 			return total, err
 		}
 		total += n
+		for _, id := range endpoints {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				affected = append(affected, id)
+			}
+		}
 		if n < lostProvenanceBatch {
 			break
 		}
 	}
-	if total > 0 {
-		if _, err := a.entities.RecomputeMentionCounts(ctx, nil); err != nil {
+	// Recompute only the entities the reaped edges touched: deleting an edge can
+	// only change its two endpoints' counts, so a scoped recompute is exact. A
+	// nil/empty slice would recompute the whole table, so guard on len like
+	// ReapMemoryFootprint does.
+	if len(affected) > 0 {
+		if _, err := a.entities.RecomputeMentionCounts(ctx, affected); err != nil {
 			return total, err
 		}
 	}
 	return total, nil
+}
+
+func (a *graphReaperAdapter) RecomputeAllMentionCounts(ctx context.Context) (int64, error) {
+	return a.entities.RecomputeMentionCounts(ctx, nil)
 }
 
 func (a *graphReaperAdapter) CountLostProvenance(ctx context.Context) (int64, error) {

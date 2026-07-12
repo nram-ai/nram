@@ -8,12 +8,14 @@ export const PHASE_LABELS: Record<string, string> = {
   embedding_backfill: "Embedding Backfill",
   augmentation_backfill: "Augmentation Backfill",
   multi_vector_backfill: "Multi-Vector Backfill",
+  consolidation_entity_backfill: "Consolidation Entity Backfill",
   paraphrase_dedup: "Paraphrase Dedup",
   transitive_discovery: "Transitive Discovery",
   contradiction_detection: "Contradiction Detection",
   consolidation: "Consolidation",
   pruning: "Pruning",
   weight_adjustment: "Weight Adjustment",
+  mention_recompute: "Mention Recompute",
 };
 
 export const SUB_PHASE_LABELS: Record<string, string> = {
@@ -32,12 +34,14 @@ export const PHASE_COLORS: Record<string, string> = {
   embedding_backfill: "#3b82f6",
   augmentation_backfill: "#0ea5e9",
   multi_vector_backfill: "#14b8a6",
+  consolidation_entity_backfill: "#06b6d4",
   paraphrase_dedup: "#22c55e",
   transitive_discovery: "#a3a3a3",
   contradiction_detection: "#f59e0b",
   consolidation: "#ec4899",
   pruning: "#737373",
   weight_adjustment: "#525252",
+  mention_recompute: "#78716c",
   backfill_audit: "#fb7185",
   reinforce: "#f472b6",
   consolidate: "#e879f9",
@@ -512,6 +516,7 @@ const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
   embedding_backfill: ["candidates", "embedded", "errors"],
   augmentation_backfill: ["candidates", "enqueued", "errors"],
   multi_vector_backfill: ["candidates", "enqueued", "errors"],
+  consolidation_entity_backfill: ["candidates", "enqueued", "errors"],
   paraphrase_dedup: ["candidates", "visited", "superseded"],
   transitive_discovery: ["candidates", "created"],
   contradiction_detection: ["pairs", "checked", "found"],
@@ -547,6 +552,7 @@ const PHASE_SUMMARY_KEYS: Record<string, string[]> = {
     "direction_same",
     "expired",
   ],
+  mention_recompute: ["corrected", "errors"],
 };
 
 const SUMMARY_HIDDEN_KEYS = new Set([

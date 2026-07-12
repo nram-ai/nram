@@ -259,7 +259,8 @@ func (s *LifecycleService) sweep(ctx context.Context) (expired int, purged int, 
 
 // reapAndPrune runs the shared graph-cleanup sequence used by both the periodic
 // sweep and the on-demand RepairGraph: reap lost-provenance edges (recomputing
-// mention counts inside ReapLostProvenance), then prune dangling relationships
+// only the reaped endpoints' mention counts inside ReapLostProvenance, not the
+// whole table), then prune dangling relationships
 // and orphaned entities (age-gated by orphanCutoff), cleaning up entity vectors
 // for reaped orphans. Order matters: reaping first strands entities the orphan
 // pass then collects in the same run. It is best-effort: every step is attempted
@@ -338,11 +339,25 @@ type GraphRepairResult struct {
 }
 
 // RepairGraph runs the full on-demand graph cleanup the console exposes:
-// reap every lost-provenance edge (and recompute mention counts), then prune
-// dangling relationships and orphaned entities. The orphan sweep stays
-// age-gated by SettingLifecycleOrphanGraceSeconds so a repair cannot race
-// in-flight enrichment. Idempotent: a second run reaps nothing. Shares its
-// implementation with the periodic sweep via reapAndPrune.
+// reap every lost-provenance edge (scoping the reap's mention_count recompute to
+// the touched endpoints via reapAndPrune), then prune dangling relationships and
+// orphaned entities, then re-normalize every entity's mention_count across the
+// whole graph. The orphan sweep stays age-gated by
+// SettingLifecycleOrphanGraceSeconds so a repair cannot race in-flight
+// enrichment. Idempotent: a second run reaps nothing and recomputes to the same
+// values. Shares the reap/prune body with the periodic sweep via reapAndPrune;
+// the whole-graph recompute is what makes this the deliberate operator repair
+// rather than the cheap periodic sweep.
 func (s *LifecycleService) RepairGraph(ctx context.Context) (GraphRepairResult, error) {
-	return s.reapAndPrune(ctx, time.Now().Add(-s.resolveOrphanGrace(ctx)))
+	res, err := s.reapAndPrune(ctx, time.Now().Add(-s.resolveOrphanGrace(ctx)))
+	// reapAndPrune now scopes its recompute to the reaped endpoints; an operator
+	// repair is the right place for a full re-normalization, so follow with a
+	// whole-graph recompute. Best-effort: attempt it even if reap/prune erred,
+	// keeping the first error.
+	if s.graphReaper != nil {
+		if _, rerr := s.graphReaper.RecomputeAllMentionCounts(ctx); rerr != nil && err == nil {
+			err = rerr
+		}
+	}
+	return res, err
 }

@@ -56,7 +56,7 @@ Likely the `nomic-embed-text` 2048-token context limit truncating long memories 
 
 ## Dreaming and backfill
 
-Dreaming is the offline consolidation cycle (twelve phases). Its settings live at `/admin/settings` and hot-reload per cycle. The knobs below help when you have a backlog to drain; restore the defaults afterward.
+Dreaming is the offline consolidation cycle (fourteen phases). Its settings live at `/admin/settings` and hot-reload per cycle. The knobs below help when you have a backlog to drain; restore the defaults afterward.
 
 ### Clearing a dreaming backlog quickly
 
@@ -91,7 +91,7 @@ Each LLM-spending phase has a per-cycle cap you can raise during a drain, then r
 - `dreaming.augmentation_backfill.cap_per_cycle` (default `1000`) for re-enqueuing memories whose embedding fell back to raw content (gated by `dreaming.augmentation_backfill.enabled`, default `true`; this phase issues no LLM calls itself)
 - `dreaming.pruning.batch_size` (default `5000`) for the streaming prune sweep
 
-If one phase is starved of budget by the others, the `dreaming.<phase>.budget_fraction` settings rebalance the cycle envelope. Default split: `contradiction = 0.40`, `consolidation = 0.40`, `embedding_backfill = 0.10`, `paraphrase_dedup = 0.05`. The remaining phases default to `0.0` and share the root budget without a per-phase slice, either because they issue no LLM calls (`project_description_sync`, `entity_dedup`, `transitive`, `pruning`, `weight_adjustment`) or because they only enqueue work for the enrichment pool (`augmentation_backfill`, `multi_vector_backfill`, `consolidation_entity_backfill`).
+If one phase is starved of budget by the others, the `dreaming.<phase>.budget_fraction` settings rebalance the cycle envelope. Default split: `contradiction = 0.40`, `consolidation = 0.40`, `embedding_backfill = 0.10`, `paraphrase_dedup = 0.05`. The remaining phases default to `0.0` and share the root budget without a per-phase slice, either because they issue no LLM calls (`project_description_sync`, `entity_dedup`, `transitive`, `pruning`, `weight_adjustment`, `mention_recompute`) or because they only enqueue work for the enrichment pool (`augmentation_backfill`, `multi_vector_backfill`, `consolidation_entity_backfill`).
 
 ### Restoring after a drain
 

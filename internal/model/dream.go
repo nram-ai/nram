@@ -52,6 +52,12 @@ const (
 	DreamPhasePruning                     = "pruning"
 	DreamPhaseWeightAdjust                = "weight_adjustment"
 	DreamPhaseProjectDescSync             = "project_description_sync"
+	// DreamPhaseMentionRecompute re-derives entity mention_count for the cycle's
+	// project from surviving live provenance. It runs last, after pruning has
+	// expired edges and weight_adjustment has bumped counts, so it reflects the
+	// final edge set and can correct a count DOWNWARD (which the weights phase's
+	// monotonic bump cannot). Pure SQL, zero tokens.
+	DreamPhaseMentionRecompute = "mention_recompute"
 )
 
 // DreamSubPhase constants name the consolidation sub-phases. Mirrors the

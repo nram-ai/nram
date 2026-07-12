@@ -13,7 +13,8 @@ import (
 type fakeRelReaper struct {
 	bySourceCalls   []uuid.UUID
 	bySourceReturn  []uuid.UUID
-	lostBatches     []int64 // successive DeleteByLostProvenance returns
+	lostBatches     []int64       // successive DeleteByLostProvenance delete counts
+	lostEndpoints   [][]uuid.UUID // successive DeleteByLostProvenance endpoint ids
 	lostBatchCalls  int
 	lostCountReturn int64
 }
@@ -23,13 +24,17 @@ func (f *fakeRelReaper) DeleteBySourceMemory(_ context.Context, _, memoryID uuid
 	return f.bySourceReturn, nil
 }
 
-func (f *fakeRelReaper) DeleteByLostProvenance(_ context.Context, _ int) (int64, error) {
+func (f *fakeRelReaper) DeleteByLostProvenance(_ context.Context, _ int) ([]uuid.UUID, int64, error) {
 	i := f.lostBatchCalls
 	f.lostBatchCalls++
-	if i < len(f.lostBatches) {
-		return f.lostBatches[i], nil
+	var eps []uuid.UUID
+	if i < len(f.lostEndpoints) {
+		eps = f.lostEndpoints[i]
 	}
-	return 0, nil
+	if i < len(f.lostBatches) {
+		return eps, f.lostBatches[i], nil
+	}
+	return nil, 0, nil
 }
 
 func (f *fakeRelReaper) CountLostProvenance(_ context.Context) (int64, error) {
@@ -84,10 +89,15 @@ func TestGraphReaper_ReapMemoryFootprint_NoEdges_SkipsRecompute(t *testing.T) {
 	}
 }
 
-func TestGraphReaper_ReapLostProvenance_LoopsThenRecomputesAll(t *testing.T) {
+func TestGraphReaper_ReapLostProvenance_LoopsThenRecomputesEndpoints(t *testing.T) {
 	ctx := context.Background()
-	// Two full batches then a short batch ends the loop.
-	rel := &fakeRelReaper{lostBatches: []int64{lostProvenanceBatch, lostProvenanceBatch, 7}}
+	e1, e2, e3 := uuid.New(), uuid.New(), uuid.New()
+	// Two full batches then a short batch ends the loop; endpoints overlap across
+	// batches so the recompute scope must be the deduped union, not the sum.
+	rel := &fakeRelReaper{
+		lostBatches:   []int64{lostProvenanceBatch, lostProvenanceBatch, 7},
+		lostEndpoints: [][]uuid.UUID{{e1, e2}, {e2, e3}, {e3}},
+	}
 	ent := &fakeEntityRecomputer{}
 	r := NewGraphReaper(rel, ent)
 
@@ -102,9 +112,26 @@ func TestGraphReaper_ReapLostProvenance_LoopsThenRecomputesAll(t *testing.T) {
 	if rel.lostBatchCalls != 3 {
 		t.Fatalf("expected 3 batch calls, got %d", rel.lostBatchCalls)
 	}
-	// A global recompute (nil scope) runs once after reaping.
-	if len(ent.calls) != 1 || ent.calls[0] != nil {
-		t.Fatalf("expected one global (nil) recompute, got %v", ent.calls)
+	// Recompute runs once, scoped to the deduped endpoint union {e1,e2,e3}: not
+	// the whole table (nil) and not with duplicates.
+	if len(ent.calls) != 1 {
+		t.Fatalf("expected one recompute call, got %d: %v", len(ent.calls), ent.calls)
+	}
+	got := ent.calls[0]
+	if got == nil {
+		t.Fatalf("recompute must be scoped to endpoints, not global (nil)")
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected recompute scoped to 3 deduped endpoints, got %d: %v", len(got), got)
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, id := range got {
+		seen[id] = true
+	}
+	for _, wantID := range []uuid.UUID{e1, e2, e3} {
+		if !seen[wantID] {
+			t.Fatalf("recompute scope missing endpoint %s: %v", wantID, got)
+		}
 	}
 }
 
@@ -142,7 +169,10 @@ func (f *fakeGraphPruner) DeleteOrphanedEntities(_ context.Context, _ time.Time)
 
 func TestLifecycleService_RepairGraph(t *testing.T) {
 	ctx := context.Background()
-	rel := &fakeRelReaper{lostBatches: []int64{12}}
+	rel := &fakeRelReaper{
+		lostBatches:   []int64{12},
+		lostEndpoints: [][]uuid.UUID{{uuid.New(), uuid.New()}},
+	}
 	ent := &fakeEntityRecomputer{}
 	reaper := NewGraphReaper(rel, ent)
 	pruner := &fakeGraphPruner{dangling: 3, orphans: []uuid.UUID{uuid.New(), uuid.New()}}
@@ -163,6 +193,19 @@ func TestLifecycleService_RepairGraph(t *testing.T) {
 	}
 	if res.OrphanedEntities != 2 {
 		t.Fatalf("OrphanedEntities = %d, want 2", res.OrphanedEntities)
+	}
+	// The scoped reap recompute (2 endpoints) is followed by the operator-only
+	// full re-normalization (nil scope). The periodic sweep does only the first;
+	// RepairGraph is distinguished by ending with the whole-graph recompute.
+	if len(ent.calls) != 2 {
+		t.Fatalf("expected scoped reap recompute then full recompute (2 calls), got %d: %v",
+			len(ent.calls), ent.calls)
+	}
+	if len(ent.calls[0]) != 2 {
+		t.Fatalf("first recompute must be scoped to the 2 reaped endpoints, got %v", ent.calls[0])
+	}
+	if ent.calls[1] != nil {
+		t.Fatalf("RepairGraph must end with a full (nil) recompute, got %v", ent.calls[1])
 	}
 }
 

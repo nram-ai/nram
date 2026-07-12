@@ -1,0 +1,6 @@
+-- No-op on SQLite. Its idx_relationships_source / idx_relationships_target
+-- (migrations/sqlite/000007_graph_tables) are already non-partial, so the
+-- mention_count recompute subquery's (source_id = ? OR target_id = ?) filter is
+-- already index-served here and needs no full-coverage twin. This file exists
+-- only to keep migration-slug parity with the Postgres 000061 endpoint-index
+-- migration (enforced by TestMigrationSlugParity / TestMigrationUpDownPaired).

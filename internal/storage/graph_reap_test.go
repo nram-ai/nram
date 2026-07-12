@@ -86,7 +86,7 @@ func newReapFixture(t *testing.T, ctx context.Context, db DB) reapFixture {
 // so this is effectively a no-op there.
 func cleanLostProvenance(t *testing.T, ctx context.Context, db DB) {
 	t.Helper()
-	if _, err := NewRelationshipRepo(db).DeleteByLostProvenance(ctx, 0); err != nil {
+	if _, _, err := NewRelationshipRepo(db).DeleteByLostProvenance(ctx, 0); err != nil {
 		t.Fatalf("pre-clean lost provenance: %v", err)
 	}
 }
@@ -107,12 +107,22 @@ func TestRelationshipRepo_CountAndDeleteLostProvenance(t *testing.T) {
 			t.Fatalf("expected 3 lost-provenance edges, got %d", got)
 		}
 
-		deleted, err := f.rrepo.DeleteByLostProvenance(ctx, 0)
+		endpoints, deleted, err := f.rrepo.DeleteByLostProvenance(ctx, 0)
 		if err != nil {
 			t.Fatalf("delete lost provenance: %v", err)
 		}
 		if deleted != 3 {
 			t.Fatalf("expected to delete 3 edges, deleted %d", deleted)
+		}
+		// The reaped edges (a-c, b-c, a-c) touch entities a, b, and c; the deleted
+		// endpoints must be exactly that deduped set so the caller can scope the
+		// mention_count recompute to them.
+		epSeen := map[uuid.UUID]bool{}
+		for _, id := range endpoints {
+			epSeen[id] = true
+		}
+		if len(endpoints) != 3 || !epSeen[f.a] || !epSeen[f.b] || !epSeen[f.c] {
+			t.Fatalf("expected deleted endpoints {a,b,c}, got %v", endpoints)
 		}
 
 		after, err := f.rrepo.CountLostProvenance(ctx)
@@ -136,7 +146,7 @@ func TestRelationshipRepo_CountAndDeleteLostProvenance(t *testing.T) {
 		}
 
 		// Idempotent: a second reap deletes nothing.
-		again, err := f.rrepo.DeleteByLostProvenance(ctx, 0)
+		_, again, err := f.rrepo.DeleteByLostProvenance(ctx, 0)
 		if err != nil {
 			t.Fatalf("second delete: %v", err)
 		}
@@ -155,7 +165,7 @@ func TestRelationshipRepo_DeleteByLostProvenance_Batched(t *testing.T) {
 		// Batch size 1 forces one iteration per lost edge; each returns at most 1.
 		var total int64
 		for {
-			n, err := f.rrepo.DeleteByLostProvenance(ctx, 1)
+			_, n, err := f.rrepo.DeleteByLostProvenance(ctx, 1)
 			if err != nil {
 				t.Fatalf("batched delete: %v", err)
 			}
@@ -246,6 +256,56 @@ func TestEntityRepo_RecomputeMentionCounts(t *testing.T) {
 		// Scoped recompute updates only the named entity.
 		if _, err := f.erepo.RecomputeMentionCounts(ctx, []uuid.UUID{f.a}); err != nil {
 			t.Fatalf("scoped recompute: %v", err)
+		}
+	})
+}
+
+func TestEntityRepo_RecomputeMentionCountsByNamespace(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		f1 := newReapFixture(t, ctx, db)
+		f2 := newReapFixture(t, ctx, db)
+
+		// Entities are created with mention_count 0. Recompute ONLY f1's namespace:
+		// its canonical counts (alice 1, bob 1, carol 0) must land, while f2's
+		// entities stay untouched at their creation-time 0 (the namespace scope
+		// must not cross tenants).
+		updated, err := f1.erepo.RecomputeMentionCountsByNamespace(ctx, f1.nsID)
+		if err != nil {
+			t.Fatalf("recompute by namespace: %v", err)
+		}
+		// The change-guard rewrites only rows whose count actually changes: alice
+		// and bob go 0 -> 1, but carol is already canonical at 0 and is skipped.
+		if updated != 2 {
+			t.Fatalf("expected 2 corrected entities (alice, bob; carol already 0), updated %d", updated)
+		}
+
+		get := func(erepo *EntityRepo, id, nsID uuid.UUID, name string) int {
+			e, gerr := erepo.GetByID(ctx, id, nsID)
+			if gerr != nil {
+				t.Fatalf("get %s: %v", name, gerr)
+			}
+			return e.MentionCount
+		}
+
+		// f1 corrected to canonical (alice 0 -> 1 proves the recompute ran).
+		if got := get(f1.erepo, f1.a, f1.nsID, "f1.alice"); got != 1 {
+			t.Fatalf("f1 alice mention_count = %d, want 1", got)
+		}
+		if got := get(f1.erepo, f1.b, f1.nsID, "f1.bob"); got != 1 {
+			t.Fatalf("f1 bob mention_count = %d, want 1", got)
+		}
+		if got := get(f1.erepo, f1.c, f1.nsID, "f1.carol"); got != 0 {
+			t.Fatalf("f1 carol mention_count = %d, want 0", got)
+		}
+
+		// f2 untouched: alice staying 0 proves the recompute did not leak across
+		// namespaces.
+		if got := get(f2.erepo, f2.a, f2.nsID, "f2.alice"); got != 0 {
+			t.Fatalf("f2 alice mention_count = %d, want 0 (unchanged); scoped recompute leaked across namespaces", got)
+		}
+		if got := get(f2.erepo, f2.b, f2.nsID, "f2.bob"); got != 0 {
+			t.Fatalf("f2 bob mention_count = %d, want 0 (unchanged)", got)
 		}
 	})
 }

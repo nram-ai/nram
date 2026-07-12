@@ -1018,6 +1018,41 @@ func (r *EntityRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.U
 	return scanReturnedUUIDs(rows, "entity delete by ids")
 }
 
+// mentionCountSubquery is the single canonical definition of an entity's
+// mention_count: the number of distinct live (non-deleted, non-superseded)
+// source memories on edges touching the entity. Every recompute path references
+// this one literal so the definition (and the index assumptions the 000061
+// migration documents) cannot silently drift across methods.
+const mentionCountSubquery = `(SELECT COUNT(DISTINCT rel.source_memory) FROM relationships rel ` +
+	`JOIN memories m ON m.id = rel.source_memory ` +
+	`WHERE (rel.source_id = entities.id OR rel.target_id = entities.id) ` +
+	`AND m.deleted_at IS NULL AND m.superseded_by IS NULL)`
+
+// execMentionCountRecompute runs the canonical mention_count UPDATE, optionally
+// scoped by whereClause. args[0] is the updated_at timestamp bound to the first
+// placeholder ($1 / ?); an empty whereClause recomputes every entity, otherwise
+// whereClause binds any further placeholders from $2 onward with matching values
+// in the remaining args. Returns rows updated.
+func (r *EntityRepo) execMentionCountRecompute(ctx context.Context, whereClause string, args ...any) (int64, error) {
+	tsPlaceholder := "?"
+	if r.db.Backend() == BackendPostgres {
+		tsPlaceholder = "$1"
+	}
+	query := "UPDATE entities SET mention_count = " + mentionCountSubquery + ", updated_at = " + tsPlaceholder
+	if whereClause != "" {
+		query += " WHERE " + whereClause
+	}
+	result, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("entity recompute mention counts: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("entity recompute mention counts rows: %w", err)
+	}
+	return n, nil
+}
+
 // RecomputeMentionCounts (re)derives mention_count as the number of distinct
 // live (non-deleted, non-superseded) memories that source an edge touching the
 // entity. This REDEFINES mention_count as a live-edge-provenance count rather
@@ -1036,32 +1071,34 @@ func (r *EntityRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.U
 // to 0 and are removed by the orphan sweep. Returns rows updated.
 func (r *EntityRepo) RecomputeMentionCounts(ctx context.Context, ids []uuid.UUID) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	const sub = `(SELECT COUNT(DISTINCT rel.source_memory) FROM relationships rel ` +
-		`JOIN memories m ON m.id = rel.source_memory ` +
-		`WHERE (rel.source_id = entities.id OR rel.target_id = entities.id) ` +
-		`AND m.deleted_at IS NULL AND m.superseded_by IS NULL)`
+	if len(ids) == 0 {
+		return r.execMentionCountRecompute(ctx, "", now)
+	}
+	// IN-list placeholders start at $2 (after the updated_at bind).
+	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 2)
+	where := "id IN (" + strings.Join(placeholders, ", ") + ")"
+	return r.execMentionCountRecompute(ctx, where, append([]any{now}, idArgs...)...)
+}
 
-	tsPlaceholder := "?"
+// RecomputeMentionCountsByNamespace (re)derives mention_count for every entity in
+// a single namespace using the same canonical definition as RecomputeMentionCounts
+// (the count of distinct live source memories on edges touching the entity). The
+// per-project dream self-heal phase calls this once per cycle so a project's counts
+// converge to truth (including downward, which the weights phase's monotonic bump
+// cannot) without the cross-tenant, whole-table cost of the nil-scoped recompute.
+//
+// The `mention_count <> ...` guard rewrites only rows whose count actually
+// changes, so a steady-state cycle (counts already canonical) touches zero rows
+// instead of re-versioning every entity in the namespace each cycle; the returned
+// row count is therefore the number of counts actually corrected.
+func (r *EntityRepo) RecomputeMentionCountsByNamespace(ctx context.Context, namespaceID uuid.UUID) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	nsPh := "?"
 	if r.db.Backend() == BackendPostgres {
-		tsPlaceholder = "$1"
+		nsPh = "$2"
 	}
-	query := "UPDATE entities SET mention_count = " + sub + ", updated_at = " + tsPlaceholder
-	args := []any{now}
-	if len(ids) > 0 {
-		// IN-list placeholders start at $2 (after the updated_at bind).
-		placeholders, idArgs := uuidInPlaceholders(r.db, ids, 2)
-		query += " WHERE id IN (" + strings.Join(placeholders, ", ") + ")"
-		args = append(args, idArgs...)
-	}
-	result, err := r.db.Exec(ctx, query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("entity recompute mention counts: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("entity recompute mention counts rows: %w", err)
-	}
-	return n, nil
+	where := "namespace_id = " + nsPh + " AND mention_count <> " + mentionCountSubquery
+	return r.execMentionCountRecompute(ctx, where, now, namespaceID.String())
 }
 
 // reload fetches the entity by ID and populates the struct in place.

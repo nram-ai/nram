@@ -1024,6 +1024,11 @@ func main() {
 		consolidationPhase,
 		dreaming.NewPruningPhase(memoryRepo, memoryRepo, relationshipRepo, relationshipRepo, settingsSvc),
 		dreaming.NewWeightAdjustmentPhase(entityRepo, entityRepo, relationshipRepo, relationshipRepo, memoryRepo, settingsSvc),
+		// Mention recompute re-normalizes the project's entity mention_counts to
+		// the canonical distinct-live-source-memory value. Runs last so it reflects
+		// the final post-pruning, post-weight edge set, and (unlike weight_adjustment,
+		// which only bumps counts up) can correct a count downward. SQL-only (frac 0).
+		dreaming.NewMentionRecomputePhase(entityRepo),
 	)
 
 	dreamRollback := dreaming.NewRollbackService(

@@ -1,0 +1,2 @@
+-- No-op on SQLite (see 000061_relationships_endpoint_indexes.up.sql). Present
+-- only to satisfy TestMigrationUpDownPaired.
