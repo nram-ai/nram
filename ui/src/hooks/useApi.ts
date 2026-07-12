@@ -554,7 +554,7 @@ export function useTestProviderSlot() {
 
 export function useOllamaModels(ollamaUrl?: string, customHeaders?: Record<string, string>) {
   return useQuery({
-    queryKey: ["admin", "ollama-models", ollamaUrl],
+    queryKey: ["admin", "ollama-models", ollamaUrl, customHeaders],
     queryFn: () => adminAPI.getOllamaModels(ollamaUrl, customHeaders),
     enabled: false,
   });
@@ -562,7 +562,7 @@ export function useOllamaModels(ollamaUrl?: string, customHeaders?: Record<strin
 
 export function useProviderModels(url: string, customHeaders?: Record<string, string>) {
   return useQuery({
-    queryKey: ["admin", "provider-models", url],
+    queryKey: ["admin", "provider-models", url, customHeaders],
     queryFn: () => adminAPI.getProviderModels(url, customHeaders),
     enabled: false,
   });
