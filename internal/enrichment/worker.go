@@ -1304,6 +1304,16 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 	// reported entity count see distinct names; relationships are deduped after.
 	if !skipEntity && entityErr == nil && entEnv != nil && entEnv.Result != nil {
 		dedupeEntityResult(entEnv.Result)
+		// Volume clamp on the deduped distinct-entity set, before pass 2 is fed the
+		// names: an enumeration-flood of individually valid names is truncated here
+		// so it can neither seed pass-2 relationships nor be embedded and persisted.
+		if maxEnt := wp.settings.ResolveIntWithDefault(ctx, service.SettingExtractionMaxEntitiesPerMemory, "global"); maxEnt > 0 {
+			if dropped := service.CapEntityResult(entEnv.Result, maxEnt); dropped > 0 {
+				slog.Warn("enrichment: entity count cap applied",
+					"job", job.ID, "memory", mem.ID,
+					"kept", len(entEnv.Result.Entities), "dropped", dropped, "cap", maxEnt)
+			}
+		}
 		names := service.EntityNames(entEnv.Result.Entities)
 		if len(names) > 0 {
 			t0 := time.Now()
@@ -1710,6 +1720,17 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 		return nil
 	}
 
+	// Volume clamp, re-checked at the persistence boundary since extraction output
+	// is untrusted (mirrors the entity-name guard, applied both in extraction and
+	// here). In the normal flow the pre-embed path already capped the deduped set,
+	// so this is a no-op; it also prunes relationships to dropped endpoints.
+	maxEntities := wp.settings.ResolveIntWithDefault(ctx, service.SettingExtractionMaxEntitiesPerMemory, "global")
+	if dropped := service.CapEntityResult(entResult, maxEntities); dropped > 0 {
+		slog.Warn("enrichment: entity count cap applied at persistence",
+			"job", job.ID, "memory", mem.ID,
+			"kept", len(entResult.Entities), "dropped", dropped, "cap", maxEntities)
+	}
+
 	collected := make([]entityFact, 0, len(entResult.Entities))
 	seen := make(map[uuid.UUID]bool, len(entResult.Entities))
 
@@ -1794,6 +1815,17 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 		srcID, srcOK := entityNameToID[rel.Source]
 		tgtID, tgtOK := entityNameToID[rel.Target]
 
+		// Hard-cap the entities this memory materializes: once the running set has
+		// reached the cap, stop resolving/stubbing new relationship endpoints so a
+		// pass-2 endpoint hallucinated outside the fed name list cannot push the
+		// count past the clamp. Skips the whole relationship (both endpoints must
+		// resolve). Only bites at the ceiling, i.e. under a relationship flood.
+		if maxEntities > 0 && (!srcOK || !tgtOK) && len(entityNameToID) >= maxEntities {
+			slog.Warn("enrichment: entity cap reached, skipping relationship stub",
+				"job", job.ID, "memory", mem.ID,
+				"source", rel.Source, "target", rel.Target, "cap", maxEntities)
+			continue
+		}
 		if !srcOK {
 			ent, err := wp.resolveOrCreateEntity(ctx, mem.NamespaceID, rel.Source)
 			if err != nil {

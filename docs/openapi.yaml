@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.31
+  version: 0.18.32
   license:
     name: MIT
 
@@ -6362,6 +6362,7 @@ components:
         - "enrichment.extraction.entity_name_max_chars"
         - "enrichment.extraction.entity_name_max_words"
         - "enrichment.extraction.entity_name_min_distinct_word_ratio"
+        - "enrichment.extraction.max_entities_per_memory"
         - "enrichment.fact_extraction.async.temperature"
         - "enrichment.fact_extraction.max_tokens"
         - "enrichment.fact_extraction.sync.temperature"

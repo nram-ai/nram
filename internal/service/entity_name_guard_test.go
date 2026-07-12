@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,71 @@ func TestScrubEntityResult_AllDegenerateBecomesEmpty(t *testing.T) {
 	scrubEntityResult(res, 120, 12, 0.5)
 	if len(res.Entities) != 0 {
 		t.Fatalf("expected all degenerate entities dropped, got %+v", res.Entities)
+	}
+}
+
+func TestCapEntityResult_TruncatesAndPrunesRelationships(t *testing.T) {
+	const cap = 128
+	res := &EntityExtractionResult{}
+	for i := range 300 {
+		res.Entities = append(res.Entities, ExtractedEntityData{
+			Name: "entity-" + strconv.Itoa(i), Type: "concept",
+		})
+	}
+	// One edge wholly inside the kept prefix, one that reaches a dropped entity.
+	res.Relationships = []ExtractedRelation{
+		{Source: "entity-0", Target: "entity-1", Relation: "rel"},   // both kept
+		{Source: "entity-0", Target: "entity-200", Relation: "rel"}, // target dropped
+	}
+
+	dropped := CapEntityResult(res, cap)
+
+	if dropped != 300-cap {
+		t.Fatalf("dropped = %d, want %d", dropped, 300-cap)
+	}
+	if len(res.Entities) != cap {
+		t.Fatalf("entities = %d, want %d", len(res.Entities), cap)
+	}
+	if len(res.Relationships) != 1 || res.Relationships[0].Target != "entity-1" {
+		t.Fatalf("relationship reaching a dropped entity not pruned: %+v", res.Relationships)
+	}
+}
+
+// Under the cap the clamp is a no-op: entities are untouched and relationships to
+// endpoints that are not in the entity slice survive, preserving the legitimate
+// stub-creation path the worker relies on when the cap does not fire.
+func TestCapEntityResult_UnderCapIsNoOp(t *testing.T) {
+	res := &EntityExtractionResult{
+		Entities: []ExtractedEntityData{
+			{Name: "Brandon Lehmann", Type: "person"},
+			{Name: "nram", Type: "project"},
+		},
+		Relationships: []ExtractedRelation{
+			// Target is not among the entities: a legitimate stub endpoint.
+			{Source: "Brandon Lehmann", Target: "Anthropic", Relation: "uses"},
+		},
+	}
+
+	if dropped := CapEntityResult(res, 128); dropped != 0 {
+		t.Fatalf("dropped = %d, want 0", dropped)
+	}
+	if len(res.Entities) != 2 {
+		t.Fatalf("entities mutated under the cap: %+v", res.Entities)
+	}
+	if len(res.Relationships) != 1 || res.Relationships[0].Target != "Anthropic" {
+		t.Fatalf("stub-endpoint relationship dropped under the cap: %+v", res.Relationships)
+	}
+}
+
+func TestCapEntityResult_ZeroDisables(t *testing.T) {
+	res := &EntityExtractionResult{}
+	for i := range 300 {
+		res.Entities = append(res.Entities, ExtractedEntityData{Name: "entity-" + strconv.Itoa(i)})
+	}
+	if dropped := CapEntityResult(res, 0); dropped != 0 {
+		t.Fatalf("dropped = %d, want 0 (cap disabled)", dropped)
+	}
+	if len(res.Entities) != 300 {
+		t.Fatalf("entities truncated with the cap disabled: %d", len(res.Entities))
 	}
 }

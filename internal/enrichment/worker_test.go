@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1184,6 +1185,70 @@ func TestProcessJob_FullPipeline(t *testing.T) {
 		if !found {
 			t.Errorf("no token_usage record for phase %q", op)
 		}
+	}
+}
+
+// entityFloodJSON builds an entity-extraction payload with n distinct entities
+// plus one relationship between the first two, mirroring the enumeration failure
+// mode: many individually valid names returned for one memory. The stub serves
+// this to both extraction passes; the entity pass reads "entities", the
+// relationship pass reads "relationships".
+func entityFloodJSON(n int) string {
+	res := entityExtractionResult{
+		Relationships: []extractedRelationship{
+			{Source: "flood-0", Target: "flood-1", Relation: "related_to", Weight: 0.9},
+		},
+	}
+	for i := range n {
+		res.Entities = append(res.Entities, extractedEntity{
+			Name: "flood-" + strconv.Itoa(i), Type: "concept",
+		})
+	}
+	b, _ := json.Marshal(res)
+	return string(b)
+}
+
+// A single extraction that returns far more entities than the configured cap
+// must persist at most the cap, not the full flood. This drives the real worker
+// pipeline (pass 1 -> dedup -> cap -> pass 2 -> upsert) end to end and observes
+// the persisted entity count, the concrete amplifier the clamp exists to stop.
+func TestProcessJob_EntityCountCapBoundsPersistedEntities(t *testing.T) {
+	const cap = 3
+	const flood = 20
+	factLLM := &mockLLMProvider{name: "test-fact", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{Content: factJSON(), Model: "fact-model"}, nil
+	}}
+	entityLLM := &mockLLMProvider{name: "test-entity", respond: func(_ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{Content: entityFloodJSON(flood), Model: "entity-model"}, nil
+	}}
+	embedProv := &mockEmbeddingProvider{name: "test-embed", respond: func(req *provider.EmbeddingRequest) (*provider.EmbeddingResponse, error) {
+		embs := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			embs[i] = []float32{0.1, 0.2, 0.3}
+		}
+		return &provider.EmbeddingResponse{Embeddings: embs, Model: "embed-model"}, nil
+	}}
+
+	h := newTestHarness(factLLM, entityLLM, embedProv)
+	disableParaphraseGuard(t, h)
+	if err := h.settings.Set(context.Background(), service.SettingExtractionMaxEntitiesPerMemory, strconv.Itoa(cap), "global", nil); err != nil {
+		t.Fatalf("set cap: %v", err)
+	}
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob returned error: %v", err)
+	}
+
+	if len(h.entities.upserted) != cap {
+		t.Fatalf("cap not enforced: persisted %d entities, want %d (flood was %d)", len(h.entities.upserted), cap, flood)
+	}
+	// The relationship between the two surviving entities is still wired: the
+	// clamp bounds volume without discarding edges inside the kept set.
+	if len(h.rels.created) != 1 {
+		t.Errorf("expected the intra-kept-set relationship to survive, got %d relationships", len(h.rels.created))
 	}
 }
 

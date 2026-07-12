@@ -455,6 +455,13 @@ const (
 	SettingExtractionChunkOverlapTokens    = "enrichment.extraction.chunk_overlap_tokens"
 	SettingExtractionContinuationMaxPasses = "enrichment.extraction.continuation_max_passes"
 
+	// Volume clamp: an upper bound on how many distinct entities one memory's
+	// extraction may persist. The per-name guards below judge one name at a time;
+	// this bounds the count, catching an enumeration-flood of individually valid
+	// names that would otherwise all be embedded and written to the graph. 0
+	// disables the clamp.
+	SettingExtractionMaxEntitiesPerMemory = "enrichment.extraction.max_entities_per_memory"
+
 	// Entity-name guard: reject an extracted entity whose name is degenerate
 	// (a wall of text, a whole sentence, or a repetition loop) before it is
 	// embedded or persisted. Each knob disables its check when set to 0.
@@ -1268,6 +1275,8 @@ var settingDefaults = map[string]string{
 	SettingExtractionChunkThresholdTokens:  "2800",
 	SettingExtractionChunkOverlapTokens:    "200",
 	SettingExtractionContinuationMaxPasses: "2",
+
+	SettingExtractionMaxEntitiesPerMemory: "128",
 
 	SettingExtractionEntityNameMaxChars:             "120",
 	SettingExtractionEntityNameMaxWords:             "12",

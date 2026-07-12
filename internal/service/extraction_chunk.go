@@ -454,3 +454,40 @@ func scrubEntityResult(res *EntityExtractionResult, maxChars, maxWords int, minR
 		res.Relationships = kept
 	}
 }
+
+// CapEntityResult bounds a single memory's extracted entities to maxEntities,
+// in place, and reports how many were dropped. The per-name guards judge one
+// name at a time; this is the volume clamp that catches an enumeration-flood of
+// individually valid names. It is a no-op (returns 0) when maxEntities <= 0 or
+// the entity count is already within the cap, so the common path and the
+// legitimate relationship stub-creation path are untouched.
+//
+// When the cap fires it keeps the first maxEntities entities in extraction order
+// and drops any relationship whose source or target is no longer among the kept
+// entities (case-insensitive, trimmed) — otherwise a dropped entity would be
+// re-created downstream as a stub from a surviving relationship endpoint,
+// defeating the clamp.
+func CapEntityResult(res *EntityExtractionResult, maxEntities int) int {
+	if res == nil || maxEntities <= 0 || len(res.Entities) <= maxEntities {
+		return 0
+	}
+	dropped := len(res.Entities) - maxEntities
+	res.Entities = res.Entities[:maxEntities]
+	if len(res.Relationships) > 0 {
+		norm := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+		keptNames := make(map[string]struct{}, len(res.Entities))
+		for _, e := range res.Entities {
+			keptNames[norm(e.Name)] = struct{}{}
+		}
+		kept := func(name string) bool { _, ok := keptNames[norm(name)]; return ok }
+		keptRels := res.Relationships[:0]
+		for _, r := range res.Relationships {
+			if !kept(r.Source) || !kept(r.Target) {
+				continue
+			}
+			keptRels = append(keptRels, r)
+		}
+		res.Relationships = keptRels
+	}
+	return dropped
+}
