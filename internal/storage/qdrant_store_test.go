@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -689,6 +691,131 @@ func TestQdrantStore_UpsertFacets_CollapsesToBestFacet(t *testing.T) {
 		if r.ID == multi {
 			t.Errorf("multi still present after delete")
 		}
+	}
+}
+
+// TestQdrantStore_UpsertFacets_RewriteKeepsFacetZeroVisibleAndPrunesTail runs
+// against a live Qdrant (QDRANT_TEST_ADDR). It guards two properties of the
+// overwrite-in-place UpsertFacets:
+//
+//   - Window closure: while a memory is repeatedly re-faceted, a concurrent
+//     reader Getting the facet-0 point must never observe it absent. Facet 0 is
+//     only ever overwritten, never deleted, for a non-empty set. Under the old
+//     delete-then-write ordering the reader would catch the delete window and
+//     see facet 0 missing (verified by temporarily reverting the fix).
+//   - Tail prune: after a write that shrinks the facet count, the stale
+//     higher-index topic facets from the wider prior write must be gone, and
+//     facet 0 must hold the latest vector.
+func TestQdrantStore_UpsertFacets_RewriteKeepsFacetZeroVisibleAndPrunesTail(t *testing.T) {
+	addr := ensureQdrantAddr(t)
+	ctx := context.Background()
+	store, err := NewQdrantStore(QdrantConfig{Addr: addr})
+	if err != nil {
+		t.Fatalf("NewQdrantStore: %v", err)
+	}
+	if err := store.EnsureCollections(ctx); err != nil {
+		t.Fatalf("EnsureCollections: %v", err)
+	}
+
+	ns := uuid.New()
+	dim := 384
+	mem := uuid.New()
+	collection, err := qdrantCollectionName(VectorKindMemory, dim)
+	if err != nil {
+		t.Fatalf("qdrantCollectionName: %v", err)
+	}
+	client := store.Client()
+
+	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = store.Delete(ctx, VectorKindMemory, mem) })
+
+	facetExists := func(facet int) bool {
+		pts, err := client.Get(ctx, &qdrant.GetPoints{
+			CollectionName: collection,
+			Ids:            []*qdrant.PointId{qdrant.NewID(facetPointID(mem, facet).String())},
+		})
+		if err != nil {
+			t.Fatalf("Get facet %d: %v", facet, err)
+		}
+		return len(pts) > 0
+	}
+
+	three := [][]float32{orthEmbedding(dim, 0), orthEmbedding(dim, 5), orthEmbedding(dim, 9)}
+	oneLatest := [][]float32{orthEmbedding(dim, 3)}
+
+	// Seed a 3-facet memory and confirm the topic tail exists.
+	if err := store.UpsertFacets(ctx, mem, ns, dim, three); err != nil {
+		t.Fatalf("UpsertFacets seed: %v", err)
+	}
+	if !facetExists(0) || !facetExists(1) || !facetExists(2) {
+		t.Fatalf("seed: want facet points 0,1,2 present")
+	}
+
+	// While the writer re-facets in a tight loop, a reader watches facet 0.
+	var sawMissing atomic.Bool
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		f0 := []*qdrant.PointId{qdrant.NewID(facetPointID(mem, 0).String())}
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			pts, err := client.Get(ctx, &qdrant.GetPoints{CollectionName: collection, Ids: f0})
+			if err == nil && len(pts) == 0 {
+				sawMissing.Store(true)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	const iterations = 40
+	for i := range iterations {
+		facets := three
+		if i%2 == 1 {
+			facets = oneLatest
+		}
+		if err := store.UpsertFacets(ctx, mem, ns, dim, facets); err != nil {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("UpsertFacets iter %d: %v", i, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if sawMissing.Load() {
+		t.Errorf("reader observed facet 0 absent during re-facet: the rewrite window is not closed")
+	}
+
+	// Final deterministic write shrinks to a single facet (latest vector = axis 3).
+	if err := store.UpsertFacets(ctx, mem, ns, dim, oneLatest); err != nil {
+		t.Fatalf("UpsertFacets shrink: %v", err)
+	}
+	if !facetExists(0) {
+		t.Fatalf("shrink: facet 0 must remain present")
+	}
+	if facetExists(1) || facetExists(2) {
+		t.Errorf("shrink: stale topic facets 1,2 must be pruned after shrinking to 1 facet")
+	}
+
+	// Facet 0 holds the latest vector (axis 3): a presence check cannot verify
+	// which vector survived, so score the memory against the just-written axis.
+	res3, err := store.Search(ctx, VectorKindMemory, orthEmbedding(dim, 3), ns, dim, 10)
+	if err != nil {
+		t.Fatalf("Search axis-3: %v", err)
+	}
+	var score3 float64
+	found3 := false
+	for _, r := range res3 {
+		if r.ID == mem {
+			found3, score3 = true, r.Score
+		}
+	}
+	if !found3 || score3 < 0.99 {
+		t.Errorf("axis-3 (latest facet 0): found=%v score=%f, want present ~1.0", found3, score3)
 	}
 }
 

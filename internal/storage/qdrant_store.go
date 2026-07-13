@@ -432,26 +432,35 @@ func (s *QdrantStore) TotalMemoryVectors(ctx context.Context) (int, error) {
 
 // Search finds the nearest vectors within a namespace using cosine similarity.
 // Filters by namespace_id payload field. The caller is responsible for soft-delete exclusion.
-// UpsertFacets atomically replaces a memory's facet set at the given dimension.
-// facets[0] is facet 0 (point ID = memory_id, back-compatible) and facets[1:]
-// are topic facets with deterministic UUIDv5 point IDs. Every point carries a
-// memory_id payload so Search can collapse and Delete can filter. An empty slice
-// removes all facets for the memory.
+// UpsertFacets replaces a memory's facet set at the given dimension. facets[0]
+// is facet 0 (point ID = memory_id, back-compatible) and facets[1:] are topic
+// facets with deterministic UUIDv5 point IDs. Every point carries a memory_id
+// payload so Search can collapse and Delete can filter. An empty slice removes
+// all facets for the memory.
+//
+// For a non-empty set the new points are upserted in place FIRST (Qdrant
+// overwrites the same deterministic point IDs), then stale higher-index topic
+// facets left by a wider prior write are pruned by a facet_id-range filter.
+// Facet 0 is only ever overwritten here, never deleted, so there is no window
+// in which a concurrent reader (Search/BestFacetCosines during a re-facet) sees
+// the memory with no facet-0 point. Sibling backends get this for free:
+// pgvector runs delete+insert in one transaction, HNSW mutates under lock.
 func (s *QdrantStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, namespaceID uuid.UUID, dimension int, facets [][]float32) error {
 	collection, err := qdrantCollectionName(VectorKindMemory, dimension)
 	if err != nil {
 		return err
 	}
-	if err := s.deleteAllFacets(ctx, collection, memoryID); err != nil {
-		return err
-	}
-	// deleteAllFacets has already changed this memory's facet set, so every path
-	// past here alters topic-facet presence for the namespace/dimension; drop the
-	// cached presence answer once, covering both the empty-set and upsert returns.
+	// Any path past here alters topic-facet presence for the namespace/dimension;
+	// drop the cached presence answer once, covering both the removal and the
+	// upsert returns.
 	defer s.gate.invalidate(namespaceID, dimension)
+
+	// Empty set is full removal: no in-place point survives, so fall back to the
+	// delete-all path (facet 0 by id + topic facets by memory_id filter).
 	if len(facets) == 0 {
-		return nil
+		return s.deleteAllFacets(ctx, collection, memoryID)
 	}
+
 	points := make([]*qdrant.PointStruct, len(facets))
 	for i, vec := range facets {
 		points[i] = &qdrant.PointStruct{
@@ -471,6 +480,26 @@ func (s *QdrantStore) UpsertFacets(ctx context.Context, memoryID uuid.UUID, name
 		Points:         points,
 	}); err != nil {
 		return fmt.Errorf("qdrant: upsert-facets %s: %w", collection, err)
+	}
+
+	// Prune stale topic facets left by a wider prior write: delete every point
+	// for this memory whose facet_id is at or above the new count. The points
+	// just upserted carry facet_id 0..len-1, so this range never matches them,
+	// and facet 0 (facet_id 0) is never matched for a non-empty set. This mirrors
+	// deleteAllFacets' memory_id filter, adding a facet_id range so the delete is
+	// bounded to the stale tail regardless of how many facets the prior write had.
+	minStale := float64(len(facets))
+	if _, err := s.client.Delete(ctx, &qdrant.DeletePoints{
+		CollectionName: collection,
+		Wait:           &wait,
+		Points: qdrant.NewPointsSelectorFilter(&qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("memory_id", memoryID.String()),
+				qdrant.NewRange("facet_id", &qdrant.Range{Gte: &minStale}),
+			},
+		}),
+	}); err != nil {
+		return fmt.Errorf("qdrant: upsert-facets prune tail %s: %w", collection, err)
 	}
 	return nil
 }
