@@ -58,9 +58,9 @@ type Options struct {
 
 // lowNoveltyMetaKey is the metadata key the dream novelty audit stamps on a
 // demoted memory. It is hoisted into Memory.LowNovelty and therefore always
-// stripped from residual Metadata. The literal mirrors the writer in
-// internal/dreaming/phase_consolidation.go.
-const lowNoveltyMetaKey = "low_novelty"
+// stripped from residual Metadata. Aliases model.MetaLowNovelty so the writer,
+// this reader, and the move-path sanitizer share one definition.
+const lowNoveltyMetaKey = model.MetaLowNovelty
 
 // lowNoveltyReasonKey is the human-readable reason paired with a demotion.
 // Unlike the bool it is detail, not a decision signal, so it stays stripped

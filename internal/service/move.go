@@ -140,13 +140,20 @@ func (s *MoveService) Move(ctx context.Context, req *MoveRequest) (*MoveResponse
 		}
 
 		importance := mem.Importance
+		// Drop namespace-local provenance (dream lineage: source_memory_ids,
+		// dream_cycle_id, low_novelty; plus the ingestion dedup target_id) before
+		// re-storing: those keys reference the SOURCE namespace, so carrying them
+		// into the destination would make the fresh user-origin copy advertise
+		// dangling cross-namespace references (source_memory_ids is hoisted to
+		// derived_from on recall; ingestion_target_id is user-visible on REST
+		// detail). Scalar ingestion-audit values are kept as history.
 		storeResp, err := s.store.Store(ctx, &StoreRequest{
 			ProjectID:  req.TargetProjectID,
 			Content:    mem.Content,
 			Source:     source,
 			Tags:       mem.Tags,
 			Importance: &importance,
-			Metadata:   mem.Metadata,
+			Metadata:   model.SanitizeRelocatedMetadata(mem.Metadata),
 			UserID:     req.UserID,
 			OrgID:      req.OrgID,
 			APIKeyID:   req.APIKeyID,

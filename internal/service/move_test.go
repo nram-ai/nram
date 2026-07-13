@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -240,6 +241,53 @@ func TestMove_ReservedSourceDropped(t *testing.T) {
 	}
 	if store.calls[0].Source != "" {
 		t.Errorf("reserved source must be dropped, got %q", store.calls[0].Source)
+	}
+}
+
+func TestMove_StripsDreamLineageProvenanceMetadata(t *testing.T) {
+	srcNS := uuid.New()
+	srcProjectID, dstProjectID, projects := moveTestSetup(srcNS)
+	memID := uuid.New()
+	parent := uuid.New().String()
+	// A synthesized memory carries namespace-local provenance: dream lineage, the
+	// ingestion dedup target (a cross-namespace memory-ID ref), plus a scalar
+	// ingestion-audit value and a genuine user key. Moving it must drop the
+	// namespace-local refs (else the destination copy advertises dangling
+	// cross-namespace references) while keeping the scalar audit value and the
+	// user key.
+	meta := json.RawMessage(fmt.Sprintf(
+		`{"source_memory_ids":[%q],"dream_cycle_id":%q,"low_novelty":true,"ingestion_target_id":%q,"ingestion_decision":"ADD","user_key":"keep"}`,
+		parent, uuid.New().String(), uuid.New().String()))
+	reader := &fakeMoveMemReader{memories: map[uuid.UUID]*model.Memory{
+		memID: {ID: memID, NamespaceID: srcNS, Content: "insight", Metadata: meta},
+	}}
+	store := &fakeMoveStore{nextID: uuid.New()}
+	forget := &fakeMoveForget{}
+
+	svc := NewMoveService(reader, projects, store, forget)
+	if _, err := svc.Move(context.Background(), &MoveRequest{
+		SourceProjectID: srcProjectID,
+		TargetProjectID: dstProjectID,
+		MemoryIDs:       []uuid.UUID{memID},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("expected 1 store call, got %d", len(store.calls))
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(store.calls[0].Metadata, &got); err != nil {
+		t.Fatalf("stored metadata is not a JSON object: %v (%s)", err, store.calls[0].Metadata)
+	}
+	for _, k := range []string{"source_memory_ids", "dream_cycle_id", "low_novelty", "ingestion_target_id"} {
+		if _, present := got[k]; present {
+			t.Errorf("namespace-local ref %q must be stripped from the moved copy, got %s", k, store.calls[0].Metadata)
+		}
+	}
+	for _, k := range []string{"ingestion_decision", "user_key"} {
+		if _, present := got[k]; !present {
+			t.Errorf("historical/user metadata %q must be preserved, got %s", k, store.calls[0].Metadata)
+		}
 	}
 }
 
