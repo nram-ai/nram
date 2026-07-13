@@ -204,15 +204,15 @@ func TestListProviderModelsCredentialFallback(t *testing.T) {
 
 	// A saved slot at the same URL carries the API key and proxy header; with no
 	// forwarded form headers, ListProviderModels must borrow both.
-	reg, err := provider.NewRegistry(provider.RegistryConfig{
-		Fact: provider.SlotConfig{
+	reg, err := provider.NewRegistry(provider.RegistryConfig{Slots: map[string]provider.SlotConfig{
+		provider.SlotFact: {
 			Type:          "vllm",
 			BaseURL:       srv.URL,
 			APIKey:        "sk-saved",
 			Model:         "Qwen/Qwen3-8B",
 			CustomHeaders: map[string]string{"X-Proxy": "saved"},
 		},
-	}, nil, nil)
+	}}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -258,14 +258,14 @@ func TestResolveOllamaURLDefaultFallback(t *testing.T) {
 }
 
 func TestResolveOllamaURLFromRegistryPort(t *testing.T) {
-	reg, err := provider.NewRegistry(provider.RegistryConfig{
-		Fact: provider.SlotConfig{
+	reg, err := provider.NewRegistry(provider.RegistryConfig{Slots: map[string]provider.SlotConfig{
+		provider.SlotFact: {
 			Type:    "openai",
 			BaseURL: "http://myollama:11434",
 			APIKey:  "test",
 			Model:   "llama3",
 		},
-	}, nil, nil)
+	}}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -318,14 +318,15 @@ func TestUpdateProviderSlotTriggersReload(t *testing.T) {
 	}
 
 	cfg := reg.GetConfig()
-	if cfg.Embedding.Type != "openai" {
-		t.Errorf("expected embedding type openai, got %q", cfg.Embedding.Type)
+	embedding := cfg.Slots[provider.SlotEmbedding]
+	if embedding.Type != "openai" {
+		t.Errorf("expected embedding type openai, got %q", embedding.Type)
 	}
-	if cfg.Embedding.BaseURL != "https://api.openai.com" {
-		t.Errorf("expected base URL https://api.openai.com, got %q", cfg.Embedding.BaseURL)
+	if embedding.BaseURL != "https://api.openai.com" {
+		t.Errorf("expected base URL https://api.openai.com, got %q", embedding.BaseURL)
 	}
-	if cfg.Embedding.Model != "text-embedding-3-small" {
-		t.Errorf("expected model text-embedding-3-small, got %q", cfg.Embedding.Model)
+	if embedding.Model != "text-embedding-3-small" {
+		t.Errorf("expected model text-embedding-3-small, got %q", embedding.Model)
 	}
 }
 
@@ -646,24 +647,25 @@ func TestUpdateProviderSlotRoundTripsDisableThinking(t *testing.T) {
 }
 
 func TestGetRegistryConfig(t *testing.T) {
-	cfg := provider.RegistryConfig{
-		Embedding: provider.SlotConfig{
+	cfg := provider.RegistryConfig{Slots: map[string]provider.SlotConfig{
+		provider.SlotEmbedding: {
 			Type:    "openai",
 			BaseURL: "https://api.openai.com",
 			APIKey:  "sk-test",
 			Model:   "text-embedding-3-small",
 		},
-	}
+	}}
 	reg, err := provider.NewRegistry(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
 	got := reg.GetConfig()
-	if got.Embedding.Type != "openai" {
-		t.Errorf("expected openai, got %q", got.Embedding.Type)
+	embedding := got.Slots[provider.SlotEmbedding]
+	if embedding.Type != "openai" {
+		t.Errorf("expected openai, got %q", embedding.Type)
 	}
-	if got.Embedding.BaseURL != "https://api.openai.com" {
-		t.Errorf("expected https://api.openai.com, got %q", got.Embedding.BaseURL)
+	if embedding.BaseURL != "https://api.openai.com" {
+		t.Errorf("expected https://api.openai.com, got %q", embedding.BaseURL)
 	}
 }

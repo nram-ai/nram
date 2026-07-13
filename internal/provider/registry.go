@@ -142,65 +142,30 @@ type SlotConfig struct {
 // RegistryConfig holds the configuration for all provider slots and the shared
 // circuit breaker parameters.
 type RegistryConfig struct {
-	Embedding SlotConfig `json:"embedding"`
-	Fact      SlotConfig `json:"fact"`
-	Entity    SlotConfig `json:"entity"`
-	// Optional per-operation slots. An empty Type means "unconfigured"; the
-	// corresponding Get accessor then falls back to the fact provider.
-	QueryAugment      SlotConfig `json:"query_augment"`
-	IngestionDecision SlotConfig `json:"ingestion_decision"`
-	// Ask is the dedicated ask-synthesis slot. Unlike QueryAugment and
-	// IngestionDecision it has NO fallback (see provider.SlotAsk), so an empty
-	// Type leaves the ask tool's synthesis provider unconfigured.
-	Ask SlotConfig `json:"ask"`
-	// Reranker is the dedicated relevance-rerank slot (KindReranker). No
-	// fallback; an empty Type leaves the recall/ask rerank stages inert.
-	Reranker       SlotConfig           `json:"reranker"`
-	CircuitBreaker CircuitBreakerConfig `json:"circuit_breaker"`
+	// Slots holds each provider slot's config keyed by slot name (see slots.go).
+	// A missing or zero-value entry means "unconfigured": the read path returns
+	// the zero SlotConfig (empty Type) and buildProviders skips that slot. Keyed
+	// by name so adding a slot is one SlotDef entry in slots.go with no edits here.
+	Slots          map[string]SlotConfig
+	CircuitBreaker CircuitBreakerConfig
 }
 
-// slotConfig returns the SlotConfig for the named slot. This is the single
-// place that maps a slot name to its RegistryConfig field; everything else
-// iterates the canonical Slots list (see slots.go).
+// slotConfig returns the SlotConfig for the named slot, or the zero SlotConfig
+// (treated as unconfigured) when the slot has no entry. Everything else iterates
+// the canonical Slots list (see slots.go).
 func (c RegistryConfig) slotConfig(name string) SlotConfig {
-	switch name {
-	case SlotEmbedding:
-		return c.Embedding
-	case SlotFact:
-		return c.Fact
-	case SlotEntity:
-		return c.Entity
-	case SlotQueryAugment:
-		return c.QueryAugment
-	case SlotIngestionDecision:
-		return c.IngestionDecision
-	case SlotAsk:
-		return c.Ask
-	case SlotReranker:
-		return c.Reranker
-	}
-	return SlotConfig{}
+	return c.Slots[name]
 }
 
-// SetSlotConfig sets the SlotConfig for the named slot. Mirror of slotConfig,
-// used by the admin store to build a single-slot config for a connection test.
+// SetSlotConfig sets the SlotConfig for the named slot, lazily allocating the
+// map so it is safe to call on a zero-value RegistryConfig. Used by the admin
+// store to build a single-slot config for a connection test and to assemble the
+// full config from the persisted per-slot settings rows.
 func (c *RegistryConfig) SetSlotConfig(name string, sc SlotConfig) {
-	switch name {
-	case SlotEmbedding:
-		c.Embedding = sc
-	case SlotFact:
-		c.Fact = sc
-	case SlotEntity:
-		c.Entity = sc
-	case SlotQueryAugment:
-		c.QueryAugment = sc
-	case SlotIngestionDecision:
-		c.IngestionDecision = sc
-	case SlotAsk:
-		c.Ask = sc
-	case SlotReranker:
-		c.Reranker = sc
+	if c.Slots == nil {
+		c.Slots = make(map[string]SlotConfig)
 	}
+	c.Slots[name] = sc
 }
 
 // Registry manages the lifecycle of provider slots (embedding, fact extraction,

@@ -848,9 +848,11 @@ func (s *ProviderAdminStore) resolveProviderModelCreds(url string, formHeaders m
 	}
 	target := provider.NormalizeBaseURL(url)
 	cfg := s.deps.Registry.GetConfig()
-	for _, slot := range []provider.SlotConfig{
-		cfg.Embedding, cfg.Fact, cfg.Entity, cfg.QueryAugment, cfg.IngestionDecision,
+	for _, name := range []string{
+		provider.SlotEmbedding, provider.SlotFact, provider.SlotEntity,
+		provider.SlotQueryAugment, provider.SlotIngestionDecision,
 	} {
+		slot := cfg.Slots[name]
 		if slot.BaseURL == "" || provider.NormalizeBaseURL(slot.BaseURL) != target {
 			continue
 		}
@@ -875,7 +877,8 @@ func (s *ProviderAdminStore) resolveOllamaHeaders(override string, formHeaders m
 		return nil
 	}
 	cfg := s.deps.Registry.GetConfig()
-	for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
+	for _, name := range []string{provider.SlotEmbedding, provider.SlotFact, provider.SlotEntity} {
+		slot := cfg.Slots[name]
 		if !isOllamaSlot(slot) || len(slot.CustomHeaders) == 0 {
 			continue
 		}
@@ -907,7 +910,8 @@ func (s *ProviderAdminStore) resolveOllamaURL(override string) string {
 
 	if s.deps.Registry != nil {
 		cfg := s.deps.Registry.GetConfig()
-		for _, slot := range []provider.SlotConfig{cfg.Embedding, cfg.Fact, cfg.Entity} {
+		for _, name := range []string{provider.SlotEmbedding, provider.SlotFact, provider.SlotEntity} {
+			slot := cfg.Slots[name]
 			if isOllamaSlot(slot) && slot.BaseURL != "" {
 				return provider.NormalizeBaseURL(slot.BaseURL)
 			}

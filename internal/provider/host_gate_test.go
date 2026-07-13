@@ -220,11 +220,11 @@ func TestBuildProvidersWiresHostGate(t *testing.T) {
 		return HostConcurrency{LLM: 2, Embed: 3}
 	})
 
-	cfg := RegistryConfig{
-		Embedding: SlotConfig{Type: ProviderTypeOpenAI, BaseURL: "http://embedhost:11434/v1", APIKey: "k", Model: "m"},
-		Fact:      SlotConfig{Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
-		Entity:    SlotConfig{Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
-	}
+	cfg := RegistryConfig{Slots: map[string]SlotConfig{
+		SlotEmbedding: {Type: ProviderTypeOpenAI, BaseURL: "http://embedhost:11434/v1", APIKey: "k", Model: "m"},
+		SlotFact:      {Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
+		SlotEntity:    {Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
+	}}
 	built, err := r.buildProviders(cfg)
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
@@ -270,9 +270,9 @@ func TestBuildProvidersWiresHostGate(t *testing.T) {
 // providers are returned without a gate wrapper.
 func TestBuildProvidersNoGateWithoutResolver(t *testing.T) {
 	r := &Registry{}
-	cfg := RegistryConfig{
-		Fact: SlotConfig{Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
-	}
+	cfg := RegistryConfig{Slots: map[string]SlotConfig{
+		SlotFact: {Type: ProviderTypeOpenAI, BaseURL: "http://llmhost:30000/v1", APIKey: "k", Model: "m"},
+	}}
 	built, err := r.buildProviders(cfg)
 	if err != nil {
 		t.Fatalf("buildProviders: %v", err)
