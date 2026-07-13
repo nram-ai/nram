@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -393,8 +394,15 @@ func TestJudgeReranker_UsesContextConfig(t *testing.T) {
 	if stub.lastReq.Temperature != 0.3 {
 		t.Errorf("Temperature = %v, want 0.3 (from ctx)", stub.lastReq.Temperature)
 	}
-	if stub.lastReq.Messages[0].Content != "CUSTOM JUDGE PROMPT" {
-		t.Errorf("system prompt = %q, want the ctx-stamped one", stub.lastReq.Messages[0].Content)
+	// The system half is guarded (untrusted-data directive prepended) so an
+	// injected query/document cannot pose as an instruction.
+	if stub.lastReq.Messages[0].Content != GuardedSystem("CUSTOM JUDGE PROMPT") {
+		t.Errorf("system prompt = %q, want the guarded ctx-stamped one", stub.lastReq.Messages[0].Content)
+	}
+	// The query and document are nonce-fenced, not passed as the old bare
+	// "Query:"/"Document:" literals.
+	if u := stub.lastReq.Messages[1].Content; !strings.Contains(u, "<query-") || !strings.Contains(u, "<document-") {
+		t.Errorf("user message not fenced: %q", u)
 	}
 
 	// No stamp -> defaults applied.
@@ -406,8 +414,8 @@ func TestJudgeReranker_UsesContextConfig(t *testing.T) {
 	if stub2.lastReq.MaxTokens != defaultRerankJudgeMaxTokens {
 		t.Errorf("MaxTokens = %d, want default %d", stub2.lastReq.MaxTokens, defaultRerankJudgeMaxTokens)
 	}
-	if stub2.lastReq.Messages[0].Content != defaultRerankJudgeSystem {
-		t.Errorf("system prompt = %q, want default", stub2.lastReq.Messages[0].Content)
+	if stub2.lastReq.Messages[0].Content != GuardedSystem(defaultRerankJudgeSystem) {
+		t.Errorf("system prompt = %q, want guarded default", stub2.lastReq.Messages[0].Content)
 	}
 }
 

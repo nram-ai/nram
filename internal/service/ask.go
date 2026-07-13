@@ -832,7 +832,7 @@ func (s *AskService) synthesize(
 	usageCtx := provider.WithOperation(ctx, provider.OperationAskSynthesis)
 
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 	})

@@ -77,7 +77,7 @@ func extractRelationshipsOnce(
 ) (*RelationExtractionEnvelope, error) {
 	system := ResolveOrDefault(ctx, settings, SettingRelationshipSystemPrompt, "global")
 	user := RenderRelationshipUser(content, entityNames)
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationRelationshipExtraction), req)
@@ -191,7 +191,7 @@ func continueRelationshipsOnce(
 	user := RenderRelationshipUser(content, entityNames) +
 		"\n\nYou already extracted these relationships:\n" + sb.String() +
 		"\nReturn ONLY additional distinct relationships not already listed, in the same JSON object format. If there are none, return {\"relationships\":[]}."
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationRelationshipExtraction), req)
 	if err != nil {

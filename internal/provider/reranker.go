@@ -228,9 +228,9 @@ func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string)
 	var usage TokenUsage
 	var modelName string
 	for i, doc := range docs {
-		user := fmt.Sprintf("Query: %s\n\nDocument: %s", query, doc)
+		user := Fence("query", query) + "\n\n" + Fence("document", doc)
 		resp, err := j.llm.Complete(ctx, &CompletionRequest{
-			Messages:    BuildMessages(jc.SystemPrompt, user),
+			Messages:    BuildGuardedMessages(jc.SystemPrompt, user),
 			Temperature: jc.Temperature,
 			MaxTokens:   jc.MaxTokens,
 		})

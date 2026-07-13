@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -485,6 +486,7 @@ type capturingLLMProvider struct {
 	gotModel     string
 	gotOperation provider.Operation
 	gotMaxTokens int
+	gotMessages  []provider.Message
 	content      string
 }
 
@@ -492,6 +494,7 @@ func (c *capturingLLMProvider) Complete(ctx context.Context, req *provider.Compl
 	c.gotModel = req.Model
 	c.gotOperation, _ = provider.OperationFromContext(ctx)
 	c.gotMaxTokens = req.MaxTokens
+	c.gotMessages = req.Messages
 	respModel := req.Model
 	if respModel == "" {
 		respModel = "default-fact-model"
@@ -529,6 +532,15 @@ func TestEnrichmentTestPrompt_AugmentUsesDedicatedProvider(t *testing.T) {
 	}
 	if capLLM.gotOperation != provider.OperationProbe {
 		t.Errorf("test-prompt must stamp the diagnostic operation so the usage recorder does not warn; got %q, want %q", capLLM.gotOperation, provider.OperationProbe)
+	}
+	// The prompt-test must exercise the SAME guarded construction the runtime
+	// uses, so the operator sees exactly what production sends (guarded system,
+	// fenced user). Before centralization the admin path passed a bare system.
+	if len(capLLM.gotMessages) < 2 {
+		t.Fatalf("expected a two-message request, got %+v", capLLM.gotMessages)
+	}
+	if !strings.HasPrefix(capLLM.gotMessages[0].Content, provider.UntrustedDataDirective) {
+		t.Errorf("admin test-prompt system not guarded: %q", capLLM.gotMessages[0].Content)
 	}
 	var resp enrichmentTestPromptResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {

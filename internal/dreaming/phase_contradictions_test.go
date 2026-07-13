@@ -8,6 +8,8 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -184,6 +186,83 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 		if r.TokensInput == 0 && r.TokensOutput == 0 {
 			t.Error("token record has zero totals; estimate fallback should have populated them")
 		}
+	}
+}
+
+// capturingZeroUsageLLM records the guarded prompt actually sent (system +
+// separator + user) on each call and returns zero usage, forcing the
+// dreaming estimate-fallback path. Used to prove the budget estimate is
+// computed over the GUARDED prompt (directive included), not the bare system.
+type capturingZeroUsageLLM struct {
+	mu      sync.Mutex
+	prompts []string
+	calls   atomic.Int32
+}
+
+func (c *capturingZeroUsageLLM) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+	c.calls.Add(1)
+	if len(req.Messages) == 2 {
+		c.mu.Lock()
+		c.prompts = append(c.prompts, req.Messages[0].Content+provider.PromptSplitSeparator+req.Messages[1].Content)
+		c.mu.Unlock()
+	}
+	return &provider.CompletionResponse{
+		Content: `{"contradicts": false, "explanation": ""}`,
+		Model:   "local-model",
+		Usage:   provider.TokenUsage{}, // zero: force the estimate fallback
+	}, nil
+}
+func (c *capturingZeroUsageLLM) Name() string     { return "ollama-capture" }
+func (c *capturingZeroUsageLLM) Models() []string { return []string{"local-model"} }
+
+// TestContradictionPhase_BudgetEstimateCountsGuardDirective proves that when
+// the provider reports zero usage, the dream TokenBudget is charged the
+// estimate over the GUARDED prompt (GuardedSystem + separator + user), i.e. the
+// ~90-word untrusted-data directive is counted. Before folding the guard into
+// the estimate the phase reconstructed the estimate from the bare system and
+// undercounted every call.
+func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
+	llm := &capturingZeroUsageLLM{}
+	memories := makeMemories(2)
+	reader := &fakeMemoryReader{list: memories}
+
+	phase := NewContradictionPhase(
+		reader,
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider { return llm },
+		nilEmbedder,
+		stubSettings{},
+	)
+
+	// Large budget so no pre-flight gate trips; we assert on Used(), not gating.
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatal("expected at least one contradiction LLM call")
+	}
+
+	const respContent = `{"contradicts": false, "explanation": ""}`
+	want := 0
+	for _, p := range llm.prompts {
+		want += EstimateTokens(p) + EstimateTokens(respContent)
+	}
+	if got := budget.Used(); got != want {
+		t.Errorf("budget.Used() = %d, want %d (estimate over the guarded prompt actually sent)", got, want)
+	}
+
+	// Vacuous-pass guard: the directive must add tokens, otherwise the guarded
+	// and bare estimates would coincide and this test could not distinguish them.
+	// Every prompt shares the same directive prefix, so one sample suffices.
+	sample := llm.prompts[0]
+	bare := strings.TrimPrefix(sample, provider.UntrustedDataDirective+provider.PromptSplitSeparator)
+	if EstimateTokens(bare) == EstimateTokens(sample) {
+		t.Fatal("directive adds no tokens; test cannot distinguish guarded estimate from bare")
 	}
 }
 

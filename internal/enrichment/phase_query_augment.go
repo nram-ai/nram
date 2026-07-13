@@ -176,7 +176,7 @@ func (wp *WorkerPool) runQueryAugment(ctx context.Context, job *model.Enrichment
 	// (falling back to the fact provider's model when no dedicated slot is set,
 	// per Registry.GetQueryAugment).
 	req := &provider.CompletionRequest{
-		Messages:  provider.BuildMessages(provider.GuardedSystem(system), user),
+		Messages:  provider.BuildGuardedMessages(system, user),
 		MaxTokens: cfg.maxTokens,
 	}
 

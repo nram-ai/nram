@@ -374,7 +374,7 @@ func (p *ConsolidationPhase) reinforce(
 				continue
 			}
 			userPrompt := renderAlignmentPrompt(&stale[i].mem, sample)
-			estCost := EstimateTokens(alignmentSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			estCost := EstimateTokens(provider.GuardedPromptText(alignmentSystemPrompt, userPrompt)) + budget.PerCallCap()
 			if !budget.CanAfford(estCost) {
 				affordStop = true
 				break
@@ -507,13 +507,13 @@ func (p *ConsolidationPhase) scoreAlignment(
 	budget *TokenBudget,
 	temperature float64,
 ) (float64, *provider.TokenUsage, error) {
-	estText := system + provider.PromptSplitSeparator + user
+	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpAlignmentScore, llm.Name(),
 		synthesisID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+				Messages:    provider.BuildGuardedMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
@@ -1401,7 +1401,7 @@ func (p *ConsolidationPhase) consolidate(
 		affordStop := false
 		for si := windowStart; si < windowEnd; si++ {
 			userPrompt := renderSynthesisPrompt(stale[si].members)
-			estCost := EstimateTokens(synthesisSystemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			estCost := EstimateTokens(provider.GuardedPromptText(synthesisSystemPrompt, userPrompt)) + budget.PerCallCap()
 			if !budget.CanAfford(estCost) {
 				affordStop = true
 				break
@@ -1689,12 +1689,12 @@ func (p *ConsolidationPhase) synthesize(
 	budget *TokenBudget,
 	temperature float64,
 ) (string, *provider.TokenUsage, error) {
-	estText := system + provider.PromptSplitSeparator + user
+	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpSynthesis, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+				Messages:    provider.BuildGuardedMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 			})
@@ -1849,7 +1849,7 @@ func (p *ConsolidationPhase) auditNovelty(
 		sourceTexts = append(sourceTexts, s.Content)
 	}
 	user := fmt.Sprintf(noveltyUserWrapper, candidate, strings.Join(sourceTexts, "\n---\n"))
-	prompt := systemTpl + provider.PromptSplitSeparator + user
+	prompt := provider.GuardedPromptText(systemTpl, user)
 
 	maxTokens := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
 
@@ -1876,7 +1876,7 @@ func (p *ConsolidationPhase) auditNovelty(
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(provider.GuardedSystem(systemTpl), user),
+				Messages:    provider.BuildGuardedMessages(systemTpl, user),
 				MaxTokens:   maxTokens,
 				Temperature: noveltyTemperature,
 				JSONMode:    true,

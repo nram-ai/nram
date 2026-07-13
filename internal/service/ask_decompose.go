@@ -47,7 +47,7 @@ func (s *AskService) decomposeQuery(
 	usageCtx = provider.WithOperation(usageCtx, provider.OperationAskSynthesis)
 
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 	})

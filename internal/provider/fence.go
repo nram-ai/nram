@@ -31,6 +31,26 @@ func GuardedSystem(system string) string {
 	return UntrustedDataDirective + PromptSplitSeparator + system
 }
 
+// BuildGuardedMessages pairs GuardedSystem on the system prompt with an
+// already-Fence()d user payload in one call, so the GuardedSystem half cannot be
+// dropped. This is the only exported message constructor (the base buildMessages
+// primitive is unexported), so a production caller cannot emit a system prompt
+// that skips the directive. The user payload is trusted to already be Fence()d
+// by the caller (via Fence or a Render*User helper); that half is by convention,
+// since user messages legitimately mix fenced data with trusted framing. Output
+// is the guarded system plus the user payload as separate messages.
+func BuildGuardedMessages(system, user string) []Message {
+	return buildMessages(GuardedSystem(system), user)
+}
+
+// GuardedPromptText returns the concatenated prompt text that
+// BuildGuardedMessages sends (GuardedSystem(system) + separator + user), for
+// token estimation and prompt display. Use it instead of hand-joining
+// system+separator+user so an estimate cannot undercount the guarded directive.
+func GuardedPromptText(system, user string) string {
+	return GuardedSystem(system) + PromptSplitSeparator + user
+}
+
 // Fence wraps untrusted content in a per-call, nonce-delimited tag so the
 // content cannot forge the closing delimiter and break out to be read as
 // instructions — a fixed "<memory>...</memory>" fence is trivially escaped by a

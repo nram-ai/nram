@@ -209,7 +209,7 @@ func continueFactsOnce(
 	user := RenderExtractionUser(content) +
 		"\n\nYou already extracted these facts:\n" + sb.String() +
 		"\nReturn ONLY additional distinct facts not already listed, in the same JSON array format. If there are none, return []."
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), req)
 	if err != nil {
@@ -315,7 +315,7 @@ func continueEntitiesOnce(
 	user := RenderExtractionUser(content) +
 		"\n\nYou already extracted these entities:\n" + sb.String() +
 		"\nReturn ONLY additional entities not already listed, in the same JSON object format. If there are none, return {\"entities\":[]}."
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), req)
 	if err != nil {

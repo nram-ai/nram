@@ -495,9 +495,9 @@ type enrichmentTestPromptRequest struct {
 	Type string `json:"type"` // "fact", "entity", "relationship", "augment", or "ingestion"
 	// SystemPrompt is the tunable instruction, sent as the system message. The
 	// dynamic user message is built from the phase's hardcoded code wrapper
-	// applied to SampleInput, so the Test surface exercises the exact
-	// system+user split the runtime uses (provider.BuildMessages). Empty
-	// SystemPrompt falls back to the phase's registered system-prompt default.
+	// applied to SampleInput, so the Test surface exercises the exact guarded
+	// system+user construction the runtime uses (provider.BuildGuardedMessages).
+	// Empty SystemPrompt falls back to the phase's registered system-prompt default.
 	SystemPrompt string `json:"system_prompt"`
 	SampleInput  string `json:"sample_input"`    // memory content to test against
 	Count        int    `json:"count,omitempty"` // only used when type=="augment"; defaults to 4
@@ -674,7 +674,7 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 	}
 
 	completionReq := &provider.CompletionRequest{
-		Messages: provider.BuildMessages(systemTemplate, user),
+		Messages: provider.BuildGuardedMessages(systemTemplate, user),
 		// Model left empty: the resolved provider slot supplies its own model.
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
@@ -868,7 +868,7 @@ func runRelationshipPromptTest(
 		return
 	}
 	entReq := &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(entitySystem, service.RenderExtractionUser(sampleInput)),
+		Messages:    provider.BuildGuardedMessages(entitySystem, service.RenderExtractionUser(sampleInput)),
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 		JSONMode:    true,
@@ -890,7 +890,7 @@ func runRelationshipPromptTest(
 
 	// Pass 2: relationship extraction with the prompt under test.
 	relReq := &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(relSystem, service.RenderRelationshipUser(sampleInput, names)),
+		Messages:    provider.BuildGuardedMessages(relSystem, service.RenderRelationshipUser(sampleInput, names)),
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 		JSONMode:    true,

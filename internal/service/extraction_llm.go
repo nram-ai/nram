@@ -236,7 +236,7 @@ func extractFactsOnce(
 ) (*FactExtractionEnvelope, error) {
 	system := ResolveOrDefault(ctx, settings, SettingFactSystemPrompt, "global")
 	user := RenderExtractionUser(content)
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationFactExtraction), req)
@@ -286,7 +286,7 @@ func extractEntitiesOnce(
 ) (*EntityExtractionEnvelope, error) {
 	system := ResolveOrDefault(ctx, settings, SettingEntitySystemPrompt, "global")
 	user := RenderExtractionUser(content)
-	messages := provider.BuildMessages(provider.GuardedSystem(system), user)
+	messages := provider.BuildGuardedMessages(system, user)
 	req := buildExtractionRequest(messages, opts)
 
 	resp, err := llm.Complete(provider.WithOperation(ctx, provider.OperationEntityExtraction), req)

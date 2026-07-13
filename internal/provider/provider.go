@@ -48,14 +48,17 @@ type Message struct {
 // estimation reconstructs the combined length the same way.
 const PromptSplitSeparator = "\n\n"
 
-// BuildMessages assembles the messages for an LLM completion from a static
-// system instruction and a dynamic user payload.
+// buildMessages assembles the messages for an LLM completion from a static
+// system instruction and a dynamic user payload. It is the unexported base
+// primitive: production callers go through BuildGuardedMessages (which pairs
+// GuardedSystem with the payload) so the untrusted-data directive on the system
+// half can never be dropped. It stays unexported to keep that the only way.
 //
 // The two are sent as separate system and user messages so the system
 // instruction forms a stable, cacheable prefix (KV-cache prefix reuse on
 // Ollama/vLLM; prompt-prefix caching on hosted APIs when it exceeds the model's
 // minimum cacheable size). An empty system collapses to a single user message.
-func BuildMessages(system, user string) []Message {
+func buildMessages(system, user string) []Message {
 	if system == "" {
 		return []Message{{Role: "user", Content: user}}
 	}

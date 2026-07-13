@@ -150,7 +150,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	system := cfg.systemPrompt
 	user := RenderIngestionUser(mem.Content, matches)
 	req := &provider.CompletionRequest{
-		Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   wp.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentIngestionDecisionMaxTokens, "global"),
 		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
 		JSONMode:    true,

@@ -253,7 +253,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 				}
 			}
 			userPrompt := service.RenderContradictionUser(pair[0].Content, pair[1].Content)
-			estCost := EstimateTokens(systemPrompt+provider.PromptSplitSeparator+userPrompt) + budget.PerCallCap()
+			estCost := EstimateTokens(provider.GuardedPromptText(systemPrompt, userPrompt)) + budget.PerCallCap()
 			if !budget.CanAfford(estCost) {
 				slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
 					"estimate", estCost, "remaining", budget.Remaining())
@@ -963,14 +963,14 @@ func (p *ContradictionPhase) checkContradiction(
 	budget *TokenBudget,
 	temperature float64,
 ) (bool, string, string, *provider.TokenUsage, error) {
-	estText := system + provider.PromptSplitSeparator + user
+	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionJudge, llm.Name(),
 		a.ID.String()+","+b.ID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
 			ctx = provider.WithMemoryID(ctx, a.ID)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildMessages(provider.GuardedSystem(system), user),
+				Messages:    provider.BuildGuardedMessages(system, user),
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,

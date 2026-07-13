@@ -158,7 +158,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		// Ask the LLM whether the two statements contradict.
 		user := service.RenderContradictionUser(memory.Content, candidate.Content)
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
-			Messages:    provider.BuildMessages(provider.GuardedSystem(systemPrompt), user),
+			Messages:    provider.BuildGuardedMessages(systemPrompt, user),
 			MaxTokens:   maxTokens,
 			Temperature: temperature,
 			JSONMode:    true,
