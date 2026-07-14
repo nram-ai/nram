@@ -5335,11 +5335,15 @@ components:
           minimum: 0
           maximum: 1
           description: >-
-            Derived from the calibrated vector cosines of the recall sources the
-            answer actually cited, scaled by how many it corroborated against
-            (not the model's self-assessment). Zero when the answer cited no
-            recall source: it was ungrounded, said "Not in neighborhood.",
-            or synthesis failed.
+            A grounding / evidence-strength signal, not a correctness or
+            faithfulness probability. Derived from the calibrated vector cosines
+            of the recall sources the answer actually cited, scaled by how many
+            it corroborated against (not the model's self-assessment): a high
+            value means the cited sources are strong matches for the query. It
+            does not measure whether the answer is right: an answer can be
+            confident yet wrong if it drew a wrong conclusion from a
+            strong-matching source. Zero when the answer cited no recall source:
+            it was ungrounded, said "Not in neighborhood.", or synthesis failed.
         synthesis_meta:
           type: object
           required: [latency_ms, neighborhood_size]

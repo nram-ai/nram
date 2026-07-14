@@ -158,8 +158,11 @@ export default function Ask() {
             <div className="rounded-md border bg-card p-4">
               <div className="mb-2 flex items-center gap-2">
                 <h2 className="text-sm font-semibold">Answer</h2>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                  confidence: {confidenceLabel(result.confidence)} (
+                <span
+                  className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                  title="Source-match strength, not answer correctness: how strongly the cited sources match the query. A confident answer can still be wrong."
+                >
+                  grounding: {confidenceLabel(result.confidence)} (
                   {result.confidence.toFixed(2)})
                 </span>
               </div>

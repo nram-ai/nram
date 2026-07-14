@@ -123,8 +123,13 @@ type AskSynthesisMeta struct {
 
 // AskResponse is the lean-provenance result of a single-shot synthesis.
 type AskResponse struct {
-	Answer        string           `json:"answer"`
-	Sources       []AskSource      `json:"sources"`
+	Answer  string      `json:"answer"`
+	Sources []AskSource `json:"sources"`
+	// Confidence is a grounding / evidence-strength signal in [0,1] (how
+	// strongly the cited sources match the query), not a correctness or
+	// faithfulness probability. A well-grounded answer that draws a wrong
+	// conclusion from a strong-matching source still scores high. See
+	// askConfidence.
 	Confidence    float64          `json:"confidence"`
 	SynthesisMeta AskSynthesisMeta `json:"synthesis_meta"`
 }
@@ -1100,6 +1105,12 @@ func renumberCitations(answer string, neighborhood []neighborMemory) (string, []
 //
 // calib maps the embedder's cosine band (floor..ceiling) onto [0,1] so a genuine
 // top hit reads high rather than at its raw ~0.7 cosine.
+//
+// This is grounding strength, not answer correctness: it measures how strongly
+// the answer is grounded in high-cosine cited sources, never whether the answer
+// is right. A well-grounded but wrong conclusion (e.g. a value drawn from a
+// strong-matching but tangential memory) still scores high; there is no
+// faithfulness gate here by design.
 func askConfidence(citedRecallCosines []float64, answer string, floor, ceiling float64) float64 {
 	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(answer)), "not in neighborhood") {
 		return 0
