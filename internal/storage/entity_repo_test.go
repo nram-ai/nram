@@ -1105,15 +1105,7 @@ func TestEntityRepo_DeleteOrphaned_ReturnsIDsAndCascadesAliases(t *testing.T) {
 			t.Errorf("entity %s still exists after orphan sweep", entityID)
 		}
 
-		var aliasCount int
-		aliasQuery := `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = ?`
-		if db.Backend() == BackendPostgres {
-			aliasQuery = `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = $1`
-		}
-		if err := db.QueryRow(ctx, aliasQuery, entityID.String()).Scan(&aliasCount); err != nil {
-			t.Fatalf("count aliases: %v", err)
-		}
-		if aliasCount != 0 {
+		if aliasCount := countAliasesForTest(t, ctx, db, entityID); aliasCount != 0 {
 			t.Errorf("expected 0 aliases after cascade delete, got %d", aliasCount)
 		}
 	})
@@ -1286,6 +1278,210 @@ func TestEntityRepo_PromoteStub_DeletesStubVector(t *testing.T) {
 		if stubDeletes != 1 {
 			t.Fatalf("expected exactly 1 vector delete for stub %s, got %d (deleteCalls=%v)",
 				stub.ID, stubDeletes, vec.deleteCalls)
+		}
+	})
+}
+
+// countAliasesForTest counts an entity's alias rows. Shared by the sweep tests
+// that assert aliases either cascade away with a genuine orphan or survive an
+// entity the sweep must not touch.
+func countAliasesForTest(t *testing.T, ctx context.Context, db DB, entityID uuid.UUID) int {
+	t.Helper()
+	query := `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = ?`
+	if db.Backend() == BackendPostgres {
+		query = `SELECT COUNT(*) FROM entity_aliases WHERE entity_id = $1`
+	}
+	var n int
+	if err := db.QueryRow(ctx, query, entityID.String()).Scan(&n); err != nil {
+		t.Fatalf("count aliases: %v", err)
+	}
+	return n
+}
+
+// seedReExtractWindow reproduces the state ReExtract leaves behind between
+// enrich.go's ReapMemoryFootprint and its Enqueue: two long-lived entities
+// (one carrying an alias) whose only edge was sourced by memID and has just
+// been reaped, so both sit edge-less holding a months-old created_at.
+func seedReExtractWindow(t *testing.T, ctx context.Context, db DB) (nsID, memID, srcID, tgtID uuid.UUID) {
+	t.Helper()
+	nsID = createTestNamespace(t, ctx, db)
+	memID = createTestMemoryForLineage(t, ctx, db, nsID)
+	suffix := uuid.NewString()[:8]
+	srcID = createTestEntity(t, ctx, db, nsID, "reextract_src_"+suffix)
+	tgtID = createTestEntity(t, ctx, db, nsID, "reextract_tgt_"+suffix)
+	createTestEntityAlias(t, ctx, db, nsID, srcID, "RSRC_"+suffix, "acronym")
+
+	if err := NewRelationshipRepo(db).Create(ctx, &model.Relationship{
+		NamespaceID: nsID, SourceID: srcID, TargetID: tgtID,
+		Relation: "knows", Weight: 1.0, SourceMemory: &memID,
+	}); err != nil {
+		t.Fatalf("seed relationship: %v", err)
+	}
+	backdateEntityCreatedAt(t, ctx, db, srcID, time.Now().Add(-30*24*time.Hour))
+	backdateEntityCreatedAt(t, ctx, db, tgtID, time.Now().Add(-30*24*time.Hour))
+
+	if _, err := NewRelationshipRepo(db).DeleteBySourceMemory(ctx, nsID, memID); err != nil {
+		t.Fatalf("reap memory footprint: %v", err)
+	}
+	return nsID, memID, srcID, tgtID
+}
+
+// TestEntityRepo_DeleteOrphaned_SparesNamespaceWithPendingJob pins the fix for
+// the ReExtract window. ReExtract reaps a memory's edges (enrich.go) and only
+// then enqueues the re-extraction job, so entities sourced solely by that
+// memory are transiently edge-less while still carrying their original
+// created_at. Age-gating alone deleted them mid-re-extract, taking the alias
+// rows with them via CASCADE; the pending job must hold the sweep off.
+func TestEntityRepo_DeleteOrphaned_SparesNamespaceWithPendingJob(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID, memID, srcID, tgtID := seedReExtractWindow(t, ctx, db)
+
+		if _, err := NewEnrichmentQueueRepo(db).Enqueue(ctx, &model.EnrichmentJob{
+			MemoryID: memID, NamespaceID: nsID, Priority: 0,
+		}); err != nil {
+			t.Fatalf("enqueue re-extract job: %v", err)
+		}
+
+		ids, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatalf("DeleteOrphaned: %v", err)
+		}
+		if slices.Contains(ids, srcID) || slices.Contains(ids, tgtID) {
+			t.Errorf("sweep collected entities with a job still in flight: %v", ids)
+		}
+		if _, err := repo.GetByID(ctx, srcID, nsID); err != nil {
+			t.Errorf("source entity deleted during the re-extraction window: %v", err)
+		}
+		if _, err := repo.GetByID(ctx, tgtID, nsID); err != nil {
+			t.Errorf("target entity deleted during the re-extraction window: %v", err)
+		}
+
+		if aliasCount := countAliasesForTest(t, ctx, db, srcID); aliasCount != 1 {
+			t.Errorf("alias lost to the sweep's CASCADE: want 1, got %d", aliasCount)
+		}
+	})
+}
+
+// TestEntityRepo_DeleteOrphaned_CollectsWhenQueueQuiet guards against
+// over-correction: with no job in flight, a genuine orphan is still collected.
+func TestEntityRepo_DeleteOrphaned_CollectsWhenQueueQuiet(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+		id := createTestEntity(t, ctx, db, nsID, "genuine_orphan_"+uuid.NewString()[:8])
+		backdateEntityCreatedAt(t, ctx, db, id, time.Now().Add(-90*24*time.Hour))
+
+		ids, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatalf("DeleteOrphaned: %v", err)
+		}
+		if !slices.Contains(ids, id) {
+			t.Errorf("expected returned ids to include genuine orphan %s, got %v", id, ids)
+		}
+		if _, err := repo.GetByID(ctx, id, nsID); err == nil {
+			t.Error("genuine orphan survived a sweep with no job in flight")
+		}
+	})
+}
+
+// TestEntityRepo_DeleteOrphaned_CollectsOnceJobTerminal proves the queue guard
+// defers collection rather than pinning orphans forever: once the job leaves
+// pending/processing, the next tick collects the row.
+func TestEntityRepo_DeleteOrphaned_CollectsOnceJobTerminal(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID, memID, srcID, _ := seedReExtractWindow(t, ctx, db)
+
+		job := &model.EnrichmentJob{MemoryID: memID, NamespaceID: nsID, Priority: 0}
+		if _, err := NewEnrichmentQueueRepo(db).Enqueue(ctx, job); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if _, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour)); err != nil {
+			t.Fatalf("DeleteOrphaned (job pending): %v", err)
+		}
+		if _, err := repo.GetByID(ctx, srcID, nsID); err != nil {
+			t.Fatalf("entity collected while the job was still pending: %v", err)
+		}
+
+		// Drive the row terminal directly: Complete requires an active claim,
+		// and the guard predicate only reads status.
+		termQuery := `UPDATE enrichment_queue SET status = 'completed' WHERE id = ?`
+		if db.Backend() == BackendPostgres {
+			termQuery = `UPDATE enrichment_queue SET status = 'completed' WHERE id = $1`
+		}
+		if _, err := db.Exec(ctx, termQuery, job.ID.String()); err != nil {
+			t.Fatalf("terminalize job: %v", err)
+		}
+
+		ids, err := repo.DeleteOrphaned(ctx, time.Now().Add(-time.Hour))
+		if err != nil {
+			t.Fatalf("DeleteOrphaned (job terminal): %v", err)
+		}
+		if !slices.Contains(ids, srcID) {
+			t.Errorf("deferred orphan not collected once the job went terminal, got %v", ids)
+		}
+	})
+}
+
+// TestEntityRepo_RecomputeMentionCounts_ScopedStillCorrectsRealChanges pins the
+// ids-scoped change-guard on both sides: an endpoint already at its canonical
+// count is not rewritten (and keeps its updated_at), but one whose derived count
+// actually moves is still corrected.
+//
+// The nil-scoped path is deliberately left unguarded (see RecomputeMentionCounts)
+// and is covered by TestEntityRepo_RecomputeMentionCounts in graph_reap_test.go.
+func TestEntityRepo_RecomputeMentionCounts_ScopedStillCorrectsRealChanges(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+
+		nsID := createTestNamespace(t, ctx, db)
+		memID := createTestMemoryForLineage(t, ctx, db, nsID)
+		suffix := uuid.NewString()[:8]
+		srcID := createTestEntity(t, ctx, db, nsID, "scoped_src_"+suffix)
+		tgtID := createTestEntity(t, ctx, db, nsID, "scoped_tgt_"+suffix)
+		relRepo := NewRelationshipRepo(db)
+		if err := relRepo.Create(ctx, &model.Relationship{
+			NamespaceID: nsID, SourceID: srcID, TargetID: tgtID,
+			Relation: "knows", Weight: 1.0, SourceMemory: &memID,
+		}); err != nil {
+			t.Fatalf("seed relationship: %v", err)
+		}
+
+		ids := []uuid.UUID{srcID, tgtID}
+		if _, err := repo.RecomputeMentionCounts(ctx, ids); err != nil {
+			t.Fatalf("RecomputeMentionCounts (converge): %v", err)
+		}
+		// Already canonical: the guard must make this a no-op.
+		corrected, err := repo.RecomputeMentionCounts(ctx, ids)
+		if err != nil {
+			t.Fatalf("RecomputeMentionCounts (no-op): %v", err)
+		}
+		if corrected != 0 {
+			t.Errorf("scoped recompute rewrote %d already-canonical rows, want 0", corrected)
+		}
+
+		// Reap the edge: both endpoints now derive 0 and MUST be rewritten.
+		if _, err := relRepo.DeleteBySourceMemory(ctx, nsID, memID); err != nil {
+			t.Fatalf("reap: %v", err)
+		}
+		corrected, err = repo.RecomputeMentionCounts(ctx, ids)
+		if err != nil {
+			t.Fatalf("RecomputeMentionCounts (after reap): %v", err)
+		}
+		if corrected != 2 {
+			t.Errorf("scoped recompute after reap: want 2 rows corrected, got %d", corrected)
+		}
+		got, err := repo.GetByID(ctx, srcID, nsID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if got.MentionCount != 0 {
+			t.Errorf("mention_count not corrected after reap: want 0, got %d", got.MentionCount)
 		}
 	})
 }

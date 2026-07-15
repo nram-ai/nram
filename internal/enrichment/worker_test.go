@@ -739,6 +739,19 @@ func entityJSON() string {
 	return string(b)
 }
 
+// entityJSONNoRelationships is entityJSON's counterpart for the legitimate
+// "entities but nothing to link them" outcome. Built from the same structs so it
+// tracks their json tags rather than rotting as a hand-written literal.
+func entityJSONNoRelationships() string {
+	result := entityExtractionResult{
+		Entities: []extractedEntity{
+			{Name: "Alice", Type: "person"},
+		},
+	}
+	b, _ := json.Marshal(result)
+	return string(b)
+}
+
 type testHarness struct {
 	pool     *WorkerPool
 	reader   *mockMemoryReader
@@ -2930,3 +2943,70 @@ func TestProcessBatch_VectorUpsertFailure_FailsJobs(t *testing.T) {
 // internal/service/extract_test.go (TestParseFacts_*, TestParseEntities_*).
 // The worker's local copies were removed as part of the
 // extract.go/worker.go duplication collapse.
+
+// TestProcessJob_RelationshipWriteFailure_FailsJobAndLeavesMemoryUnenriched
+// pins the propagation of a failed relationship write. The entities are already
+// committed by the time BatchCreate runs, so swallowing the error let the job
+// finalize: the memory was marked enriched with no graph footprint, which
+// permanently suppresses re-extraction (mem.Enriched short-circuits the entity
+// phase), and the orphan sweep then collected the edge-less entities. The job
+// must fail and retry instead.
+func TestProcessJob_RelationshipWriteFailure_FailsJobAndLeavesMemoryUnenriched(t *testing.T) {
+	entityLLM := &mockLLMProvider{name: "entity", respond: func(*provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{
+			Content: entityJSON(),
+			Model:   "m",
+			Usage:   provider.TokenUsage{PromptTokens: 10, CompletionTokens: 5},
+		}, nil
+	}}
+
+	h := newTestHarness(noopFactLLM(), entityLLM, noopEmbed())
+	h.rels.err = errors.New("relationship write failed")
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	err := h.pool.processJob(context.Background(), "w-0", job)
+	if err == nil {
+		t.Fatal("expected an error when the relationship write fails")
+	}
+	if _, ok := h.queue.failed[job.ID]; !ok {
+		t.Error("job should be failed so the footprint is rebuilt on retry")
+	}
+	if len(h.queue.completed) != 0 {
+		t.Errorf("job must not complete with an incomplete graph footprint; completed %d", len(h.queue.completed))
+	}
+	if len(h.updater.enrichedMarks) != 0 {
+		t.Errorf("memory must NOT be marked enriched (that suppresses re-extraction forever); got %d marks",
+			len(h.updater.enrichedMarks))
+	}
+}
+
+// TestProcessJob_ZeroRelationships_StillCompletes is the counterpart guard:
+// extracting no relationships is a legitimate outcome, not a write failure, and
+// must not fail the job. An entity with no edges is unreachable under the
+// current schema, so the orphan sweep collecting it later is correct behavior.
+func TestProcessJob_ZeroRelationships_StillCompletes(t *testing.T) {
+	entityLLM := &mockLLMProvider{name: "entity", respond: func(*provider.CompletionRequest) (*provider.CompletionResponse, error) {
+		return &provider.CompletionResponse{
+			Content: entityJSONNoRelationships(),
+			Model:   "m",
+			Usage:   provider.TokenUsage{PromptTokens: 10, CompletionTokens: 5},
+		}, nil
+	}}
+
+	h := newTestHarness(noopFactLLM(), entityLLM, noopEmbed())
+	mem := testMemory()
+	h.reader.byID[mem.ID] = mem
+	job := testJob(mem.ID, mem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("zero relationships is not a failure, got error: %v", err)
+	}
+	if _, ok := h.queue.failed[job.ID]; ok {
+		t.Error("job must not be failed just because extraction produced no relationships")
+	}
+	if len(h.queue.completed) != 1 {
+		t.Errorf("job should complete normally; completed %d", len(h.queue.completed))
+	}
+}

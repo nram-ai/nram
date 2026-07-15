@@ -24,7 +24,10 @@ type LifecycleStore interface {
 // Postgres: an entity created by enrichment but whose relationships are never
 // written is otherwise leaked. The orphan filter is age-gated so in-flight
 // enrichment (which writes the entity row before its relationships) cannot
-// race the sweep, see EntityRepo.DeleteOrphaned.
+// race the sweep, and it additionally skips namespaces holding a queued or
+// in-flight enrichment job, since age alone does not protect a long-lived
+// entity left transiently edge-less by a re-extraction. See
+// EntityRepo.DeleteOrphaned.
 //
 // DeleteOrphanedEntities returns the IDs of deleted rows so the lifecycle
 // worker can clean up out-of-band vector storage (Qdrant) for them. The
@@ -76,6 +79,9 @@ type LifecycleConfig struct {
 	// rows are written before relationships and before vector upsert; without
 	// this gate, a slow embed call lets the sweep delete the row mid-flight
 	// and the subsequent vector upsert fails with a FOREIGN KEY violation.
+	// It covers newly-created entities only; an older entity left transiently
+	// edge-less by a re-extraction is protected by DeleteOrphaned's queue
+	// predicate instead, not by this age window.
 	// 0 → resolve from SettingLifecycleOrphanGraceSeconds per sweep.
 	OrphanGrace time.Duration
 }

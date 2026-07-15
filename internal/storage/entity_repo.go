@@ -969,27 +969,64 @@ func (r *EntityRepo) DeleteByNamespaceTx(ctx context.Context, tx *sql.Tx, namesp
 }
 
 // DeleteOrphaned removes entities that have no relationships (neither as
-// source nor target) AND were created at or before olderThan. The age cutoff
-// protects in-flight enrichment: a job that just upserted an entity but has
-// not yet written its relationships (or has not yet upserted the entity's
-// vector) must not have its row pulled out from under it. Callers pick
-// olderThan = now - grace, where grace must exceed the longest plausible
+// source nor target), were created at or before olderThan, and sit in a
+// namespace with no enrichment job still in flight.
+//
+// Two independent things keep a live entity out of the sweep, because age
+// alone is not enough. The age cutoff covers a job that just upserted an
+// entity but has not yet written its relationships (or its vector): such a
+// row carries created_at = now and is younger than any sane grace. Callers
+// pick olderThan = now - grace, where grace must exceed the longest plausible
 // gap between entity Upsert and vector UpsertBatch (LLM embed round-trip,
-// queue dispatch, etc.). Returns the IDs of deleted entities so the caller
-// can clean up out-of-band vector storage (Qdrant) atomically with the SQL
-// delete - the slice is exactly what the DELETE acted on, no race window.
+// queue dispatch, etc.).
+//
+// The age cutoff does nothing, however, for an entity that has been in the
+// graph for months and is only transiently edge-less. ReExtract deletes a
+// memory's edges before enqueueing the re-extraction job, so every entity
+// sourced only by that memory sits edge-less - carrying its original,
+// long-past created_at - for as long as the job is queued. Age-gating alone
+// deletes those rows mid-re-extract, taking their vectors and CASCADE-ing
+// their entity_aliases with them; the re-extraction rebuilds the entity under
+// a new id but not its aliases. The queue is the only thing that knows a job
+// is about to re-link them, so a namespace with a pending/processing job is
+// skipped entirely.
+//
+// Both NOT IN subqueries are safe from the NULL trap (a single NULL would make
+// the predicate match nothing and silently disable the sweep): relationships
+// .source_id/.target_id and enrichment_queue.namespace_id are all NOT NULL.
+//
+// The queue predicate is deliberately unconditional, including while enrichment
+// is disabled or paused (both leave the worker idle without claiming, so jobs
+// stay pending indefinitely). It is tempting to drop the guard when nothing is
+// draining the queue, since a pending job cannot re-link anything then. Do NOT:
+// ReExtract has no enrichment gate, so it reaps a memory's edges even while
+// enrichment is paused, and the job it queues then sits pending for the WHOLE
+// pause rather than one queue latency. Dropping the guard there would delete
+// those entities precisely when the window is longest, which is backwards. The
+// guard therefore defers collection rather than leaking: orphans in a namespace
+// holding a pending job are collected on the first tick after that queue drains.
+// Retaining dead rows for a while beats destroying live ones whose aliases no
+// re-extraction rebuilds.
+//
+// Returns the IDs of deleted entities so the caller can clean up out-of-band
+// vector storage (Qdrant) atomically with the SQL delete - the slice is
+// exactly what the DELETE acted on, no race window.
 func (r *EntityRepo) DeleteOrphaned(ctx context.Context, olderThan time.Time) ([]uuid.UUID, error) {
 	cutoff := olderThan.UTC().Format(time.RFC3339)
 	query := `DELETE FROM entities WHERE created_at <= ? AND id NOT IN (
 		SELECT source_id FROM relationships
 		UNION
 		SELECT target_id FROM relationships
+	) AND namespace_id NOT IN (
+		SELECT namespace_id FROM enrichment_queue WHERE status IN ('pending', 'processing')
 	) RETURNING id`
 	if r.db.Backend() == BackendPostgres {
 		query = `DELETE FROM entities WHERE created_at <= $1 AND id NOT IN (
 			SELECT source_id FROM relationships
 			UNION
 			SELECT target_id FROM relationships
+		) AND namespace_id NOT IN (
+			SELECT namespace_id FROM enrichment_queue WHERE status IN ('pending', 'processing')
 		) RETURNING id`
 	}
 	rows, err := r.db.WriteQuery(ctx, query, cutoff)
@@ -1068,7 +1105,22 @@ func (r *EntityRepo) execMentionCountRecompute(ctx context.Context, whereClause 
 // ids scopes the recompute (the delete/supersede path passes the reaped edges'
 // endpoints); a nil/empty slice recomputes every entity (the repair pass and
 // the self-healing sweep). Entities with no surviving live-sourced edge resolve
-// to 0 and are removed by the orphan sweep. Returns rows updated.
+// to 0 and are removed by the orphan sweep.
+//
+// The ids-scoped path carries the same `mention_count <> ...` change-guard as
+// RecomputeMentionCountsByNamespace, so a reap whose endpoint was already at its
+// canonical count is left alone rather than rewritten. mentionCountSubquery binds
+// no placeholders, so the IN-list numbering is unaffected by the guard.
+//
+// The nil-scoped path deliberately does NOT carry that guard. It is the operator
+// repair, whose whole job is to re-normalize every row, and 000061's non-partial
+// endpoint indexes exist to make that full rewrite cheap. Guarding it would run
+// the subquery twice per row (once to filter, once to set) and roughly double the
+// plan cost (measured on the live corpus: 3.76M -> 7.49M) to save writes on a
+// path that is operator-triggered and rare. If the write volume there ever needs
+// addressing, the fix is the set-based UPDATE ... FROM (aggregate grouped by
+// entity) rewrite, which prices ~20x cheaper than the correlated form today, not
+// a guard bolted onto the correlated subquery.
 func (r *EntityRepo) RecomputeMentionCounts(ctx context.Context, ids []uuid.UUID) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if len(ids) == 0 {
@@ -1076,7 +1128,7 @@ func (r *EntityRepo) RecomputeMentionCounts(ctx context.Context, ids []uuid.UUID
 	}
 	// IN-list placeholders start at $2 (after the updated_at bind).
 	placeholders, idArgs := uuidInPlaceholders(r.db, ids, 2)
-	where := "id IN (" + strings.Join(placeholders, ", ") + ")"
+	where := "id IN (" + strings.Join(placeholders, ", ") + ") AND mention_count <> " + mentionCountSubquery
 	return r.execMentionCountRecompute(ctx, where, append([]any{now}, idArgs...)...)
 }
 

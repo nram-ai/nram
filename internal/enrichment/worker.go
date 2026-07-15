@@ -1582,7 +1582,15 @@ func (wp *WorkerPool) runPreEmbed(ctx context.Context, workerID string, job *mod
 		}
 	}
 
-	entities := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
+	entities, persistErr := wp.upsertEntitiesAndRelationships(ctx, job, mem, entResult)
+	if persistErr != nil {
+		// The entities are already committed but their edges are not. Finalizing
+		// here would mark the memory enriched, which permanently suppresses
+		// re-extraction and leaves those entities for the orphan sweep. Fail so
+		// the job retries and rebuilds the footprint instead.
+		wp.requeueOrFail(ctx, workerID, job.ID, persistErr, fmt.Sprintf("persist entities/relationships: %v", persistErr))
+		return nil, fmt.Errorf("persist entities/relationships: %w", persistErr)
+	}
 
 	if !skipEntity && entityErr == nil {
 		if err := wp.queue.MarkStepCompleted(ctx, job.ID, model.StepEntityExtraction); err != nil {
@@ -1715,9 +1723,18 @@ func stepDoneSet(raw json.RawMessage) map[string]bool {
 // edges. Returns the entityFact list of every entity (extracted + stubbed via
 // relationship resolution) so runEmbedBatch can embed their canonical names
 // in the same provider call as the parent and child memories.
-func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory, entResult *entityExtractionResult) []entityFact {
+//
+// A non-nil error means the relationship write itself failed and the memory's
+// graph footprint is incomplete. The caller must fail the job rather than
+// finalize it: entities are already persisted at that point, and finalizeJob
+// would mark the memory enriched, which permanently suppresses re-extraction
+// (see the mem.Enriched skip in runPreEmbed) and strands those entities to be
+// collected by the orphan sweep. Extracting zero relationships is NOT an error
+// - an entity with no edges is unreachable and the sweep collecting it is
+// correct - only a failed write is.
+func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *model.EnrichmentJob, mem *model.Memory, entResult *entityExtractionResult) ([]entityFact, error) {
 	if entResult == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Volume clamp, re-checked at the persistence boundary since extraction output
@@ -1878,11 +1895,15 @@ func (wp *WorkerPool) upsertEntitiesAndRelationships(ctx context.Context, job *m
 
 	if len(relCandidates) > 0 {
 		if _, err := wp.relationships.BatchCreate(ctx, relCandidates); err != nil {
-			slog.Error("enrichment: batch create relationships", "job", job.ID, "count", len(relCandidates), "err", err)
+			// Returned, not logged: processBatch logs every runPreEmbed error via
+			// logBreakerOrError, so logging here too would double every ERROR line.
+			// The other slog.Error calls above are log-and-continue, where the log
+			// is the only record; this one propagates.
+			return nil, fmt.Errorf("batch create relationships (count=%d): %w", len(relCandidates), err)
 		}
 	}
 
-	return collected
+	return collected, nil
 }
 
 // releaseClaimedPendings releases every still-claimed pending in a batch back
