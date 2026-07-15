@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -53,29 +54,61 @@ func (s *staticEmbedder) Dimensions() []int {
 	return []int{len(s.vectors[0])}
 }
 
-// scriptedJudgeLLM returns a fixed completion content. Used to feed the
-// audit's LLM judge with chosen JSON or malformed text to exercise the
-// pass/fail/parse-error branches.
+// scriptedJudgeLLM is the package's configurable stub LLM provider: it returns a
+// canned body, model and usage (or an error), counts calls, and records the
+// prompt text sent on each call so tests can assert what a phase actually put on
+// the wire. Zero-value name/model fall back to generic test values, so the
+// common &scriptedJudgeLLM{content: x} form stays terse.
 type scriptedJudgeLLM struct {
 	calls   atomic.Int32
+	name    string
+	model   string
 	content string
 	usage   provider.TokenUsage
 	err     error
+
+	mu      sync.Mutex
+	prompts []string
 }
 
-func (s *scriptedJudgeLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+func (s *scriptedJudgeLLM) providerName() string {
+	if s.name == "" {
+		return "test-llm"
+	}
+	return s.name
+}
+
+func (s *scriptedJudgeLLM) modelName() string {
+	if s.model == "" {
+		return "test-model"
+	}
+	return s.model
+}
+
+func (s *scriptedJudgeLLM) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	s.calls.Add(1)
+	// Join whatever arrived rather than indexing system+user: BuildGuardedMessages
+	// sends two, but a bare one-message request is legal on this interface (the
+	// provider connectivity probe sends one), and for the two-message case this
+	// reproduces the guarded prompt exactly.
+	parts := make([]string, len(req.Messages))
+	for i, m := range req.Messages {
+		parts[i] = m.Content
+	}
+	s.mu.Lock()
+	s.prompts = append(s.prompts, strings.Join(parts, provider.PromptSplitSeparator))
+	s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
 	}
 	return &provider.CompletionResponse{
 		Content: s.content,
-		Model:   "test-model",
+		Model:   s.modelName(),
 		Usage:   s.usage,
 	}, nil
 }
-func (s *scriptedJudgeLLM) Name() string     { return "test-llm" }
-func (s *scriptedJudgeLLM) Models() []string { return []string{"test-model"} }
+func (s *scriptedJudgeLLM) Name() string     { return s.providerName() }
+func (s *scriptedJudgeLLM) Models() []string { return []string{s.modelName()} }
 
 // updatingMemoryWriter records each Update call so backfill tests can
 // inspect what the consolidation phase wrote back. metadataUpdates is

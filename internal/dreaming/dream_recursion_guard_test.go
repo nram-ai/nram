@@ -171,32 +171,29 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 	// guard slipped. The response payloads are real-shaped JSON so that, if
 	// the guard breaks, the worker proceeds to write extracted_fact
 	// children rather than failing earlier on a parse error.
-	var factCalls, entityCalls, embedCalls, augmentCalls atomic.Int64
+	var embedCalls atomic.Int64
 
-	factLLM := &recursionGuardLLM{
-		name:    "guard-fact-mock",
-		counter: &factCalls,
-		body:    `{"facts":[{"content":"Alice works at Acme.","tags":[]}]}`,
-	}
+	factLLM := recursionGuardLLM(
+		"guard-fact-mock",
+		`{"facts":[{"content":"Alice works at Acme.","tags":[]}]}`,
+	)
 	// Two canonical-typed entities plus a canonical relation ("member of") so the
 	// vocabulary classifier hits its static map and never falls to the embed
 	// path, keeping persistence deterministic. For a consolidation dream this
 	// MUST produce entity + relationship rows; for any other dream the entity
 	// LLM is never called, so the body is irrelevant.
-	entityLLM := &recursionGuardLLM{
-		name:    "guard-entity-mock",
-		counter: &entityCalls,
-		body:    `{"entities":[{"name":"Alice","type":"person","properties":{}},{"name":"Acme","type":"organization","properties":{}}],"relationships":[{"source":"Alice","target":"Acme","relation":"member of","temporal":"current"}]}`,
-	}
+	entityLLM := recursionGuardLLM(
+		"guard-entity-mock",
+		`{"entities":[{"name":"Alice","type":"person","properties":{}},{"name":"Acme","type":"organization","properties":{}}],"relationships":[{"source":"Alice","target":"Acme","relation":"member of","temporal":"current"}]}`,
+	)
 	// Query augmentation runs on dream memories by design (only fact/entity
-	// extraction skip them), so the worker calls this provider. It has its own
-	// counter and returns a valid query array, keeping augment calls off the
+	// extraction skip them), so the worker calls this provider. It counts its own
+	// calls and returns a valid query array, keeping augment calls off the
 	// fact counter that the recursion-guard assertions watch.
-	augmentLLM := &recursionGuardLLM{
-		name:    "guard-augment-mock",
-		counter: &augmentCalls,
-		body:    `["who is Alice","Alice employer"]`,
-	}
+	augmentLLM := recursionGuardLLM(
+		"guard-augment-mock",
+		`["who is Alice","Alice employer"]`,
+	)
 	embed := &recursionGuardEmbed{
 		name:    "guard-embed-mock",
 		counter: &embedCalls,
@@ -244,7 +241,7 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 
 	// 1. Fact LLM is NEVER invoked for any dream (facts spawn child memories,
 	//    the only dream-of-dream cascade vector).
-	if calls := factCalls.Load(); calls != 0 {
+	if calls := factLLM.calls.Load(); calls != 0 {
 		t.Errorf("fact extraction LLM was called %d time(s) for a dream memory; contract violated. Likely cause: skipFact predicate in enrichment/worker.go lost its isDream clause.", calls)
 	}
 
@@ -285,7 +282,7 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 	if consolidation {
 		// 4a. Entity extraction MUST run for a consolidation synthesis and
 		//     persist graph rows sourced from the dream.
-		if calls := entityCalls.Load(); calls == 0 {
+		if calls := entityLLM.calls.Load(); calls == 0 {
 			t.Errorf("entity extraction LLM was NOT called for a consolidation dream; the consolidation-erases-coverage fix requires it to run.")
 		}
 		if len(entities) == 0 {
@@ -301,7 +298,7 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 		}
 	} else {
 		// 4b. A non-consolidation dream extracts nothing.
-		if calls := entityCalls.Load(); calls != 0 {
+		if calls := entityLLM.calls.Load(); calls != 0 {
 			t.Errorf("entity extraction LLM was called %d time(s) for a non-consolidation dream; contract violated. Likely cause: skipEntity predicate lost its isDream/Enriched clause.", calls)
 		}
 		if stamped.EntityExtractedAt != nil {
@@ -344,7 +341,7 @@ func runRecursionGuardCase(t *testing.T, enriched, consolidation bool) {
 	//    own provider, so it never trips the fact/entity counters above. This
 	//    pins augment-on-dreams as intended behavior, not an accident of the
 	//    skip predicates.
-	if augmentCalls.Load() == 0 {
+	if augmentLLM.calls.Load() == 0 {
 		t.Errorf("query augmentation did not run on the dream memory; it must run on dreams (only fact/entity extraction skip them)")
 	}
 }
@@ -420,26 +417,18 @@ func waitUntilDrained(ctx context.Context, pool *enrichment.WorkerPool, queue *s
 	}
 }
 
-// recursionGuardLLM returns a scripted body on every Complete call and
-// increments its counter. The body is real-shaped so that, if the guard
+// recursionGuardLLM returns a stub emitting a scripted body on every Complete
+// call and counting its own calls. The body is real-shaped so that, if the guard
 // breaks, the worker proceeds to actually write extracted-fact children
 // (and the test reports the contract violation rather than failing
 // earlier on a parse error).
-type recursionGuardLLM struct {
-	name    string
-	counter *atomic.Int64
-	body    string
-}
-
-func (m *recursionGuardLLM) Name() string     { return m.name }
-func (m *recursionGuardLLM) Models() []string { return []string{m.name} }
-func (m *recursionGuardLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-	m.counter.Add(1)
-	return &provider.CompletionResponse{
-		Content: m.body,
-		Model:   m.name,
-		Usage:   provider.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
-	}, nil
+func recursionGuardLLM(name, body string) *scriptedJudgeLLM {
+	return &scriptedJudgeLLM{
+		name:    name,
+		model:   name,
+		content: body,
+		usage:   provider.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+	}
 }
 
 // recursionGuardEmbed returns a fixed-dim embedding for every input so

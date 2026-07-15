@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,21 +20,19 @@ import (
 	"github.com/nram-ai/nram/internal/storage"
 )
 
-type zeroUsageLLM struct {
-	calls atomic.Int32
-}
+// noContradictionBody is the fixed non-contradiction verdict returned by the
+// zero-usage stub. Shared with the estimate assertions so the stub body and the
+// expected-token math cannot drift apart.
+const noContradictionBody = `{"contradicts": false, "explanation": ""}`
 
-func (z *zeroUsageLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-	z.calls.Add(1)
-	return &provider.CompletionResponse{
-		Content: `{"contradicts": false, "explanation": ""}`,
-		Model:   "local-model",
-		// Intentionally zero usage: mimics Ollama's OpenAI-compat endpoint.
-		Usage: provider.TokenUsage{},
-	}, nil
+// noContradictionLLM returns a stub that mimics Ollama's OpenAI-compat endpoint:
+// a fixed non-contradiction verdict with intentionally zero usage, which forces
+// the dreaming estimate-fallback path. Its recorded prompts let tests prove the
+// budget estimate is computed over the GUARDED prompt (directive included)
+// rather than the bare system.
+func noContradictionLLM() *scriptedJudgeLLM {
+	return &scriptedJudgeLLM{name: "ollama-test", model: "local-model", content: noContradictionBody}
 }
-func (z *zeroUsageLLM) Name() string     { return "ollama-test" }
-func (z *zeroUsageLLM) Models() []string { return []string{"local-model"} }
 
 type recordingTokenRecorder struct {
 	records []*model.TokenUsage
@@ -146,7 +143,7 @@ func nilEmbedder() provider.EmbeddingProvider { return nil }
 // phase falls back to the len(prompt)/4 estimate so the TokenBudget still
 // advances and Exhausted() eventually trips.
 func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	recorder := &recordingTokenRecorder{}
 	memories := makeMemories(10)
 	reader := &fakeMemoryReader{list: memories}
@@ -189,32 +186,6 @@ func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 	}
 }
 
-// capturingZeroUsageLLM records the guarded prompt actually sent (system +
-// separator + user) on each call and returns zero usage, forcing the
-// dreaming estimate-fallback path. Used to prove the budget estimate is
-// computed over the GUARDED prompt (directive included), not the bare system.
-type capturingZeroUsageLLM struct {
-	mu      sync.Mutex
-	prompts []string
-	calls   atomic.Int32
-}
-
-func (c *capturingZeroUsageLLM) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-	c.calls.Add(1)
-	if len(req.Messages) == 2 {
-		c.mu.Lock()
-		c.prompts = append(c.prompts, req.Messages[0].Content+provider.PromptSplitSeparator+req.Messages[1].Content)
-		c.mu.Unlock()
-	}
-	return &provider.CompletionResponse{
-		Content: `{"contradicts": false, "explanation": ""}`,
-		Model:   "local-model",
-		Usage:   provider.TokenUsage{}, // zero: force the estimate fallback
-	}, nil
-}
-func (c *capturingZeroUsageLLM) Name() string     { return "ollama-capture" }
-func (c *capturingZeroUsageLLM) Models() []string { return []string{"local-model"} }
-
 // TestContradictionPhase_BudgetEstimateCountsGuardDirective proves that when
 // the provider reports zero usage, the dream TokenBudget is charged the
 // estimate over the GUARDED prompt (GuardedSystem + separator + user), i.e. the
@@ -222,7 +193,7 @@ func (c *capturingZeroUsageLLM) Models() []string { return []string{"local-model
 // the estimate the phase reconstructed the estimate from the bare system and
 // undercounted every call.
 func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
-	llm := &capturingZeroUsageLLM{}
+	llm := noContradictionLLM()
 	memories := makeMemories(2)
 	reader := &fakeMemoryReader{list: memories}
 
@@ -247,10 +218,9 @@ func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
 		t.Fatal("expected at least one contradiction LLM call")
 	}
 
-	const respContent = `{"contradicts": false, "explanation": ""}`
 	want := 0
 	for _, p := range llm.prompts {
-		want += EstimateTokens(p) + EstimateTokens(respContent)
+		want += EstimateTokens(p) + EstimateTokens(noContradictionBody)
 	}
 	if got := budget.Used(); got != want {
 		t.Errorf("budget.Used() = %d, want %d (estimate over the guarded prompt actually sent)", got, want)
@@ -266,29 +236,24 @@ func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
 	}
 }
 
-// malformedResponseLLM returns an unparseable body so the contradiction
-// phase exercises its parse-error path.
-type malformedResponseLLM struct {
-	calls atomic.Int32
+// malformedResponseLLM returns a stub whose body is unparseable, so the
+// contradiction phase exercises its parse-error path. Usage is non-zero so the
+// parse-error accounting is charged real reported tokens, not an estimate.
+func malformedResponseLLM() *scriptedJudgeLLM {
+	return &scriptedJudgeLLM{
+		name:    "ollama-malformed",
+		model:   "local-model",
+		content: "sure thing boss, not json",
+		usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+	}
 }
-
-func (m *malformedResponseLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-	m.calls.Add(1)
-	return &provider.CompletionResponse{
-		Content: "sure thing boss, not json",
-		Model:   "local-model",
-		Usage:   provider.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
-	}, nil
-}
-func (m *malformedResponseLLM) Name() string     { return "ollama-malformed" }
-func (m *malformedResponseLLM) Models() []string { return []string{"local-model"} }
 
 // TestContradictionPhase_ParseErrorStillAccountsUsage verifies that when the
 // LLM call succeeds but the response body is unparseable, the budget still
 // advances and a token_usage record is still written. Otherwise a chatty
 // small model that can't emit valid JSON would burn calls for free.
 func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
-	llm := &malformedResponseLLM{}
+	llm := malformedResponseLLM()
 	recorder := &recordingTokenRecorder{}
 	memories := makeMemories(6)
 	reader := &fakeMemoryReader{list: memories}
@@ -340,7 +305,7 @@ func TestContradictionPhase_ParseErrorStillAccountsUsage(t *testing.T) {
 // pre-flight CanAfford check prevents calls when the estimated cost exceeds
 // remaining budget.
 func TestContradictionPhase_PreflightStopsWhenBudgetTooSmall(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	memories := makeMemories(4)
 	reader := &fakeMemoryReader{list: memories}
 
@@ -375,7 +340,7 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 	mems := stampedMemories(20, now, now.Add(-time.Minute))
 	reader := &fakeMemoryReader{list: mems}
 	writer := &updatingMemoryWriter{}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	emb := &staticEmbedder{}
 
 	phase := NewContradictionPhase(
@@ -413,7 +378,7 @@ func TestContradictionPhase_NoStaleReturnsResidualFalse(t *testing.T) {
 // verifies that when more stale memories exist than the cap can fully
 // cover, the phase stamps the subset it dispatched and reports residual=true.
 func TestContradictionPhase_StampsDispatchedAndReportsResidualWhenCapHit(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	mems := makeMemories(100)
 	reader := &fakeMemoryReader{list: mems}
 	writer := &updatingMemoryWriter{}
@@ -477,7 +442,7 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 
 	reader := &fakeMemoryReader{list: mems}
 	writer := &updatingMemoryWriter{}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 
 	phase := NewContradictionPhase(
 		reader,
@@ -519,7 +484,7 @@ func TestContradictionPhase_UpdatedAtInvalidatesStamp(t *testing.T) {
 // take multiple passes when the stale set exceeds cap*K; the invariant
 // is that stability, once reached, is preserved.
 func TestContradictionPhase_StampingIsIdempotent(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	mems := makeMemories(10) // all stale
 	store := &mutableMemoryStore{memories: mems}
 
@@ -602,7 +567,7 @@ func TestIsStale_StampEqualsUpdatedAt_NotStale(t *testing.T) {
 // of Execute short-circuits when the namespace can't produce any pair.
 func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
 	for _, n := range []int{0, 1} {
-		llm := &zeroUsageLLM{}
+		llm := noContradictionLLM()
 		writer := &updatingMemoryWriter{}
 		mems := makeMemories(n)
 		reader := &fakeMemoryReader{list: mems}
@@ -644,7 +609,7 @@ func TestContradictionPhase_TooFewMemoriesIsNoOp(t *testing.T) {
 // TestContradictionPhase_EmbedderNilDegradesSafely confirms the phase still
 // terminates and stamps memories when no embedder is available.
 func TestContradictionPhase_EmbedderNilDegradesSafely(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	writer := &updatingMemoryWriter{}
 	mems := makeMemories(8)
 	reader := &fakeMemoryReader{list: mems}
@@ -698,7 +663,7 @@ func (e *erroringEmbedder) Dimensions() []int { return []int{64} }
 // embedder error falls back to the deterministic walk rather than aborting
 // the cycle, and still stamps visited memories.
 func TestContradictionPhase_EmbedderErrorDegradesSafely(t *testing.T) {
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 	writer := &updatingMemoryWriter{}
 	emb := &erroringEmbedder{}
 	mems := makeMemories(8)
@@ -938,28 +903,22 @@ func (m *mutableMemoryStore) MutateInLock(_ context.Context, id uuid.UUID, _ uui
 
 // --- haircut/winner tests (item #5) ---
 
-// decidingLLM emits a structured contradiction response with a configurable
-// winner field. Used to drive the haircut path through the full code branches
-// (WinnerSideA, WinnerSideB, WinnerTie, or "" for legacy-prompt fallback).
-type decidingLLM struct {
-	winner string
-	calls  atomic.Int32
-}
-
-func (d *decidingLLM) Complete(_ context.Context, _ *provider.CompletionRequest) (*provider.CompletionResponse, error) {
-	d.calls.Add(1)
+// decidingLLM returns a stub emitting a structured contradiction response with
+// the given winner. Used to drive the haircut path through the full code
+// branches (WinnerSideA, WinnerSideB, WinnerTie, or "" for legacy-prompt
+// fallback, which omits the winner field entirely).
+func decidingLLM(winner string) *scriptedJudgeLLM {
 	body := `{"contradicts": true, "explanation": "test"}`
-	if d.winner != "" {
-		body = `{"contradicts": true, "winner": "` + d.winner + `", "explanation": "test"}`
+	if winner != "" {
+		body = `{"contradicts": true, "winner": "` + winner + `", "explanation": "test"}`
 	}
-	return &provider.CompletionResponse{
-		Content: body,
-		Model:   "deciding",
-		Usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 20, TotalTokens: 50},
-	}, nil
+	return &scriptedJudgeLLM{
+		name:    "deciding",
+		model:   "deciding",
+		content: body,
+		usage:   provider.TokenUsage{PromptTokens: 30, CompletionTokens: 20, TotalTokens: 50},
+	}
 }
-func (d *decidingLLM) Name() string     { return "deciding" }
-func (d *decidingLLM) Models() []string { return []string{"deciding"} }
 
 // countingLineageWriter mirrors stubLineageWriter but lets tests inject a
 // non-zero prior conflict count to exercise the diminishing-haircut path.
@@ -1030,7 +989,7 @@ func findUpdate(updates []model.Memory, id uuid.UUID) *model.Memory {
 func approxEq(a, b float64) bool { return math.Abs(a-b) < 1e-4 }
 
 func TestContradictionPhase_LoserHaircut(t *testing.T) {
-	llm := &decidingLLM{winner: WinnerSideA}
+	llm := decidingLLM(WinnerSideA)
 	mems := haircutMemories(2)
 	lineage := &countingLineageWriter{}
 	w := runContradictionCycle(t, llm, mems, lineage)
@@ -1053,7 +1012,7 @@ func TestContradictionPhase_LoserHaircut(t *testing.T) {
 }
 
 func TestContradictionPhase_TieHaircut(t *testing.T) {
-	llm := &decidingLLM{winner: WinnerTie}
+	llm := decidingLLM(WinnerTie)
 	mems := haircutMemories(2)
 	lineage := &countingLineageWriter{}
 	w := runContradictionCycle(t, llm, mems, lineage)
@@ -1074,7 +1033,7 @@ func TestContradictionPhase_TieHaircut(t *testing.T) {
 // field) normalizes to tie. Permanent test; remove only when no deployment
 // can plausibly still be on a pre-winner prompt.
 func TestContradictionPhase_LegacyPromptFallback(t *testing.T) {
-	llm := &decidingLLM{winner: ""}
+	llm := decidingLLM("")
 	mems := haircutMemories(2)
 	lineage := &countingLineageWriter{}
 	w := runContradictionCycle(t, llm, mems, lineage)
@@ -1092,7 +1051,7 @@ func TestContradictionPhase_LegacyPromptFallback(t *testing.T) {
 }
 
 func TestContradictionPhase_DiminishingReaffirmation(t *testing.T) {
-	llm := &decidingLLM{winner: WinnerSideA}
+	llm := decidingLLM(WinnerSideA)
 	mems := haircutMemories(2)
 	// Pretend one prior conflict already exists; this is detection #2.
 	// Diminished factor: 1 - (1 - base) / 2.
@@ -1115,7 +1074,7 @@ func TestContradictionPhase_DiminishingReaffirmation(t *testing.T) {
 }
 
 func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
-	llm := &decidingLLM{winner: WinnerSideA}
+	llm := decidingLLM(WinnerSideA)
 	mems := haircutMemories(2)
 	mems[0].Confidence = 0.95 // pre-haircut > 0.85 supersession threshold
 	d := 4
@@ -1170,7 +1129,7 @@ func TestContradictionPhase_HighConfidenceWinnerSupersedes(t *testing.T) {
 }
 
 func TestContradictionPhase_LowConfidenceWinnerNoSupersede(t *testing.T) {
-	llm := &decidingLLM{winner: WinnerSideA}
+	llm := decidingLLM(WinnerSideA)
 	mems := haircutMemories(2)
 	mems[0].Confidence = 0.5 // below 0.85 threshold
 	lineage := &countingLineageWriter{}
@@ -1289,7 +1248,7 @@ func TestContradictionPhase_VectorStoreHitsAvoidEmbedding(t *testing.T) {
 		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
 	}
 	emb := &staticEmbedder{vectors: [][]float32{vectorOffsetAt(dim, 0)}}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 
 	phase := NewContradictionPhase(
 		&fakeMemoryReader{list: mems},
@@ -1333,7 +1292,7 @@ func TestContradictionPhase_VectorStoreMissesTriggerEmbed(t *testing.T) {
 		vectorOffsetAt(dim, 2),
 		vectorOffsetAt(dim, 3),
 	}}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 
 	phase := NewContradictionPhase(
 		&fakeMemoryReader{list: mems},
@@ -1384,7 +1343,7 @@ func TestContradictionPhase_VectorStoreErrorFallsBackToFullEmbed(t *testing.T) {
 		vectorOffsetAt(dim, 2),
 		vectorOffsetAt(dim, 3),
 	}}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 
 	phase := NewContradictionPhase(
 		&fakeMemoryReader{list: mems},
@@ -1426,7 +1385,7 @@ func TestContradictionPhase_ParaphraseAutoSupersede(t *testing.T) {
 		},
 	}
 	emb := &staticEmbedder{vectors: [][]float32{dup}}
-	llm := &decidingLLM{winner: WinnerSideA} // would also be reached if fast-path skipped
+	llm := decidingLLM(WinnerSideA) // would also be reached if fast-path skipped
 
 	writer := &updatingMemoryWriter{}
 	phase := NewContradictionPhase(
@@ -1486,7 +1445,7 @@ func TestContradictionPhase_ParaphraseDisabledKeepsLLMPath(t *testing.T) {
 		},
 	}
 	emb := &staticEmbedder{vectors: [][]float32{dup}}
-	llm := &decidingLLM{winner: WinnerSideA}
+	llm := decidingLLM(WinnerSideA)
 
 	phase := NewContradictionPhase(
 		&fakeMemoryReader{list: mems},
@@ -1534,7 +1493,7 @@ func TestContradictionPhase_ParaphraseTiebreakOlderWins(t *testing.T) {
 		&fakeMemoryReader{list: mems},
 		writer,
 		stubLineageWriter{},
-		func() provider.LLMProvider { return &zeroUsageLLM{} },
+		func() provider.LLMProvider { return noContradictionLLM() },
 		func() provider.EmbeddingProvider { return emb },
 		paraphraseSettings(true, 0.97),
 	)
@@ -1571,7 +1530,7 @@ func TestContradictionPhase_SearchFailureUsesInProcessTopK(t *testing.T) {
 		vs.vectorsByID[mems[i].ID] = vectorOffsetAt(dim, i)
 	}
 	emb := &staticEmbedder{vectors: [][]float32{vectorOffsetAt(dim, 0)}}
-	llm := &zeroUsageLLM{}
+	llm := noContradictionLLM()
 
 	phase := NewContradictionPhase(
 		&fakeMemoryReader{list: mems},
