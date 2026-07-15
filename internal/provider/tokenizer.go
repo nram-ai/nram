@@ -32,6 +32,18 @@ func EstimateTokens(model, text string) int {
 	return len(tk.Encode(text, nil, nil))
 }
 
+// EstimateMessages returns the prompt-token estimate for the messages a request
+// sends, under the given model. It is EstimateTokens over JoinMessages, named
+// once so every estimator of the same request composes them identically.
+//
+// This pairing is the whole invariant: a caller that joins differently, or
+// estimates over a hand-rebuilt prompt instead of the messages on the wire,
+// silently bills the same request a different number. Call this rather than
+// composing the two by hand.
+func EstimateMessages(model string, msgs []Message) int {
+	return EstimateTokens(model, JoinMessages(msgs))
+}
+
 // encodingForModel maps a model identifier to its tiktoken encoding name.
 func encodingForModel(model string) string {
 	m := strings.ToLower(model)

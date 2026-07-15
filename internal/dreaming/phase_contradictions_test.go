@@ -140,8 +140,8 @@ func nilEmbedder() provider.EmbeddingProvider { return nil }
 
 // TestContradictionPhase_ZeroUsageBudgetAdvances verifies the critical fix:
 // when the provider reports Usage{TotalTokens: 0} (Ollama behaviour), the
-// phase falls back to the len(prompt)/4 estimate so the TokenBudget still
-// advances and Exhausted() eventually trips.
+// phase falls back to estimating over the sent messages so the TokenBudget
+// still advances and Exhausted() eventually trips.
 func TestContradictionPhase_ZeroUsageBudgetAdvances(t *testing.T) {
 	llm := noContradictionLLM()
 	recorder := &recordingTokenRecorder{}
@@ -220,7 +220,8 @@ func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
 
 	want := 0
 	for _, p := range llm.prompts {
-		want += EstimateTokens(p) + EstimateTokens(noContradictionBody)
+		want += provider.EstimateTokens(llm.modelName(), p) +
+			provider.EstimateTokens(llm.modelName(), noContradictionBody)
 	}
 	if got := budget.Used(); got != want {
 		t.Errorf("budget.Used() = %d, want %d (estimate over the guarded prompt actually sent)", got, want)
@@ -231,8 +232,71 @@ func TestContradictionPhase_BudgetEstimateCountsGuardDirective(t *testing.T) {
 	// Every prompt shares the same directive prefix, so one sample suffices.
 	sample := llm.prompts[0]
 	bare := strings.TrimPrefix(sample, provider.UntrustedDataDirective+provider.PromptSplitSeparator)
-	if EstimateTokens(bare) == EstimateTokens(sample) {
+	if provider.EstimateTokens(llm.modelName(), bare) == provider.EstimateTokens(llm.modelName(), sample) {
 		t.Fatal("directive adds no tokens; test cannot distinguish guarded estimate from bare")
+	}
+}
+
+// TestContradictionPhase_BudgetChargeMatchesRecordedUsage pins the invariant
+// that one call is measured one way. When a provider reports zero usage, the
+// same request is estimated twice over: the usage-recording wrapper estimates
+// it into a token_usage row, and because that wrapper never writes its result
+// back into resp.Usage, the dreaming fallback estimates it again to advance the
+// TokenBudget. The two sinks are different, so this is not a double charge, but
+// the two numbers describe the same bytes and must therefore agree.
+//
+// This fails on the pre-fix tree, where the budget side used a len/4 heuristic
+// over a hand-rebuilt "\n\n" join while the recorder used tiktoken over a "\n"
+// join: two estimators, two separators, two answers for one call.
+func TestContradictionPhase_BudgetChargeMatchesRecordedUsage(t *testing.T) {
+	llm := noContradictionLLM() // reports zero usage, forcing both fallbacks
+	recorder := &recordingTokenRecorder{}
+	memories := makeMemories(6)
+	reader := &fakeMemoryReader{list: memories}
+
+	phase := NewContradictionPhase(
+		reader,
+		&updatingMemoryWriter{},
+		stubLineageWriter{},
+		func() provider.LLMProvider {
+			return provider.NewUsageRecordingLLM(llm, recorder, nil)
+		},
+		nilEmbedder,
+		stubSettings{},
+	)
+
+	// Large budget so no pre-flight gate trips; we assert on what was charged.
+	budget := NewTokenBudget(1_000_000, 2048)
+	cycle := &model.DreamCycle{ID: uuid.New(), NamespaceID: memories[0].NamespaceID}
+	logger := NewDreamLogWriter(nil, cycle.ID, uuid.UUID{})
+
+	if _, err := phase.Execute(context.Background(), cycle, budget, logger); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if llm.calls.Load() == 0 {
+		t.Fatal("expected at least one contradiction LLM call")
+	}
+
+	// nilEmbedder means every token charged to the budget came from the judge
+	// calls, so the recorded judge rows must account for all of it.
+	recorded := 0
+	rows := 0
+	for _, r := range recorder.records {
+		if r.Operation == "dream_contradiction" {
+			recorded += r.TokensInput + r.TokensOutput
+			rows++
+		}
+	}
+	if rows == 0 {
+		t.Fatal("expected dream_contradiction token_usage rows")
+	}
+	if recorded == 0 {
+		t.Fatal("expected the recorder to estimate non-zero tokens for a zero-usage response")
+	}
+	if got := budget.Used(); got != recorded {
+		t.Errorf("budget.Used() = %d, recorded token_usage total = %d; "+
+			"the same zero-usage calls must be estimated identically by both paths",
+			got, recorded)
 	}
 }
 

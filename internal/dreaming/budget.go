@@ -98,7 +98,7 @@ func (b *TokenBudget) PerCallCap() int {
 // remaining budget at this level and at every ancestor level (for
 // sub-slices). The per-call cap is a response-MaxTokens concern, not a
 // per-call total-cost ceiling; callers compose the two themselves via
-// EstimateTokens(prompt) + PerCallCap() before passing to CanAfford.
+// estimatedCallCost(llm, msgs, PerCallCap()) before passing to CanAfford.
 func (b *TokenBudget) CanAfford(estimated int) bool {
 	b.mu.Lock()
 	localOK := estimated <= (b.total - b.used)
@@ -166,13 +166,6 @@ func (b *TokenBudget) MarkZeroUsageWarned() bool {
 	}
 	b.zeroUsageWarned = true
 	return true
-}
-
-// EstimateTokens returns a rough token count for a text using the
-// 4-bytes-per-token heuristic. Used as a fallback when the LLM provider
-// does not report usage in its response.
-func EstimateTokens(text string) int {
-	return len(text) / 4
 }
 
 // ProportionalSliceCap returns the per-phase cap under the

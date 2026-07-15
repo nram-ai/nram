@@ -129,39 +129,88 @@ func TestUsageRecordingLLM_HappyPath(t *testing.T) {
 	}
 }
 
+// TestUsageRecordingLLM_ZeroTokenFallback pins the tokenizer fallback: when the
+// provider reports no usage, the recorder estimates the row itself, and it does
+// so over EstimateMessages of the messages actually sent.
+//
+// The exact-value assertion is the point. A dreaming caller estimates the same
+// zero-usage request against its TokenBudget through the same EstimateMessages,
+// so if this side ever measures some other text the one request gets billed two
+// different numbers. Asserting merely non-zero would not catch that.
+//
+// Note the separator itself is not observable through the tokenizer: cl100k
+// encodes both "\n" and "\n\n" as a single token, so joining on either yields
+// the same count. The join is unified for single-source-of-truth and for the
+// operator-facing rendered_prompt preview, not to move token numbers.
 func TestUsageRecordingLLM_ZeroTokenFallback(t *testing.T) {
-	rec := &captureRecorder{}
-	llm := &stubLLM{
-		name: "ollama",
-		resp: &CompletionResponse{
-			Content: "this is the model output",
-			Model:   "llama-3",
-			Usage:   TokenUsage{}, // provider returned zero
+	const modelName = "llama-3"
+	const body = "this is the model output"
+
+	cases := []struct {
+		name string
+		msgs []Message
+	}{
+		{
+			name: "single message",
+			msgs: []Message{{Role: "user", Content: "hello world"}},
+		},
+		{
+			name: "guarded system and user halves",
+			msgs: []Message{
+				{Role: "system", Content: "system half"},
+				{Role: "user", Content: "user half"},
+			},
 		},
 	}
-	w := NewUsageRecordingLLM(llm, rec, nil)
 
-	ctx := WithOperation(context.Background(), OperationEntityExtraction)
-	_, err := w.Complete(ctx, &CompletionRequest{
-		Model: "llama-3",
-		Messages: []Message{
-			{Role: "user", Content: "hello world"},
-		},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &captureRecorder{}
+			llm := &stubLLM{
+				name: "ollama",
+				resp: &CompletionResponse{
+					Content: body,
+					Model:   modelName,
+					Usage:   TokenUsage{}, // provider returned zero
+				},
+			}
+			w := NewUsageRecordingLLM(llm, rec, nil)
+
+			ctx := WithOperation(context.Background(), OperationEntityExtraction)
+			if _, err := w.Complete(ctx, &CompletionRequest{Model: modelName, Messages: tc.msgs}); err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+
+			got := rec.last()
+			if got == nil {
+				t.Fatal("expected a recorded row")
+			}
+			wantInput := EstimateMessages(modelName, tc.msgs)
+			if got.TokensInput != wantInput {
+				t.Errorf("TokensInput = %d, want %d (estimate over the sent messages)",
+					got.TokensInput, wantInput)
+			}
+			wantOutput := EstimateTokens(modelName, body)
+			if got.TokensOutput != wantOutput {
+				t.Errorf("TokensOutput = %d, want %d", got.TokensOutput, wantOutput)
+			}
+			if wantInput == 0 || wantOutput == 0 {
+				t.Fatal("fixture estimates to zero tokens; the assertions cannot distinguish a missing fallback")
+			}
+		})
+	}
+
+	t.Run("multi-message estimate is not a single half", func(t *testing.T) {
+		// Guard against a vacuous pass: the joined estimate must differ from
+		// either half alone, otherwise the exact-value assertion above could not
+		// tell a full-prompt estimate apart from one that measured one message.
+		msgs := cases[1].msgs
+		joined := EstimateMessages(modelName, msgs)
+		if joined == EstimateTokens(modelName, msgs[0].Content) ||
+			joined == EstimateTokens(modelName, msgs[1].Content) {
+			t.Fatal("joined estimate coincides with a single message; the assertion cannot detect measuring the wrong text")
+		}
 	})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-
-	got := rec.last()
-	if got == nil {
-		t.Fatal("expected a recorded row")
-	}
-	if got.TokensInput == 0 {
-		t.Errorf("expected non-zero estimated input tokens, got 0")
-	}
-	if got.TokensOutput == 0 {
-		t.Errorf("expected non-zero estimated output tokens, got 0")
-	}
 }
 
 // TestUsageRecordingLLM_CircuitOpenSkipsRow pins the write-amplification fix: a

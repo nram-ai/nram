@@ -125,32 +125,72 @@ func (t *CycleTracker) EmitPhaseCompleted(
 	events.Emit(ctx, t.bus, events.DreamPhaseCompleted, t.scope, payload)
 }
 
+// slotModel returns the model the provider slot supplies for a request that
+// leaves CompletionRequest.Model empty, which every dreaming request does.
+// Models() lists the slot's configured default model first, and the recorder,
+// breaker, and host-gate wrappers all delegate Models() to the inner provider.
+// An absent list yields "", which provider.EstimateTokens maps to its default
+// cl100k_base encoding: the same encoding every non-OpenAI family resolves to
+// anyway, so the estimate degrades to the right answer rather than a wrong one.
+func slotModel(llm provider.LLMProvider) string {
+	if models := llm.Models(); len(models) > 0 {
+		return models[0]
+	}
+	return ""
+}
+
+// estimatedCallCost returns the pre-flight cost of sending msgs: the prompt
+// estimate plus the response cap the call will request. Phases compose it and
+// hand the result to budget.CanAfford.
+//
+// Build the messages once, gate on them, and pass the same slice to the call,
+// so the estimate measures the bytes that actually go on the wire rather than
+// a reconstruction that can drift from it. maxTokens is the caller's cap
+// (budget.PerCallCap for most phases, a phase-specific setting for the novelty
+// judge), so the gate stays symmetric with the request it guards.
+func estimatedCallCost(llm provider.LLMProvider, msgs []provider.Message, maxTokens int) int {
+	return provider.EstimateMessages(slotModel(llm), msgs) + maxTokens
+}
+
 // usageOrEstimateLLM returns the usage struct from an LLM response,
-// substituting EstimateTokens for prompt and completion when the provider
-// reports zero (Ollama's OpenAI-compat endpoint, some local proxies). Without
-// the fallback the dream-cycle TokenBudget never advances and the cycle
-// burns through every candidate. budget.MarkZeroUsageWarned dedups the
-// per-cycle warning so logs stay clean.
-func usageOrEstimateLLM(resp *provider.CompletionResponse, prompt string, budget *TokenBudget, providerName, phase string) *provider.TokenUsage {
+// substituting an estimate for prompt and completion when the provider reports
+// zero (Ollama's OpenAI-compat endpoint, some local proxies). Without the
+// fallback the dream-cycle TokenBudget never advances and the cycle burns
+// through every candidate. budget.MarkZeroUsageWarned dedups the per-cycle
+// warning so logs stay clean.
+//
+// The estimate is taken over msgs, the messages the call actually sent, and
+// mirrors provider.UsageRecordingLLM.record exactly: same tokenizer, same
+// JoinMessages reconstruction, same model. That is deliberate. The recorder
+// wraps this very call and estimates the same zero-usage request into a
+// token_usage row without writing the result back into resp.Usage, so both
+// paths run; measuring them differently would bill one request two ways.
+//
+// The model match relies on dreaming leaving CompletionRequest.Model empty, so
+// the recorder's own "resp.Model, else req.Model" resolution lands on the same
+// string as resp.Model here. A caller that starts setting Model would break it.
+func usageOrEstimateLLM(resp *provider.CompletionResponse, msgs []provider.Message, budget *TokenBudget, providerName, phase string) *provider.TokenUsage {
 	if resp == nil {
 		return nil
 	}
 	u := resp.Usage
 	if u.TotalTokens == 0 {
 		if budget != nil && budget.MarkZeroUsageWarned() {
-			slog.Warn("dreaming: provider returned zero token usage; estimating from prompt/response length",
+			slog.Warn("dreaming: provider returned zero token usage; estimating from the sent messages and response",
 				"provider", providerName, "phase", phase)
 		}
-		u.PromptTokens = EstimateTokens(prompt)
-		u.CompletionTokens = EstimateTokens(resp.Content)
+		u.PromptTokens = provider.EstimateMessages(resp.Model, msgs)
+		u.CompletionTokens = provider.EstimateTokens(resp.Model, resp.Content)
 		u.TotalTokens = u.PromptTokens + u.CompletionTokens
 	}
 	return &u
 }
 
 // usageOrEstimateEmbed returns the usage struct from an embedding response,
-// substituting EstimateTokens summed over the inputs when the provider
-// reports zero. See usageOrEstimateLLM for why the fallback exists.
+// substituting an estimate summed over the inputs when the provider reports
+// zero. See usageOrEstimateLLM for why the fallback exists. Estimating each
+// input under resp.Model matches provider.UsageRecordingEmbedding's own
+// per-input fallback, so the budget charge and the token_usage row agree.
 func usageOrEstimateEmbed(resp *provider.EmbeddingResponse, inputs []string) *provider.TokenUsage {
 	if resp == nil {
 		return nil
@@ -159,7 +199,7 @@ func usageOrEstimateEmbed(resp *provider.EmbeddingResponse, inputs []string) *pr
 	if u.TotalTokens == 0 {
 		est := 0
 		for _, s := range inputs {
-			est += EstimateTokens(s)
+			est += provider.EstimateTokens(resp.Model, s)
 		}
 		u.PromptTokens = est
 		u.TotalTokens = est

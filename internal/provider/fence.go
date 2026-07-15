@@ -43,14 +43,6 @@ func BuildGuardedMessages(system, user string) []Message {
 	return buildMessages(GuardedSystem(system), user)
 }
 
-// GuardedPromptText returns the concatenated prompt text that
-// BuildGuardedMessages sends (GuardedSystem(system) + separator + user), for
-// token estimation and prompt display. Use it instead of hand-joining
-// system+separator+user so an estimate cannot undercount the guarded directive.
-func GuardedPromptText(system, user string) string {
-	return GuardedSystem(system) + PromptSplitSeparator + user
-}
-
 // Fence wraps untrusted content in a per-call, nonce-delimited tag so the
 // content cannot forge the closing delimiter and break out to be read as
 // instructions — a fixed "<memory>...</memory>" fence is trivially escaped by a

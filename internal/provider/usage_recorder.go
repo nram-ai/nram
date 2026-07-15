@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -130,9 +129,11 @@ func (u *UsageRecordingLLM) record(
 
 	// Tokenizer fallback: only when the provider reported zero tokens AND
 	// the call returned a response we can measure. Joining messages saves
-	// N-1 tiktoken.Encode dispatches per multi-turn prompt.
+	// N-1 tiktoken.Encode dispatches per multi-turn prompt. EstimateMessages
+	// is the shared join-and-estimate, so a dreaming caller estimating the
+	// same zero-usage request against its TokenBudget lands on the same number.
 	if promptTokens == 0 && completionTokens == 0 && resp != nil {
-		promptTokens = EstimateTokens(modelName, joinMessages(req.Messages))
+		promptTokens = EstimateMessages(modelName, req.Messages)
 		completionTokens = EstimateTokens(modelName, resp.Content)
 	}
 
@@ -367,22 +368,4 @@ func needsResolverLookup(rec *model.TokenUsage, resolver UsageContextResolver) b
 		return false
 	}
 	return rec.OrgID == nil || rec.UserID == nil || rec.ProjectID == nil
-}
-
-// joinMessages concatenates the message contents into a single string for
-// the tokenizer fallback. Joining with a separator prevents word-boundary
-// merges from skewing the token count downward; "\n" matches the natural
-// turn boundary in chat-style requests.
-func joinMessages(msgs []Message) string {
-	if len(msgs) == 0 {
-		return ""
-	}
-	if len(msgs) == 1 {
-		return msgs[0].Content
-	}
-	parts := make([]string, len(msgs))
-	for i, m := range msgs {
-		parts[i] = m.Content
-	}
-	return strings.Join(parts, "\n")
 }

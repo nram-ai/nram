@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -87,16 +86,11 @@ func (s *scriptedJudgeLLM) modelName() string {
 
 func (s *scriptedJudgeLLM) Complete(_ context.Context, req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
 	s.calls.Add(1)
-	// Join whatever arrived rather than indexing system+user: BuildGuardedMessages
-	// sends two, but a bare one-message request is legal on this interface (the
-	// provider connectivity probe sends one), and for the two-message case this
-	// reproduces the guarded prompt exactly.
-	parts := make([]string, len(req.Messages))
-	for i, m := range req.Messages {
-		parts[i] = m.Content
-	}
+	// Record the joined prompt through the same helper production estimates
+	// use, rather than hand-rolling the join here: a stub that reconstructs
+	// the wire its own way is just one more thing that can drift from it.
 	s.mu.Lock()
-	s.prompts = append(s.prompts, strings.Join(parts, provider.PromptSplitSeparator))
+	s.prompts = append(s.prompts, provider.JoinMessages(req.Messages))
 	s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
@@ -530,7 +524,10 @@ func TestAuditNovelty_BudgetSkipsJudge(t *testing.T) {
 	phase := newAuditPhase(emb, llm, settings, &updatingMemoryWriter{}, &fakeMemoryReader{})
 
 	// Budget sized so the embed pre-filter spend fits but the judge
-	// prompt + per-call cap does not. EstimateTokens uses len/4.
+	// prompt + its max-tokens cap does not. The gate charges
+	// estimatedCallCost, which tokenizes the guarded messages: the untrusted-
+	// data directive alone puts the prompt estimate far past this total, and
+	// the 256 max-tokens cap set above dwarfs it regardless.
 	budget := NewTokenBudget(10, 5)
 
 	src := model.Memory{ID: uuid.New(), Content: "source"}

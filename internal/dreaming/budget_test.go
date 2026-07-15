@@ -86,7 +86,7 @@ func TestTokenBudget_SubSliceCanAffordRespectsBothLevels(t *testing.T) {
 
 // TestTokenBudget_CanAffordIgnoresPerCallCap verifies that CanAfford treats
 // PerCallCap as orthogonal: it is the response-MaxTokens cap, not a per-call
-// total-cost ceiling. Phases compose `EstimateTokens(prompt) + PerCallCap()`
+// total-cost ceiling. Phases compose the prompt estimate plus PerCallCap()
 // before passing to CanAfford, so a fresh budget with plenty of room must
 // afford spends larger than PerCallCap.
 func TestTokenBudget_CanAffordIgnoresPerCallCap(t *testing.T) {

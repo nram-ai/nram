@@ -155,7 +155,10 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		user := enrichment.RenderQueryAugmentUser(mem.Content, count)
 		// RenderedPrompt shows the operator the full prompt the model sees: the
 		// tunable system instruction followed by the code-built user message.
-		rendered := provider.GuardedPromptText(systemPrompt, user)
+		// Derive it from the messages the call below actually sends, so the
+		// preview cannot drift from the wire.
+		msgs := provider.BuildGuardedMessages(systemPrompt, user)
+		rendered := provider.JoinMessages(msgs)
 		start := time.Now()
 		// JSONMode deliberately omitted; response_format=json_object on the
 		// OpenAI-compat shim forces an object response, which contradicts the
@@ -163,7 +166,7 @@ func NewMemoryPreviewAugmentHandler(cfg MemoryPreviewAugmentConfig) http.Handler
 		// into a degenerate keys-as-queries loop until max_tokens truncates.
 		// See enrichment.runQueryAugment for the full diagnosis.
 		resp, err := llm.Complete(provider.WithOperation(r.Context(), provider.OperationQueryAugment), &provider.CompletionRequest{
-			Messages: provider.BuildGuardedMessages(systemPrompt, user),
+			Messages: msgs,
 			// Model left empty: the query-augmentation provider slot supplies it.
 			MaxTokens: maxTokens,
 		})

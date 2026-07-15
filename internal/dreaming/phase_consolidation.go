@@ -352,7 +352,7 @@ func (p *ConsolidationPhase) reinforce(
 	type alignResult struct {
 		dispatched  bool
 		emptySample bool
-		userPrompt  string
+		msgs        []provider.Message
 		alignment   float64
 		usage       *provider.TokenUsage
 		err         error
@@ -374,13 +374,14 @@ func (p *ConsolidationPhase) reinforce(
 				continue
 			}
 			userPrompt := renderAlignmentPrompt(&stale[i].mem, sample)
-			estCost := EstimateTokens(provider.GuardedPromptText(alignmentSystemPrompt, userPrompt)) + budget.PerCallCap()
+			msgs := provider.BuildGuardedMessages(alignmentSystemPrompt, userPrompt)
+			estCost := estimatedCallCost(llm, msgs, budget.PerCallCap())
 			if !budget.CanAfford(estCost) {
 				affordStop = true
 				break
 			}
 			alignResults[i].dispatched = true
-			alignResults[i].userPrompt = userPrompt
+			alignResults[i].msgs = msgs
 			toScore = append(toScore, i)
 		}
 		runBounded(concurrency, len(toScore), func(k int) {
@@ -388,7 +389,7 @@ func (p *ConsolidationPhase) reinforce(
 			synthesisID := stale[i].mem.ID
 			alignmentCtx := provider.WithMemoryID(ctx, synthesisID)
 			start := time.Now()
-			alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesisID, alignmentSystemPrompt, alignResults[i].userPrompt, budget, alignmentTemperature)
+			alignment, usage, err := p.scoreAlignment(alignmentCtx, llm, synthesisID, alignResults[i].msgs, budget, alignmentTemperature)
 			alignResults[i].alignment = alignment
 			alignResults[i].usage = usage
 			alignResults[i].err = err
@@ -503,22 +504,21 @@ func (p *ConsolidationPhase) scoreAlignment(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	synthesisID uuid.UUID,
-	system, user string,
+	msgs []provider.Message,
 	budget *TokenBudget,
 	temperature float64,
 ) (float64, *provider.TokenUsage, error) {
-	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpAlignmentScore, llm.Name(),
 		synthesisID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamAlignmentScoring)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildGuardedMessages(system, user),
+				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
 			})
-			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseConsolidation), e
+			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
 	if err != nil {
 		return 0, usage, err
@@ -1379,7 +1379,7 @@ func (p *ConsolidationPhase) consolidate(
 	concurrency := max(p.settings.ResolveIntWithDefault(ctx, service.SettingDreamLLMConcurrency, "global"), 1)
 	type synthResult struct {
 		dispatched   bool
-		userPrompt   string
+		msgs         []provider.Message
 		synthContent string
 		synthUsage   *provider.TokenUsage
 		synthErr     error
@@ -1401,21 +1401,21 @@ func (p *ConsolidationPhase) consolidate(
 		affordStop := false
 		for si := windowStart; si < windowEnd; si++ {
 			userPrompt := renderSynthesisPrompt(stale[si].members)
-			estCost := EstimateTokens(provider.GuardedPromptText(synthesisSystemPrompt, userPrompt)) + budget.PerCallCap()
+			msgs := provider.BuildGuardedMessages(synthesisSystemPrompt, userPrompt)
+			estCost := estimatedCallCost(llm, msgs, budget.PerCallCap())
 			if !budget.CanAfford(estCost) {
 				affordStop = true
 				break
 			}
 			synthResults[si].dispatched = true
-			synthResults[si].userPrompt = userPrompt
+			synthResults[si].msgs = msgs
 			toCompute = append(toCompute, si)
 		}
 		runBounded(concurrency, len(toCompute), func(k int) {
 			si := toCompute[k]
 			cluster := stale[si].members
-			userPrompt := synthResults[si].userPrompt
 			synthStart := time.Now()
-			content, usage, err := p.synthesize(ctx, llm, synthesisSystemPrompt, userPrompt, budget, synthesisTemperature)
+			content, usage, err := p.synthesize(ctx, llm, synthResults[si].msgs, budget, synthesisTemperature)
 			synthResults[si].synthContent = content
 			synthResults[si].synthUsage = usage
 			synthResults[si].synthErr = err
@@ -1685,20 +1685,19 @@ func renderSynthesisPrompt(cluster []model.Memory) string {
 func (p *ConsolidationPhase) synthesize(
 	ctx context.Context,
 	llm provider.LLMProvider,
-	system, user string,
+	msgs []provider.Message,
 	budget *TokenBudget,
 	temperature float64,
 ) (string, *provider.TokenUsage, error) {
-	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpSynthesis, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamSynthesis)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildGuardedMessages(system, user),
+				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 			})
-			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseConsolidation), e
+			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
 	if err != nil {
 		return "", usage, err
@@ -1849,7 +1848,7 @@ func (p *ConsolidationPhase) auditNovelty(
 		sourceTexts = append(sourceTexts, s.Content)
 	}
 	user := fmt.Sprintf(noveltyUserWrapper, candidate, strings.Join(sourceTexts, "\n---\n"))
-	prompt := provider.GuardedPromptText(systemTpl, user)
+	msgs := provider.BuildGuardedMessages(systemTpl, user)
 
 	maxTokens := p.settings.ResolveIntWithDefault(ctx, service.SettingDreamNoveltyJudgeMaxTokens, "global")
 
@@ -1858,14 +1857,14 @@ func (p *ConsolidationPhase) auditNovelty(
 	}
 	noveltyTemperature := p.settings.ResolveFloatWithDefault(ctx, service.SettingDreamNoveltyJudgeTemperature, "global")
 
-	// Pre-flight budget check using the same prompt and max-tokens the
-	// judge will actually send. The novelty judge has its own max-tokens
-	// setting (SettingDreamNoveltyJudgeMaxTokens) that can differ from
-	// budget.PerCallCap(), so the gate uses maxTokens to stay symmetric
-	// with the real call below. budget may be nil (unit tests, embedder
-	// probes outside a cycle) per WrapLLMCall's contract.
+	// Pre-flight budget check using the same messages and max-tokens the judge
+	// will actually send. The novelty judge has its own max-tokens setting
+	// (SettingDreamNoveltyJudgeMaxTokens) that can differ from
+	// budget.PerCallCap(), so the gate passes maxTokens to stay symmetric with
+	// the real call below. budget may be nil (unit tests, embedder probes
+	// outside a cycle) per WrapLLMCall's contract.
 	if budget != nil {
-		estCost := EstimateTokens(prompt) + maxTokens
+		estCost := estimatedCallCost(llm, msgs, maxTokens)
 		if !budget.CanAfford(estCost) {
 			slog.Info("dreaming: novelty audit call skipped (estimated cost exceeds remaining budget)",
 				"estimate", estCost, "budget_remaining", budget.Remaining())
@@ -1876,12 +1875,12 @@ func (p *ConsolidationPhase) auditNovelty(
 	resp, judgeUsage, err := WrapLLMCall(ctx, budget, OpNoveltyAuditLLM, llm.Name(), "",
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
-				Messages:    provider.BuildGuardedMessages(systemTpl, user),
+				Messages:    msgs,
 				MaxTokens:   maxTokens,
 				Temperature: noveltyTemperature,
 				JSONMode:    true,
 			})
-			return r, usageOrEstimateLLM(r, prompt, budget, llm.Name(), model.DreamPhaseConsolidation), e
+			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
 	if err != nil {
 		return false, "judge_call_error", judgeUsage, embedTokens, err

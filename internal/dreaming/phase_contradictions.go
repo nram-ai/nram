@@ -235,7 +235,7 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 		// kept in pair order) and the pre-flight affordability check. Collect
 		// the pairs that still need an LLM judgment.
 		var toJudge []int
-		var toJudgePrompts []string
+		var toJudgeMsgs [][]provider.Message
 		affordStop := false
 		for idx := windowStart; idx < windowEnd; idx++ {
 			pair := pairs[idx]
@@ -253,7 +253,8 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 				}
 			}
 			userPrompt := service.RenderContradictionUser(pair[0].Content, pair[1].Content)
-			estCost := EstimateTokens(provider.GuardedPromptText(systemPrompt, userPrompt)) + budget.PerCallCap()
+			msgs := provider.BuildGuardedMessages(systemPrompt, userPrompt)
+			estCost := estimatedCallCost(llm, msgs, budget.PerCallCap())
 			if !budget.CanAfford(estCost) {
 				slog.Info("dreaming: contradiction call skipped (estimated cost exceeds remaining budget)",
 					"estimate", estCost, "remaining", budget.Remaining())
@@ -262,16 +263,16 @@ func (p *ContradictionPhase) Execute(ctx context.Context, cycle *model.DreamCycl
 				break
 			}
 			toJudge = append(toJudge, idx)
-			toJudgePrompts = append(toJudgePrompts, userPrompt)
+			toJudgeMsgs = append(toJudgeMsgs, msgs)
 		}
 
 		// Parallel pass: only the LLM judge call. Each goroutine touches a
 		// distinct pair and a distinct results slot; the budget is mutex-safe.
 		runBounded(concurrency, len(toJudge), func(k int) {
 			idx := toJudge[k]
-			userPrompt := toJudgePrompts[k]
+			msgs := toJudgeMsgs[k]
 			start := time.Now()
-			found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pairs[idx][0], &pairs[idx][1], systemPrompt, userPrompt, budget, temperature)
+			found, winner, explanation, usage, err := p.checkContradiction(ctx, llm, &pairs[idx][0], &pairs[idx][1], msgs, budget, temperature)
 			results[idx] = contradictionJudgment{
 				judged: true, found: found, winner: winner,
 				explanation: explanation, usage: usage,
@@ -959,23 +960,22 @@ func (p *ContradictionPhase) checkContradiction(
 	ctx context.Context,
 	llm provider.LLMProvider,
 	a, b *model.Memory,
-	system, user string,
+	msgs []provider.Message,
 	budget *TokenBudget,
 	temperature float64,
 ) (bool, string, string, *provider.TokenUsage, error) {
-	estText := provider.GuardedPromptText(system, user)
 	resp, usage, err := WrapLLMCall(ctx, budget, OpContradictionJudge, llm.Name(),
 		a.ID.String()+","+b.ID.String(),
 		func(ctx context.Context) (*provider.CompletionResponse, *provider.TokenUsage, error) {
 			ctx = provider.WithOperation(ctx, provider.OperationDreamContradiction)
 			ctx = provider.WithMemoryID(ctx, a.ID)
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
-				Messages:    provider.BuildGuardedMessages(system, user),
+				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
 				Temperature: temperature,
 				JSONMode:    true,
 			})
-			return r, usageOrEstimateLLM(r, estText, budget, llm.Name(), model.DreamPhaseContradictions), e
+			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseContradictions), e
 		})
 	if err != nil {
 		return false, "", "", usage, err

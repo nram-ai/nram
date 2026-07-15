@@ -68,6 +68,25 @@ func buildMessages(system, user string) []Message {
 	}
 }
 
+// JoinMessages concatenates message contents into the single string the token
+// estimators measure. It joins with PromptSplitSeparator, so estimating over
+// JoinMessages(BuildGuardedMessages(system, user)) reconstructs the combined
+// template the split halves were authored from, exactly as the
+// PromptSplitSeparator contract above describes.
+//
+// Estimate from the messages a call actually sends rather than rebuilding the
+// text from the system and user halves a second time: a parallel
+// reconstruction silently drifts from the wire the moment the message layout
+// changes, and nothing would catch it. Joining also prevents word-boundary
+// merges from skewing the count downward.
+func JoinMessages(msgs []Message) string {
+	parts := make([]string, len(msgs))
+	for i, m := range msgs {
+		parts[i] = m.Content
+	}
+	return strings.Join(parts, PromptSplitSeparator)
+}
+
 // CompletionRequest contains the parameters for an LLM completion call.
 type CompletionRequest struct {
 	Messages    []Message
