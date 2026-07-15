@@ -91,6 +91,28 @@ func ExtractEntitiesLLM(
 // word-based: extraction does not depend on exact formatting, and the overlap
 // keeps an entity or relation that straddles a boundary intact in at least one
 // chunk.
+//
+// Window size comes from a document-wide tokens-per-word average, which is only
+// an estimate: a region that tokenizes denser than the document as a whole (a
+// code block amid prose) overshoots it. Each window is therefore measured and
+// subdivided until it fits. The bound is not absolute, and callers must not size
+// a prompt as if it were: text with no interior whitespace (a base64 blob, a
+// minified line) is a single word, cannot be divided any further, and is emitted
+// whole however large it is.
+//
+// The average-based loop is kept on purpose rather than replaced by measured
+// packing, because it fixes the window COUNT and the count is the pass's output
+// budget: each window is a separate extraction call with its own max_tokens, so
+// fewer windows means fewer relationships a dense memory can yield. Subdividing
+// only ever adds windows. Repacking to a measured fit collapses the count on
+// content whose raw token count exceeds the threshold while its
+// whitespace-collapsed form does not (this function measures the raw string but
+// emits joined words), and that has been measured to cost real relationships;
+// TestChunkExtractionContent_NeverReducesChunkCount pins it.
+//
+// Known limitation: the average is document-wide, so a single dense word drags
+// it up and shreds the surrounding prose into many small windows. Undoing that
+// needs the count invariant relaxed, so it is not addressed here.
 func chunkExtractionContent(ctx context.Context, settings *SettingsService, content string) []string {
 	if settings == nil {
 		return []string{content}
@@ -126,15 +148,42 @@ func chunkExtractionContent(ctx context.Context, settings *SettingsService, cont
 		step = chunkWords
 	}
 
-	var chunks []string
+	out := make([]string, 0, (len(words)+step-1)/step)
 	for start := 0; start < len(words); start += step {
 		end := min(start+chunkWords, len(words))
-		chunks = append(chunks, strings.Join(words[start:end], " "))
+		out = emitWindow(words[start:end], threshold, overlapWords, out)
 		if end == len(words) {
 			break
 		}
 	}
-	return chunks
+	return out
+}
+
+// emitWindow appends words as one window when it fits the threshold, and
+// otherwise halves it and recurses until every piece does. It is the only place
+// a window is emitted, so the token count is measured on exactly the string that
+// gets appended rather than on a reconstruction of it. words must be non-empty,
+// which the caller's loop guarantees.
+//
+// The second half carries the same overlap lookback the top-level windows use,
+// so subdividing does not introduce a seam that no window covers.
+//
+// Termination: a single word is emitted as-is (it cannot be divided further),
+// and both halves are strictly shorter than the input, since the lookback is
+// clamped below the midpoint.
+func emitWindow(words []string, threshold, overlapWords int, out []string) []string {
+	joined := strings.Join(words, " ")
+	if len(words) == 1 || provider.EstimateTokens("", joined) <= threshold {
+		return append(out, joined)
+	}
+	mid := len(words) / 2
+	out = emitWindow(words[:mid], threshold, overlapWords, out)
+
+	back := overlapWords
+	if back >= mid {
+		back = mid / 4
+	}
+	return emitWindow(words[mid-back:], threshold, overlapWords, out)
 }
 
 // extractFactsWithContinuation runs a single fact extraction and, while the
