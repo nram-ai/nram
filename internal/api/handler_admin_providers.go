@@ -174,10 +174,13 @@ type ProviderSlotConfig struct {
 	// be dead config nothing emits.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
 	// RerankMethod selects the reranker-slot implementation ("cross_encoder" or
-	// "judge"). Reranker slot only. Auto-detected by the save/test path
-	// (ProbeRerankMethod) and returned on read so the UI can show the detected
-	// mode; an operator may set it explicitly to override the probe. Inert for
-	// every other slot.
+	// "judge"). Reranker slot only. The probe (ProbeRerankMethod) is authoritative:
+	// on save a reachable server's detected method always wins and overwrites any
+	// supplied value. A supplied value is used only as a fallback when the probe
+	// cannot reach the server (a probe failure on save keeps it, so a
+	// configure-before-the-server-is-up flow is not blocked); it never overrides a
+	// successful probe, and the test path ignores it entirely. Inert for every
+	// other slot.
 	RerankMethod string `json:"rerank_method,omitempty"`
 }
 

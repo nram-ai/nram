@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.42
+  version: 0.18.43
   license:
     name: MIT
 
@@ -6194,8 +6194,12 @@ components:
           description: >-
             Reranker slot only. Selects the rerank implementation. Normally left
             unset: the save/test path probes the server and fills it
-            (cross_encoder when /v1/rerank answers, judge otherwise). Set
-            explicitly to override the probe.
+            (cross_encoder when /v1/rerank answers, judge otherwise). The probe is
+            authoritative: on save a reachable server's detected method always
+            overwrites any supplied value. A supplied value is used only as a
+            fallback when the probe cannot reach the server, so a
+            configure-before-the-server-is-up save is not blocked; it never
+            overrides a successful probe.
         clear_api_key:
           type: boolean
           description: >-
