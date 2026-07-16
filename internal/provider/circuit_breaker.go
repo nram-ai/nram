@@ -366,6 +366,20 @@ func (cb *CircuitBreaker) LastError() error {
 	return cb.lastError
 }
 
+// executeCB runs fn through the breaker, adapting fn's typed (T, error) return
+// to the breaker's error-only Execute contract. The three provider decorators
+// share this so the closure boilerplate lives in one place rather than being
+// copied per slot.
+func executeCB[T any](cb *CircuitBreaker, fn func() (T, error)) (T, error) {
+	var out T
+	err := cb.Execute(func() error {
+		var e error
+		out, e = fn()
+		return e
+	})
+	return out, err
+}
+
 // ---------------------------------------------------------------------------
 // CircuitBreakerLLM
 // ---------------------------------------------------------------------------
@@ -393,13 +407,9 @@ func NewCircuitBreakerLLM(provider LLMProvider, config CircuitBreakerConfig) *Ci
 
 // Complete delegates to the wrapped provider through the circuit breaker.
 func (c *CircuitBreakerLLM) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
-	var resp *CompletionResponse
-	err := c.cb.Execute(func() error {
-		var e error
-		resp, e = c.provider.Complete(ctx, req)
-		return e
+	return executeCB(c.cb, func() (*CompletionResponse, error) {
+		return c.provider.Complete(ctx, req)
 	})
-	return resp, err
 }
 
 // Name returns the underlying provider's name.
@@ -442,13 +452,9 @@ func NewCircuitBreakerEmbedding(provider EmbeddingProvider, config CircuitBreake
 
 // Embed delegates to the wrapped provider through the circuit breaker.
 func (c *CircuitBreakerEmbedding) Embed(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
-	var resp *EmbeddingResponse
-	err := c.cb.Execute(func() error {
-		var e error
-		resp, e = c.provider.Embed(ctx, req)
-		return e
+	return executeCB(c.cb, func() (*EmbeddingResponse, error) {
+		return c.provider.Embed(ctx, req)
 	})
-	return resp, err
 }
 
 // Name returns the underlying provider's name.
@@ -496,13 +502,9 @@ func NewCircuitBreakerRerank(provider RerankProvider, config CircuitBreakerConfi
 
 // Rerank delegates to the wrapped provider through the circuit breaker.
 func (c *CircuitBreakerRerank) Rerank(ctx context.Context, query string, docs []string) (*RerankResponse, error) {
-	var resp *RerankResponse
-	err := c.cb.Execute(func() error {
-		var e error
-		resp, e = c.provider.Rerank(ctx, query, docs)
-		return e
+	return executeCB(c.cb, func() (*RerankResponse, error) {
+		return c.provider.Rerank(ctx, query, docs)
 	})
-	return resp, err
 }
 
 // Name returns the underlying provider's name.
