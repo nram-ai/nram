@@ -251,16 +251,48 @@ func (s *ProviderAdminStore) detectContextWindow(ctx context.Context, slot *api.
 }
 
 // rerankProbeConfig builds the minimal provider.SlotConfig that ProbeRerankMethod
-// reads (BaseURL, APIKey, Model, CustomHeaders; it normalizes the URL itself and
-// ignores Type). Centralizing it keeps the test path and the save path from
-// drifting on which fields the probe depends on.
+// reads (BaseURL, APIKey, Model, CustomHeaders, Timeout; it normalizes the URL
+// itself and ignores Type). Centralizing it keeps the test path and the save path
+// from drifting on which fields the probe depends on. Timeout is carried so a
+// slot configured for a slow rerank endpoint probes with its own deadline rather
+// than the probe's default.
 func rerankProbeConfig(cfg api.ProviderSlotConfig) provider.SlotConfig {
-	return provider.SlotConfig{
+	pc := provider.SlotConfig{
 		BaseURL:       cfg.URL,
 		APIKey:        cfg.APIKey,
 		Model:         cfg.Model,
 		CustomHeaders: cfg.CustomHeaders,
 	}
+	if cfg.Timeout != nil {
+		pc.Timeout = *cfg.Timeout
+	}
+	return pc
+}
+
+// inheritSavedTestConfig fills the fields a re-test of an already-saved slot
+// leaves out. The Providers page masks the api_key and custom-header values on
+// read and never posts the timeout, so without this a saved auth-required slot
+// would be probed with no credential and the probe's default timeout, and would
+// fail its own test. "Absent means inherit": unlike the save path
+// (mergeProviderSecrets), a test never writes the config, so an omitted field can
+// only mean "use what's saved", never "remove it". A non-blank incoming value
+// (the onboarding editor Test sends the full body) always wins, so testing an
+// edited-but-unsaved key still works.
+func (s *ProviderAdminStore) inheritSavedTestConfig(ctx context.Context, slot string, cfg api.ProviderSlotConfig) api.ProviderSlotConfig {
+	existing := s.loadPersistedSlot(ctx, slot)
+	if existing == nil {
+		return cfg
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = existing.APIKey
+	}
+	if len(cfg.CustomHeaders) == 0 {
+		cfg.CustomHeaders = existing.CustomHeaders
+	}
+	if cfg.Timeout == nil {
+		cfg.Timeout = existing.Timeout
+	}
+	return cfg
 }
 
 // judgeCalibrationTokenFloor is the smallest cap that reliably fits a bare
@@ -443,6 +475,14 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 			Message: "unknown slot: " + req.Slot,
 		}, nil
 	}
+
+	// A re-test of an already-saved slot from the Providers page carries only the
+	// visible fields (type/url/model): the api_key and custom-header values are
+	// masked on read and the timeout is not posted. Inherit them from the stored
+	// slot before probing so a correctly-configured auth-required slot exercises
+	// the config the operator actually saved. Runs before slotCfg and both probe
+	// paths so all of them see the same inherited values.
+	req.Config = s.inheritSavedTestConfig(ctx, req.Slot, req.Config)
 
 	slotCfg := provider.SlotConfig{
 		Type:            req.Config.Type,

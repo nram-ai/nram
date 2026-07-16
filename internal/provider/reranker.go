@@ -353,7 +353,15 @@ func ProbeRerankMethod(ctx context.Context, cfg SlotConfig) (string, error) {
 		return "", fmt.Errorf("rerank probe: marshal payload: %w", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// A bare method probe fails fast at 10s by default, but a slot configured for a
+	// slow rerank endpoint carries its own timeout so the probe does not give up
+	// before the server would have answered.
+	probeTimeout := 10 * time.Second
+	if d := slotTimeout(cfg.Timeout); d > 0 {
+		probeTimeout = d
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, base+"/v1/rerank", bytes.NewReader(payload))
 	if err != nil {
@@ -365,7 +373,7 @@ func ProbeRerankMethod(ctx context.Context, cfg SlotConfig) (string, error) {
 	}
 	applyCustomHeaders(req, cfg.CustomHeaders, "Content-Type")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: probeTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("rerank probe: request failed: %w", err)

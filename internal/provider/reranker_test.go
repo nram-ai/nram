@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
@@ -317,6 +318,59 @@ func TestProbeRerankMethod(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestProbeRerankMethod_HonorsTimeout pins the probe's timeout to the slot's
+// configured value. The probe hardcoded 10s; a slot pointing at a slow rerank
+// endpoint carries its own (larger) timeout, and an unset value keeps the 10s
+// default.
+func TestProbeRerankMethod_HonorsTimeout(t *testing.T) {
+	t.Run("configured timeout bounds a slow probe", func(t *testing.T) {
+		// The handler never responds, so the only way the probe returns is its own
+		// timeout firing. It parks on an explicit release channel rather than
+		// r.Context().Done(): a client-side http.Client.Timeout does not promptly
+		// cancel the server request context (the parked handler never notices the
+		// dropped connection), which would otherwise hang srv.Close() indefinitely.
+		// Cleanup is LIFO, so registering srv.Close first means close(release) runs
+		// before it and unblocks the handler.
+		release := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			<-release
+		}))
+		t.Cleanup(srv.Close)
+		t.Cleanup(func() { close(release) })
+
+		start := time.Now()
+		_, err := ProbeRerankMethod(context.Background(), SlotConfig{
+			Type: ProviderTypeLlamaServer, BaseURL: srv.URL, Timeout: 1,
+		})
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Fatal("expected a timeout error from the blocking probe, got nil")
+		}
+		if elapsed > 5*time.Second {
+			t.Errorf("probe took %v; a 1s configured timeout must bail well before the 10s default", elapsed)
+		}
+	})
+
+	t.Run("unset timeout still probes at the default", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(openaiRerankResponse{
+				Results: []openaiRerankResult{{Index: 0, RelevanceScore: 0.9}},
+			})
+		}))
+		defer srv.Close()
+
+		method, err := ProbeRerankMethod(context.Background(), SlotConfig{
+			Type: ProviderTypeLlamaServer, BaseURL: srv.URL, Timeout: 0,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if method != RerankMethodCrossEncoder {
+			t.Errorf("method = %q, want cross_encoder", method)
+		}
+	})
 }
 
 // TestParseJudgeScore pins the parser to the judge's own instruction: output the

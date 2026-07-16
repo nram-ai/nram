@@ -683,13 +683,24 @@ func TestGetRegistryConfig(t *testing.T) {
 // field was omitted, which is how the provider sends temperature 0.
 var lastChatTemperature *float64
 
-func newJudgeRerankTestServer(t *testing.T, reply func(maxTokens int, user string) string) *httptest.Server {
+// newJudgeRerankTestServer serves POST /v1/chat/completions with reply(maxTokens,
+// user) as the content and 404s every other path (so /v1/rerank makes the probe
+// pick the judge path). An optional authorized predicate gates the chat endpoint
+// with 401 when it fails, letting a test assert a masked secret actually reached
+// the provider.
+func newJudgeRerankTestServer(t *testing.T, reply func(maxTokens int, user string) string, authorized ...func(r *http.Request) bool) *httptest.Server {
 	t.Helper()
 	lastChatTemperature = nil
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r) // includes /v1/rerank -> probe says "judge"
 			return
+		}
+		for _, ok := range authorized {
+			if !ok(r) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		var body struct {
 			MaxTokens int `json:"max_tokens"`
@@ -1087,5 +1098,142 @@ func TestJudgeCalibrationLadder(t *testing.T) {
 	// An unset/invalid cap falls back to the registered default.
 	if got := judgeCalibrationLadder(0); got[0].MaxTokens != service.GetDefaultInt(service.SettingRerankJudgeMaxTokens) {
 		t.Errorf("ladder(0) first rung = %+v, want the registered default cap", got[0])
+	}
+}
+
+// persistSlot writes a slot config to the settings repo under the same key/scope
+// loadPersistedSlot reads (provider.<slot>, global), so a subsequent Test resolves
+// it as the stored config.
+func persistSlot(t *testing.T, repo *storage.SettingsRepo, slot string, cfg api.ProviderSlotConfig) {
+	t.Helper()
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal slot %q: %v", slot, err)
+	}
+	if err := repo.Set(context.Background(), &model.Setting{
+		Key:   "provider." + slot,
+		Value: json.RawMessage(raw),
+		Scope: "global",
+	}); err != nil {
+		t.Fatalf("persist slot %q: %v", slot, err)
+	}
+}
+
+// newGatedChatServer is a chat-completions stub that gates the endpoint on
+// authorized(r), for asserting a masked secret (api_key or custom header) reaches
+// the provider. It delegates to newJudgeRerankTestServer with a constant reply;
+// the LLM slot tests exercise only the chat endpoint, not the rerank probe.
+func newGatedChatServer(t *testing.T, authorized func(r *http.Request) bool) *httptest.Server {
+	t.Helper()
+	srv := newJudgeRerankTestServer(t, func(int, string) string { return "ok" }, authorized)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestTestProvider_InheritsSavedSecrets is the fail-before / pass-after guard for
+// the masked-secret drop: the Providers page re-tests a saved slot by sending only
+// type/url/model, so a slot whose endpoint requires a key or a custom auth header
+// used to fail its own Test for want of a credential it can never post. TestProvider
+// now inherits the stored api_key and custom_headers first.
+func TestTestProvider_InheritsSavedSecrets(t *testing.T) {
+	// The cases differ only in which masked field carries the credential and how
+	// the server gates on it; the flow (persist, test without the secret, expect
+	// success) is shared.
+	cases := []struct {
+		name       string
+		saved      api.ProviderSlotConfig // secret field(s) only; type/url/model filled per run
+		authorized func(r *http.Request) bool
+	}{
+		{
+			name:       "stored api_key reaches the provider",
+			saved:      api.ProviderSlotConfig{APIKey: "sekret"},
+			authorized: func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer sekret" },
+		},
+		{
+			name:       "stored custom header reaches the provider",
+			saved:      api.ProviderSlotConfig{CustomHeaders: map[string]string{"X-Proxy-Auth": "gate-pass"}},
+			authorized: func(r *http.Request) bool { return r.Header.Get("X-Proxy-Auth") == "gate-pass" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, repo := newCalibrationStore(t)
+			srv := newGatedChatServer(t, tc.authorized)
+
+			saved := tc.saved
+			saved.Type, saved.URL, saved.Model = provider.ProviderTypeSGLang, srv.URL, "qwen"
+			persistSlot(t, repo, provider.SlotFact, saved)
+
+			// Mirror the Providers page: only type/url/model, no secret.
+			res, err := store.TestProvider(context.Background(), api.ProviderTestRequest{
+				Slot:   provider.SlotFact,
+				Config: api.ProviderSlotConfig{Type: provider.ProviderTypeSGLang, URL: srv.URL, Model: "qwen"},
+			})
+			if err != nil {
+				t.Fatalf("TestProvider: %v", err)
+			}
+			if !res.Success {
+				t.Fatalf("Success = false, message %q; the stored secret was not inherited", res.Message)
+			}
+		})
+	}
+}
+
+// TestTestProvider_JudgeInheritsSavedAPIKey proves the inherited key flows through
+// the reranker judge path (probe + real calibration completions), not just the
+// generic LLM path. The server has no /v1/rerank route (probe -> judge) and gates
+// the chat endpoint on the bearer, so calibration only succeeds if the stored key
+// was inherited.
+func TestTestProvider_JudgeInheritsSavedAPIKey(t *testing.T) {
+	store, _, repo := newCalibrationStore(t)
+	// A discriminating judge (1.0 for the relevant fixture, else 0.0) gated on the
+	// bearer: calibration only succeeds if the stored key was inherited into the
+	// judge completions.
+	srv := newJudgeRerankTestServer(t,
+		func(_ int, user string) string {
+			if strings.Contains(user, "Paris") {
+				return "1.0"
+			}
+			return "0.0"
+		},
+		func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer sekret" },
+	)
+	defer srv.Close()
+
+	persistSlot(t, repo, provider.SlotReranker, api.ProviderSlotConfig{
+		Type: provider.ProviderTypeSGLang, URL: srv.URL, Model: "qwen", APIKey: "sekret",
+	})
+
+	// Mirror the Providers page: no api_key in the request.
+	res, err := store.TestProvider(context.Background(), api.ProviderTestRequest{
+		Slot:   provider.SlotReranker,
+		Config: api.ProviderSlotConfig{Type: provider.ProviderTypeSGLang, URL: srv.URL, Model: "qwen"},
+	})
+	if err != nil {
+		t.Fatalf("TestProvider: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("Success = false, message %q; the judge path did not inherit the stored api_key", res.Message)
+	}
+	if res.Calibration == nil || !res.Calibration.Calibrated {
+		t.Fatalf("Calibration = %+v, want calibrated", res.Calibration)
+	}
+}
+
+// TestRerankProbeConfig_CarriesTimeout guards the field the probe now depends on:
+// a configured per-slot timeout must survive into the SlotConfig the probe reads.
+func TestRerankProbeConfig_CarriesTimeout(t *testing.T) {
+	timeout := 45
+	pc := rerankProbeConfig(api.ProviderSlotConfig{
+		URL: "http://example", Model: "m", Timeout: &timeout,
+	})
+	if pc.Timeout != 45 {
+		t.Errorf("Timeout = %d, want 45", pc.Timeout)
+	}
+
+	// A nil timeout leaves the probe default (0) in place.
+	pc = rerankProbeConfig(api.ProviderSlotConfig{URL: "http://example", Model: "m"})
+	if pc.Timeout != 0 {
+		t.Errorf("Timeout = %d, want 0 for an unset timeout", pc.Timeout)
 	}
 }
