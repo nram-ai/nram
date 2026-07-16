@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.40
+  version: 0.18.41
   license:
     name: MIT
 
@@ -6184,7 +6184,10 @@ components:
             thinkingConfig.thinkingBudget:0 on the 2.5 Flash family). Omitted/unset
             resolves to true (disabled), so existing slots keep skipping the
             reasoning pass. Inert for openai, anthropic, and openai-compatible,
-            where an explicit disable would 400 on current models.
+            where an explicit disable would 400 on current models. On the reranker
+            slot it is dropped on save unless the probed method is "judge": only
+            the generative judge completes, so a value stored against a
+            cross-encoder would be dead config nothing emits.
         rerank_method:
           type: string
           enum: [cross_encoder, judge]
@@ -6209,6 +6212,61 @@ components:
         latency_ms:
           type: integer
           format: int64
+        rerank_method:
+          type: string
+          enum: [cross_encoder, judge]
+          description: >-
+            Rerank method detected by the probe. Reranker slot only; absent for
+            every other slot.
+        calibration:
+          allOf:
+            - $ref: "#/components/schemas/RerankJudgeCalibration"
+          description: >-
+            Present only when rerank_method is "judge".
+
+    RerankJudgeCalibration:
+      type: object
+      description: >-
+        Result of driving the LLM-judge rerank path against a fixed known-answer
+        pair. The method probe alone only proves the server did not answer
+        POST /v1/rerank; whether the chat model behind it emits a usable relevance
+        number fails silently, so the test runs the judge for real and reports the
+        scores it produced.
+      properties:
+        calibrated:
+          type: boolean
+          description: >-
+            Whether some configuration produced parseable scores that
+            discriminated (relevant strictly above irrelevant). When false, only
+            diagnosis and last_output are meaningful.
+        disable_thinking:
+          type: boolean
+          description: >-
+            The winning configuration's thinking setting. Returned rather than
+            written: the test may be running against an unsaved form, so the UI
+            applies it to the slot's toggle and the operator's save persists it.
+        max_tokens:
+          type: integer
+          description: The winning per-candidate token cap.
+        max_tokens_applied:
+          type: boolean
+          description: >-
+            Whether the test wrote max_tokens back to the global
+            ranking.rerank.judge.max_tokens setting. It does so only when the
+            winning value differs from the stored one; that setting has no
+            slot-level field, which is why the server writes it directly.
+        relevant_score:
+          type: number
+          format: double
+        irrelevant_score:
+          type: number
+          format: double
+        diagnosis:
+          type: string
+          description: Operator-facing explanation of a failed calibration.
+        last_output:
+          type: string
+          description: Raw completion behind a non-numeric failure.
 
     OllamaModel:
       type: object

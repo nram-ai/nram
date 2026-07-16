@@ -130,7 +130,10 @@ type SlotConfig struct {
 	// A nil pointer means unset and resolves to disabled (see thinkingDisabled),
 	// so existing slots keep skipping the reasoning pass. OpenAI, Anthropic, and
 	// the generic openai-compatible type never receive a knob (an explicit disable
-	// 400s on current models), so the toggle is inert for them.
+	// 400s on current models), so the toggle is inert for them. It is also inert on
+	// a cross_encoder reranker, which does not generate: createRerankProvider
+	// deliberately omits it there, and the admin save path drops the stored value
+	// so it cannot linger as dead config.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
 	// RerankMethod selects the reranker-slot implementation: "cross_encoder"
 	// (deterministic /v1/rerank) or "judge" (generative chat model). Set by the

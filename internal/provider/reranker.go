@@ -221,7 +221,9 @@ func (j *judgeReranker) Name() string { return j.llm.Name() }
 // number. The prompt, token cap, and temperature come from the context-stamped
 // RerankJudgeConfig (the service resolves them from settings). Token usage is
 // summed across the per-document calls. A per-document completion error aborts the
-// whole rerank (callers fail soft and keep the prior order).
+// whole rerank (callers fail soft and keep the prior order), as does a completion
+// with no parseable score (NoJudgeScoreError): a judge that cannot emit a number
+// is misconfigured, and the caller's prior order beats a fabricated score.
 func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string) (*RerankResponse, error) {
 	jc := rerankJudgeConfigFromContext(ctx)
 	scores := make([]float64, len(docs))
@@ -237,7 +239,11 @@ func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string)
 		if err != nil {
 			return nil, fmt.Errorf("judge rerank: scoring document %d: %w", i, err)
 		}
-		scores[i] = parseJudgeScore(resp.Content)
+		score, ok := parseJudgeScore(resp.Content)
+		if !ok {
+			return nil, &NoJudgeScoreError{Doc: i, Content: resp.Content}
+		}
+		scores[i] = score
 		usage.PromptTokens += resp.Usage.PromptTokens
 		usage.CompletionTokens += resp.Usage.CompletionTokens
 		usage.TotalTokens += resp.Usage.TotalTokens
@@ -248,25 +254,83 @@ func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string)
 	return &RerankResponse{Scores: scores, Model: modelName, Usage: usage}, nil
 }
 
-// parseJudgeScore extracts the first numeric token from a judge completion and
-// clamps it to [0,1]. Unparseable output scores 0 (treated as irrelevant) rather
-// than erroring, so one malformed completion does not abort the rerank.
-func parseJudgeScore(content string) float64 {
-	fields := strings.FieldsFunc(content, func(r rune) bool {
-		return (r < '0' || r > '9') && r != '.' && r != '-'
-	})
-	for _, f := range fields {
-		if v, err := strconv.ParseFloat(f, 64); err == nil {
-			if v < 0 {
-				return 0
-			}
-			if v > 1 {
-				return 1
-			}
-			return v
+// Reasoning-trace delimiters emitted by Qwen3-class models when thinking is on.
+// The judge's token cap is sized for a bare number, so a trace that starts and
+// never closes is the signature of a completion that ran out of budget before it
+// reached an answer.
+const (
+	judgeThinkOpen  = "<think>"
+	judgeThinkClose = "</think>"
+)
+
+// stripJudgeThinking removes any reasoning trace from a judge completion and
+// returns the remaining answer text. An unclosed <think> means the model spent
+// its whole token budget reasoning and never emitted an answer, so there is
+// nothing to parse and ok is false.
+func stripJudgeThinking(content string) (string, bool) {
+	for {
+		before, rest, found := strings.Cut(content, judgeThinkOpen)
+		if !found {
+			return content, true
 		}
+		_, after, closed := strings.Cut(rest, judgeThinkClose)
+		if !closed {
+			return "", false
+		}
+		content = before + after
 	}
-	return 0
+}
+
+// parseJudgeScore extracts the judge's relevance score from a completion, or
+// reports that the completion carries no score (ok=false).
+//
+// The judge is instructed to "output the number and nothing else", so once any
+// reasoning trace is stripped the completion must be exactly that number: a bare
+// float, optionally followed by a period. Prose around the number, a second
+// number, or a truncated trace are all reported unparseable rather than mined for
+// whichever digit appears first. That mining is what the previous form did, and
+// it silently turned "Document 1: 0.9" and a budget-truncated trace into a
+// confident 1.0, marking every candidate maximally relevant with no error. A
+// value slightly outside [0,1] is clamped, since that is a model overshooting a
+// scale it clearly understood.
+func parseJudgeScore(content string) (float64, bool) {
+	s, ok := stripJudgeThinking(content)
+	if !ok {
+		return 0, false
+	}
+	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(strings.TrimSuffix(s, "."))
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	if v < 0 {
+		return 0, true
+	}
+	if v > 1 {
+		return 1, true
+	}
+	return v, true
+}
+
+// NoJudgeScoreError reports that the judge model returned a completion carrying
+// no parseable relevance score. It is kept distinct from a transport error so a
+// caller can tell "this model is not behaving as a generative judge" — thinking
+// left on, a token cap too small to reach the number, or a cross-encoder driven
+// down the chat path — from "the call failed". CalibrateJudge keys on it with
+// errors.As to diagnose a slot's configuration.
+type NoJudgeScoreError struct {
+	// Doc is the index of the document whose scoring completion failed to parse.
+	Doc int
+	// Content is the raw completion, kept verbatim for operator-facing diagnosis.
+	Content string
+}
+
+func (e *NoJudgeScoreError) Error() string {
+	return fmt.Sprintf("judge rerank: scoring document %d: no parseable score in %q", e.Doc, e.Content)
 }
 
 // ---------- auto-detect ----------

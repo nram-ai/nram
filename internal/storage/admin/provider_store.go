@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -262,6 +263,176 @@ func rerankProbeConfig(cfg api.ProviderSlotConfig) provider.SlotConfig {
 	}
 }
 
+// judgeCalibrationTokenFloor is the smallest cap that reliably fits a bare
+// relevance number once thinking is off. The registered default of 16 is enough
+// for "0.8" but leaves no room for a model that prefixes a word.
+const judgeCalibrationTokenFloor = 32
+
+// judgeCalibrationCeiling is the largest cap the ladder may try: the registered
+// maximum of ranking.rerank.judge.max_tokens, read from the schema so a calibrated
+// value can always be written back to that setting. Derived rather than copied,
+// because a hand-copied bound silently strands the ladder if the schema's Max
+// moves.
+func judgeCalibrationCeiling() int {
+	max, ok := maxForKey(service.SettingRerankJudgeMaxTokens)
+	if !ok {
+		// Unreachable while the key is registered with a Max; fall back to the
+		// floor rather than inventing a bound the setting would reject.
+		return judgeCalibrationTokenFloor
+	}
+	return int(max)
+}
+
+// judgeCalibrationLadder builds the configurations the reranker Test sweeps, in
+// preference order. Thinking off at the configured cap comes first because it is
+// both the cheapest and the resting state of every slot (an unset toggle already
+// resolves to off), so a healthy judge calibrates on the first attempt with two
+// calls. The thinking-on rung exists for models whose reasoning pass cannot be
+// suppressed on their provider type; it is last because a reasoning trace is dead
+// weight on a call that must emit one number.
+func judgeCalibrationLadder(current int) []provider.JudgeCalibrationCandidate {
+	if current <= 0 {
+		current = service.GetDefaultInt(service.SettingRerankJudgeMaxTokens)
+	}
+	ladder := []provider.JudgeCalibrationCandidate{{DisableThinking: true, MaxTokens: current}}
+	if current < judgeCalibrationTokenFloor {
+		ladder = append(ladder, provider.JudgeCalibrationCandidate{
+			DisableThinking: true,
+			MaxTokens:       judgeCalibrationTokenFloor,
+		})
+	}
+	return append(ladder, provider.JudgeCalibrationCandidate{
+		DisableThinking: false,
+		MaxTokens:       judgeCalibrationCeiling(),
+	})
+}
+
+// calibrateJudgeSlot drives the real LLM-judge path for a reranker slot whose
+// probe detected "judge", and reports which configuration (if any) yields a
+// parseable, discriminating relevance score.
+//
+// On success it writes back only the global ranking.rerank.judge.max_tokens
+// setting, and only when the winning cap differs from the stored one: that setting
+// has no slot-level form field, so the UI has nowhere to carry it. The winning
+// thinking value is returned rather than written, because Test runs against a
+// possibly-unsaved editor form and a slot-row write here would be silently
+// reverted by the operator's next Save.
+func (s *ProviderAdminStore) calibrateJudgeSlot(
+	ctx context.Context,
+	slotCfg provider.SlotConfig,
+	start time.Time,
+) (*api.ProviderTestResult, error) {
+	// Resolve the judge knobs exactly as the production rerank stage does
+	// (withRerankJudgeConfig, internal/service/rerank_stage.go), through the same
+	// cached SettingsService, so the configuration this test certifies is the one
+	// that actually runs. Notably the temperature is range-clamped there, and a
+	// second resolver here that skipped the clamp would calibrate at a value
+	// production would never use.
+	systemPrompt := s.deps.Settings.ResolveStringWithDefault(ctx, service.SettingRerankJudgeSystemPrompt, "global")
+	current := s.deps.Settings.ResolveIntWithDefault(ctx, service.SettingRerankJudgeMaxTokens, "global")
+	temperature := float64(0)
+	if s.deps.Settings != nil {
+		// ResolveFloatInRange is not nil-receiver safe, unlike the WithDefault
+		// resolvers above; its out-of-range fallback is 0, which is also the
+		// registered default, so an unwired service resolving to 0 is correct.
+		temperature = s.deps.Settings.ResolveFloatInRange(ctx, service.SettingRerankJudgeTemperature, "global", 0, 1, 0)
+	}
+
+	res, err := provider.CalibrateJudge(ctx, slotCfg, systemPrompt, temperature, judgeCalibrationLadder(current))
+	if err != nil {
+		return &api.ProviderTestResult{
+			Success:      false,
+			Message:      fmt.Sprintf("judge test failed: %v", err),
+			RerankMethod: provider.RerankMethodJudge,
+			LatencyMs:    time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	cal := &api.RerankJudgeCalibration{
+		Calibrated:      res.Calibrated,
+		RelevantScore:   res.RelevantScore,
+		IrrelevantScore: res.IrrelevantScore,
+		Diagnosis:       res.Diagnosis,
+		LastOutput:      res.LastOutput,
+	}
+	if !res.Calibrated {
+		return &api.ProviderTestResult{
+			Success:      false,
+			Message:      "reranker reachable (method: judge), but " + res.Diagnosis,
+			RerankMethod: provider.RerankMethodJudge,
+			Calibration:  cal,
+			LatencyMs:    time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	cal.DisableThinking = res.Winner.DisableThinking
+	cal.MaxTokens = res.Winner.MaxTokens
+
+	msg := fmt.Sprintf(
+		"reranker reachable (method: judge). Calibrated: thinking %s, max_tokens %d. Fixture scores: relevant %.3f vs irrelevant %.3f.",
+		thinkingWord(res.Winner.DisableThinking), res.Winner.MaxTokens, res.RelevantScore, res.IrrelevantScore,
+	)
+	if res.Winner.MaxTokens != current {
+		if werr := s.setJudgeMaxTokens(ctx, res.Winner.MaxTokens); werr != nil {
+			slog.WarnContext(ctx, "judge calibration: writing max_tokens failed",
+				"key", service.SettingRerankJudgeMaxTokens, "value", res.Winner.MaxTokens, "err", werr)
+			msg += fmt.Sprintf(" Could not save max_tokens %d -> %d: %v.", current, res.Winner.MaxTokens, werr)
+		} else {
+			cal.MaxTokensApplied = true
+			msg += fmt.Sprintf(" Saved %s: %d -> %d.", service.SettingRerankJudgeMaxTokens, current, res.Winner.MaxTokens)
+		}
+	}
+
+	return &api.ProviderTestResult{
+		Success:      true,
+		Message:      msg,
+		RerankMethod: provider.RerankMethodJudge,
+		Calibration:  cal,
+		LatencyMs:    time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// thinkingWord renders a DisableThinking value the way an operator reads it.
+func thinkingWord(disabled bool) string {
+	if disabled {
+		return "off"
+	}
+	return "on"
+}
+
+// setJudgeMaxTokens writes the global judge token cap discovered by calibration.
+//
+// The value is a JSON number, matching this key's schema and registered default,
+// which is why this writes the repo directly rather than going through
+// SettingsService.Set (that takes a string and would store "32").
+func (s *ProviderAdminStore) setJudgeMaxTokens(ctx context.Context, v int) error {
+	if s.deps.SettingsRepo == nil {
+		return errors.New("settings repo unavailable")
+	}
+	value, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal judge max_tokens: %w", err)
+	}
+	if err := s.deps.SettingsRepo.Set(ctx, &model.Setting{
+		Key:   service.SettingRerankJudgeMaxTokens,
+		Value: json.RawMessage(value),
+		Scope: "global",
+	}); err != nil {
+		return err
+	}
+	// The live rerank stage reads this key through the cached SettingsService
+	// resolver (withRerankJudgeConfig, internal/service/rerank_stage.go). Writing
+	// through settingsRepo skips that cache's own invalidation, so without this
+	// eviction a calibrated raise would not reach the reranker until the entry's
+	// TTL elapsed (~30s) — the operator would see "Saved 16 -> 32" next to a judge
+	// still failing at 16. Mirrors EnrichmentAdminStore.SetPaused and the
+	// invalidation SettingsAdminStore.UpdateSetting performs for the same reason.
+	if s.deps.Settings != nil {
+		s.deps.Settings.InvalidateCache(service.SettingRerankJudgeMaxTokens, "global")
+	}
+	return nil
+}
+
 func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderTestRequest) (*api.ProviderTestResult, error) {
 	start := time.Now()
 
@@ -295,19 +466,27 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 	// is a cross-encoder or must be driven as an LLM judge.
 	if def.Kind == provider.KindReranker {
 		method, perr := provider.ProbeRerankMethod(ctx, rerankProbeConfig(req.Config))
-		latency := time.Since(start).Milliseconds()
 		if perr != nil {
 			return &api.ProviderTestResult{
 				Success:   false,
 				Message:   fmt.Sprintf("test failed: %v", perr),
-				LatencyMs: latency,
+				LatencyMs: time.Since(start).Milliseconds(),
 			}, nil
 		}
-		return &api.ProviderTestResult{
-			Success:   true,
-			Message:   fmt.Sprintf("reranker reachable (detected method: %s)", method),
-			LatencyMs: latency,
-		}, nil
+		if method != provider.RerankMethodJudge {
+			return &api.ProviderTestResult{
+				Success:      true,
+				Message:      fmt.Sprintf("reranker reachable (detected method: %s)", method),
+				RerankMethod: method,
+				LatencyMs:    time.Since(start).Milliseconds(),
+			}, nil
+		}
+		// A "judge" verdict means only that POST /v1/rerank 4xx'd. The chat model
+		// behind it has not been touched yet, and whether it emits a usable
+		// relevance number fails silently, so drive it for real before reporting
+		// success. Uses the full slotCfg: rerankProbeConfig drops Type and Timeout,
+		// which the judge needs in order to be built at all.
+		return s.calibrateJudgeSlot(ctx, slotCfg, start)
 	}
 
 	// Build a single-slot registry and probe it by kind.
@@ -429,6 +608,16 @@ func (s *ProviderAdminStore) UpdateProviderSlot(ctx context.Context, slot string
 				"err", perr, "method", cfg.RerankMethod)
 		} else {
 			cfg.RerankMethod = method
+		}
+		// Only the generative judge honors the thinking toggle: createRerankProvider
+		// builds the cross-encoder without DisableThinking, so a value stored here
+		// would be dead config nothing ever emits. The console hides the control for
+		// a cross-encoder, but it decides that from the last method it saw, which
+		// can be stale (re-point a judge slot at a cross-encoder and save without
+		// testing). This runs on the method just probed above, so it holds for every
+		// client regardless of what the UI believed.
+		if cfg.RerankMethod == provider.RerankMethodCrossEncoder {
+			cfg.DisableThinking = nil
 		}
 	}
 

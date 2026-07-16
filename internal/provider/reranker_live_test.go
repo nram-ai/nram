@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"testing"
@@ -17,8 +18,8 @@ import (
 // Gated on NRAM_LIVE_JUDGE_RERANK_URL + NRAM_LIVE_JUDGE_RERANK_MODEL so it never
 // runs in CI. Type defaults to ollama and thinking is disabled by default; set
 // NRAM_LIVE_JUDGE_RERANK_TYPE / NRAM_LIVE_JUDGE_RERANK_THINKING=on to override.
-// A generative chat model is required (a cross-encoder reranker fails the final
-// assertion). Run:
+// A generative chat model is required; a cross-encoder pointed here fails at the
+// no-parseable-score check below, not at the ranking assertion. Run:
 //
 //	NRAM_LIVE_JUDGE_RERANK_URL=http://192.168.2.43:30000 \
 //	NRAM_LIVE_JUDGE_RERANK_MODEL='Qwen/Qwen3-8B' \
@@ -77,6 +78,17 @@ func TestJudgeReranker_Live(t *testing.T) {
 
 	resp, err := rp.Rerank(ctx, query, docs)
 	if err != nil {
+		// A model that is not a usable generative judge fails HERE, not at the
+		// ranking assertion below: parseJudgeScore reports no parseable score and
+		// the judge aborts rather than inventing one. That covers both live failure
+		// modes seen on 2026-07-13 — a cross-encoder driven down the chat path
+		// (token noise) and a thinking model whose trace outruns the token cap —
+		// which the old first-number-wins parser salvaged into a flat 1.0 and 0.0
+		// respectively.
+		if noScore, ok := errors.AsType[*NoJudgeScoreError](err); ok {
+			t.Fatalf("live judge emitted no parseable score for doc %d (completion %q): the configured model is not a usable generative judge (needs a generative chat model with thinking disabled and enough max_tokens to reach a number)",
+				noScore.Doc, noScore.Content)
+		}
 		t.Fatalf("live judge Rerank failed: %v", err)
 	}
 	if len(resp.Scores) != len(docs) {
@@ -93,13 +105,12 @@ func TestJudgeReranker_Live(t *testing.T) {
 		resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens, resp.Model)
 
 	// Ranking semantics: the on-topic doc must score strictly above the
-	// clearly-irrelevant cafeteria doc. A model that returns a constant (a
-	// cross-encoder reranker driven as a chat judge emits token noise that
-	// parseJudgeScore salvages to a flat 1.0; a thinking model under a tight
-	// token cap emits no number and flattens to 0.0) fails here, which is the
-	// signal that the configured model is not a usable generative judge.
+	// clearly-irrelevant cafeteria doc. What reaches this assertion is now only a
+	// model that emits real numbers but does not discriminate, scoring every
+	// candidate alike; the unparseable failure modes abort at the error check
+	// above. Both are the same verdict for an operator: not a usable judge.
 	if resp.Scores[0] <= resp.Scores[1] {
-		t.Errorf("relevant doc scored %.4f, not above the irrelevant doc %.4f; the configured model is not producing a usable judge signal (needs a generative chat model with thinking disabled and enough max_tokens for a number)",
+		t.Errorf("relevant doc scored %.4f, not above the irrelevant doc %.4f; the model emits numbers but does not discriminate, so it adds no ranking signal",
 			resp.Scores[0], resp.Scores[1])
 	}
 }

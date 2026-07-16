@@ -168,7 +168,10 @@ type ProviderSlotConfig struct {
 	// to true (disabled), so existing slots and slots that never touch the toggle
 	// keep skipping the reasoning pass. Honored for the Ollama/OpenRouter/vLLM/
 	// SGLang/llama-server/Gemini types; inert for openai/anthropic/openai-compatible,
-	// where an explicit disable would 400 on current models.
+	// where an explicit disable would 400 on current models. On the reranker slot
+	// it is dropped on save unless the probed method is "judge": only the
+	// generative judge completes, so a value stored against a cross-encoder would
+	// be dead config nothing emits.
 	DisableThinking *bool `json:"disable_thinking,omitempty"`
 	// RerankMethod selects the reranker-slot implementation ("cross_encoder" or
 	// "judge"). Reranker slot only. Auto-detected by the save/test path
@@ -178,11 +181,54 @@ type ProviderSlotConfig struct {
 	RerankMethod string `json:"rerank_method,omitempty"`
 }
 
+// RerankJudgeCalibration reports what the reranker Test found when it drove the
+// LLM-judge path against a fixed known-answer pair. Present only for a reranker
+// slot whose detected method is "judge"; the cross-encoder path is deterministic
+// and needs no calibration.
+//
+// It exists because a "judge" verdict from the method probe only means the server
+// did not answer POST /v1/rerank. Whether the chat model behind it emits a usable
+// relevance number depends on configuration that otherwise fails silently, so the
+// Test runs the judge for real and reports the scores it got.
+type RerankJudgeCalibration struct {
+	// Calibrated reports whether some configuration produced parseable scores that
+	// discriminated (relevant strictly above irrelevant). When false, Diagnosis
+	// explains why and the remaining config fields are not meaningful.
+	Calibrated bool `json:"calibrated"`
+	// DisableThinking is the winning configuration's thinking setting. The UI
+	// applies it to the slot's toggle so a save persists it; the Test itself never
+	// writes the slot row.
+	DisableThinking bool `json:"disable_thinking"`
+	// MaxTokens is the winning per-candidate token cap.
+	MaxTokens int `json:"max_tokens"`
+	// MaxTokensApplied reports whether the Test wrote MaxTokens back to the global
+	// ranking.rerank.judge.max_tokens setting (it does so only when the winning
+	// value differs from the stored one). That setting has no slot-level form
+	// field, which is why the Test writes it rather than handing it to the UI.
+	MaxTokensApplied bool `json:"max_tokens_applied"`
+	// RelevantScore and IrrelevantScore are the fixture's scores under the winning
+	// configuration, surfaced so an operator sees the actual separation instead of
+	// a bare green check.
+	RelevantScore   float64 `json:"relevant_score"`
+	IrrelevantScore float64 `json:"irrelevant_score"`
+	// Diagnosis explains a failed calibration in operator-facing terms.
+	Diagnosis string `json:"diagnosis,omitempty"`
+	// LastOutput is the raw completion behind a non-numeric failure.
+	LastOutput string `json:"last_output,omitempty"`
+}
+
 // ProviderTestResult is the response body for POST /providers/test.
 type ProviderTestResult struct {
 	Success   bool   `json:"success"`
 	Message   string `json:"message"`
 	LatencyMs int64  `json:"latency_ms"`
+	// RerankMethod is the method detected by the probe. Reranker slot only; empty
+	// for every other slot. Returned so the UI can gate reranker-specific controls
+	// (the thinking toggle is meaningful for a judge and dead for a cross-encoder)
+	// on a freshly detected method rather than only the last persisted one.
+	RerankMethod string `json:"rerank_method,omitempty"`
+	// Calibration is present only when RerankMethod is "judge".
+	Calibration *RerankJudgeCalibration `json:"calibration,omitempty"`
 }
 
 // OllamaModel describes an Ollama model available on the instance.

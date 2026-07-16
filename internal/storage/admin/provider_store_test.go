@@ -13,7 +13,9 @@ import (
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/config"
 	"github.com/nram-ai/nram/internal/migration"
+	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
+	"github.com/nram-ai/nram/internal/service"
 	"github.com/nram-ai/nram/internal/storage"
 )
 
@@ -667,5 +669,423 @@ func TestGetRegistryConfig(t *testing.T) {
 	}
 	if embedding.BaseURL != "https://api.openai.com" {
 		t.Errorf("expected https://api.openai.com, got %q", embedding.BaseURL)
+	}
+}
+
+// newJudgeRerankTestServer serves a chat endpoint that answers the calibration
+// fixture, and 404s /v1/rerank so ProbeRerankMethod detects "judge" (the shape of
+// any plain chat server). reply is called with the completion's max_tokens and the
+// user message, and returns the content to answer with, so a test can model a
+// model that only behaves above a certain token cap.
+// lastChatTemperature records the temperature field of the most recent chat
+// request the helper below served, so a test can assert the judge was driven at
+// the value production resolves rather than the raw stored one. nil means the
+// field was omitted, which is how the provider sends temperature 0.
+var lastChatTemperature *float64
+
+func newJudgeRerankTestServer(t *testing.T, reply func(maxTokens int, user string) string) *httptest.Server {
+	t.Helper()
+	lastChatTemperature = nil
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r) // includes /v1/rerank -> probe says "judge"
+			return
+		}
+		var body struct {
+			MaxTokens int `json:"max_tokens"`
+			// Temperature is a pointer so a test can tell "omitted" (the provider
+			// skips the field at 0) from an explicitly sent value.
+			Temperature *float64 `json:"temperature"`
+			Messages    []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode chat request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		lastChatTemperature = body.Temperature
+		user := ""
+		if len(body.Messages) > 1 {
+			user = body.Messages[len(body.Messages)-1].Content
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "stub",
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": reply(body.MaxTokens, user)}},
+			},
+			"usage": map[string]any{"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+		})
+	}))
+}
+
+// newCalibrationStore builds a provider admin store wired the way production
+// wires it (cmd/server/main.go), with a real cached SettingsService over a
+// migrated DB.
+func newCalibrationStore(t *testing.T) (*ProviderAdminStore, *service.SettingsService, *storage.SettingsRepo) {
+	t.Helper()
+	repo := storage.NewSettingsRepo(testSQLiteDBWithMigrations(t))
+	settings := service.NewSettingsService(repo)
+	return NewProviderAdminStore(ProviderAdminDeps{SettingsRepo: repo, Settings: settings}), settings, repo
+}
+
+// testReranker runs the reranker slot's Test against url/model.
+func testReranker(t *testing.T, store *ProviderAdminStore, url, model string) *api.ProviderTestResult {
+	t.Helper()
+	res, err := store.TestProvider(context.Background(), api.ProviderTestRequest{
+		Slot:   provider.SlotReranker,
+		Config: api.ProviderSlotConfig{Type: provider.ProviderTypeSGLang, URL: url, Model: model},
+	})
+	if err != nil {
+		t.Fatalf("TestProvider: %v", err)
+	}
+	return res
+}
+
+// judgeMaxTokens reads the cap back through the same cached resolver the live
+// rerank stage uses (withRerankJudgeConfig), not the raw row. A calibration write
+// that skipped the resolver's cache invalidation reads stale here, which is the
+// operator-visible bug: "Saved 16 -> 32" next to a reranker still running at 16.
+func judgeMaxTokens(t *testing.T, settings *service.SettingsService) int {
+	t.Helper()
+	return settings.ResolveIntWithDefault(context.Background(), service.SettingRerankJudgeMaxTokens, "global")
+}
+
+// TestTestProvider_JudgeCalibration drives the reranker Test end to end against a
+// chat server. Before this, the reranker Test returned as soon as the method probe
+// said "judge" and never invoked the model, so a judge that emitted nothing usable
+// still reported success. Each case asserts the Test now reflects what the model
+// actually did.
+func TestTestProvider_JudgeCalibration(t *testing.T) {
+	t.Run("healthy judge calibrates on the first rung and writes nothing", func(t *testing.T) {
+		store, settings, _ := newCalibrationStore(t)
+
+		var caps []int
+		srv := newJudgeRerankTestServer(t, func(maxTokens int, user string) string {
+			caps = append(caps, maxTokens)
+			if strings.Contains(user, "Paris") {
+				return "1.0"
+			}
+			return "0.0"
+		})
+		defer srv.Close()
+
+		res := testReranker(t, store, srv.URL, "qwen")
+		if !res.Success {
+			t.Fatalf("Success = false, message %q", res.Message)
+		}
+		if res.RerankMethod != provider.RerankMethodJudge {
+			t.Errorf("RerankMethod = %q, want judge", res.RerankMethod)
+		}
+		if res.Calibration == nil || !res.Calibration.Calibrated {
+			t.Fatalf("Calibration = %+v, want calibrated", res.Calibration)
+		}
+		if !res.Calibration.DisableThinking {
+			t.Error("DisableThinking = false, want the thinking-off rung to win")
+		}
+		if res.Calibration.RelevantScore <= res.Calibration.IrrelevantScore {
+			t.Errorf("scores %v/%v do not discriminate",
+				res.Calibration.RelevantScore, res.Calibration.IrrelevantScore)
+		}
+		// Only the first rung ran (2 docs), at the configured cap.
+		if len(caps) != 2 || caps[0] != 16 {
+			t.Errorf("completion caps = %v, want two calls at 16", caps)
+		}
+		// A winning cap equal to the stored one must not write the setting.
+		if res.Calibration.MaxTokensApplied {
+			t.Error("MaxTokensApplied = true, want no write when the cap is unchanged")
+		}
+		if got := judgeMaxTokens(t, settings); got != 16 {
+			t.Errorf("judge max_tokens = %d, want 16 (untouched)", got)
+		}
+	})
+
+	t.Run("cap too small to emit a number raises and saves max_tokens", func(t *testing.T) {
+		store, settings, _ := newCalibrationStore(t)
+
+		// Models the live failure: at 16 the reasoning trace eats the budget and
+		// no number is ever emitted; with more room the model answers.
+		srv := newJudgeRerankTestServer(t, func(maxTokens int, user string) string {
+			if maxTokens < 32 {
+				return "<think>Let me weigh whether this document"
+			}
+			if strings.Contains(user, "Paris") {
+				return "0.95"
+			}
+			return "0.05"
+		})
+		defer srv.Close()
+
+		// Prime the resolver cache with the pre-calibration value, so reading it
+		// back below exercises the cache invalidation rather than a cold lookup.
+		// This is what the live rerank stage would have cached.
+		if got := judgeMaxTokens(t, settings); got != 16 {
+			t.Fatalf("pre-calibration max_tokens = %d, want the registered default 16", got)
+		}
+
+		res := testReranker(t, store, srv.URL, "qwen")
+		if !res.Success || res.Calibration == nil || !res.Calibration.Calibrated {
+			t.Fatalf("want a calibrated success, got success=%v cal=%+v msg=%q",
+				res.Success, res.Calibration, res.Message)
+		}
+		if res.Calibration.MaxTokens != judgeCalibrationTokenFloor {
+			t.Errorf("MaxTokens = %d, want the floor %d", res.Calibration.MaxTokens, judgeCalibrationTokenFloor)
+		}
+		if !res.Calibration.MaxTokensApplied {
+			t.Error("MaxTokensApplied = false, want the raised cap written")
+		}
+		// Through the cached resolver the reranker itself reads: a write that
+		// skipped invalidation would still report 16 here for the cache TTL (~30s),
+		// leaving the operator a green "Saved 16 -> 32" beside a judge still failing
+		// at 16.
+		if got := judgeMaxTokens(t, settings); got != judgeCalibrationTokenFloor {
+			t.Errorf("judge max_tokens via the cached resolver = %d, want %d (stale cache: the write did not invalidate)",
+				got, judgeCalibrationTokenFloor)
+		}
+	})
+
+	t.Run("cross-encoder driven as a judge fails with a diagnosis", func(t *testing.T) {
+		store, settings, _ := newCalibrationStore(t)
+
+		// A cross-encoder on a chat endpoint: token noise, never a number.
+		srv := newJudgeRerankTestServer(t, func(int, string) string {
+			return "query passage relevance yes yes"
+		})
+		defer srv.Close()
+
+		res := testReranker(t, store, srv.URL, "bge-reranker")
+		if res.Success {
+			t.Fatal("Success = true for a model that never emitted a number")
+		}
+		if res.Calibration == nil || res.Calibration.Calibrated {
+			t.Fatalf("Calibration = %+v, want an uncalibrated result", res.Calibration)
+		}
+		if !strings.Contains(res.Calibration.Diagnosis, "cross-encoder") {
+			t.Errorf("diagnosis = %q, want it to name the cross-encoder mis-detection",
+				res.Calibration.Diagnosis)
+		}
+		if res.Calibration.LastOutput == "" {
+			t.Error("LastOutput empty, want the raw completion echoed")
+		}
+		// A failed calibration must not write the setting.
+		if got := judgeMaxTokens(t, settings); got != 16 {
+			t.Errorf("judge max_tokens = %d, want 16 (untouched by a failed calibration)", got)
+		}
+	})
+
+	t.Run("flat scorer fails without a write", func(t *testing.T) {
+		store, settings, _ := newCalibrationStore(t)
+
+		srv := newJudgeRerankTestServer(t, func(int, string) string { return "1.0" })
+		defer srv.Close()
+
+		res := testReranker(t, store, srv.URL, "m")
+		if res.Success {
+			t.Fatal("Success = true for a model that scores every candidate alike")
+		}
+		if res.Calibration == nil || !strings.Contains(res.Calibration.Diagnosis, "discriminate") {
+			t.Fatalf("Calibration = %+v, want a no-discrimination diagnosis", res.Calibration)
+		}
+		if got := judgeMaxTokens(t, settings); got != 16 {
+			t.Errorf("judge max_tokens = %d, want 16 (untouched)", got)
+		}
+	})
+
+	// The calibration must drive the judge with the knobs the live rerank stage
+	// resolves, not the raw stored row, or it certifies a configuration production
+	// never runs — the exact class of silent mismatch this feature exists to end.
+	// Temperature is the one knob production range-clamps (rerank_stage.go's
+	// ResolveFloatInRange(...,0,1,0)), so an out-of-range row is the test for it.
+	t.Run("out-of-range temperature is clamped to the value production uses", func(t *testing.T) {
+		store, _, repo := newCalibrationStore(t)
+
+		if err := repo.Set(context.Background(), &model.Setting{
+			Key:   service.SettingRerankJudgeTemperature,
+			Value: json.RawMessage(`5`),
+			Scope: "global",
+		}); err != nil {
+			t.Fatalf("seed temperature: %v", err)
+		}
+
+		srv := newJudgeRerankTestServer(t, func(_ int, user string) string {
+			if strings.Contains(user, "Paris") {
+				return "1.0"
+			}
+			return "0.0"
+		})
+		defer srv.Close()
+
+		res := testReranker(t, store, srv.URL, "qwen")
+		if !res.Success {
+			t.Fatalf("Success = false: %q", res.Message)
+		}
+		// Production clamps 5 to the 0 fallback, and the provider omits a zero
+		// temperature entirely. Reading the row raw would have sent 5.
+		if lastChatTemperature != nil {
+			t.Errorf("judge driven at temperature %v, want it clamped to production's 0 (field omitted)", *lastChatTemperature)
+		}
+	})
+
+	t.Run("cross-encoder endpoint skips calibration entirely", func(t *testing.T) {
+		store, _, _ := newCalibrationStore(t)
+
+		// Answers /v1/rerank, so the probe detects cross_encoder and the judge is
+		// never built. A chat call here would be a bug.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/chat/completions" {
+				t.Error("cross-encoder test called the chat endpoint")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{{"index": 0, "relevance_score": 0.9}},
+			})
+		}))
+		defer srv.Close()
+
+		res := testReranker(t, store, srv.URL, "bge")
+		if !res.Success {
+			t.Fatalf("Success = false: %q", res.Message)
+		}
+		if res.RerankMethod != provider.RerankMethodCrossEncoder {
+			t.Errorf("RerankMethod = %q, want cross_encoder", res.RerankMethod)
+		}
+		if res.Calibration != nil {
+			t.Errorf("Calibration = %+v, want none for a cross-encoder", res.Calibration)
+		}
+	})
+}
+
+// TestUpdateProviderSlot_CrossEncoderDropsThinking pins the invariant at the layer
+// that owns it: only the generative judge honors the thinking toggle, because
+// createRerankProvider builds the cross-encoder without DisableThinking, so a
+// value stored on a cross-encoder slot is dead config nothing emits. The console
+// hides the control for a cross-encoder, but it decides that from the last method
+// it saw — re-point a judge slot at a cross-encoder and save without testing and
+// the client happily sends the stale value. The server normalizes on the method it
+// just probed, so it holds for every client.
+func TestUpdateProviderSlot_CrossEncoderDropsThinking(t *testing.T) {
+	ctx := context.Background()
+	disable := true
+
+	t.Run("cross-encoder save drops the dead toggle", func(t *testing.T) {
+		store, _, repo := newCalibrationStore(t)
+		// Answers /v1/rerank, so the probe detects cross_encoder.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{{"index": 0, "relevance_score": 0.9}},
+			})
+		}))
+		defer srv.Close()
+
+		if _, err := store.UpdateProviderSlot(ctx, provider.SlotReranker, api.ProviderSlotConfig{
+			Type: provider.ProviderTypeSGLang, URL: srv.URL, Model: "bge",
+			DisableThinking: &disable, // what a stale client sends
+		}, api.UpdateProviderSlotOpts{}); err != nil {
+			t.Fatalf("UpdateProviderSlot: %v", err)
+		}
+
+		row, err := repo.Get(ctx, "provider."+provider.SlotReranker, "global")
+		if err != nil || row == nil {
+			t.Fatalf("read back slot: %v", err)
+		}
+		var stored api.ProviderSlotConfig
+		if err := json.Unmarshal(row.Value, &stored); err != nil {
+			t.Fatalf("decode slot: %v", err)
+		}
+		if stored.RerankMethod != provider.RerankMethodCrossEncoder {
+			t.Fatalf("RerankMethod = %q, want cross_encoder", stored.RerankMethod)
+		}
+		if stored.DisableThinking != nil {
+			t.Errorf("stored disable_thinking = %v on a cross_encoder, want it dropped as dead config",
+				*stored.DisableThinking)
+		}
+		if strings.Contains(string(row.Value), "disable_thinking") {
+			t.Errorf("row still carries the dead key: %s", row.Value)
+		}
+	})
+
+	t.Run("judge save keeps the toggle", func(t *testing.T) {
+		store, _, repo := newCalibrationStore(t)
+		// 404s /v1/rerank, so the probe detects judge.
+		srv := httptest.NewServer(http.NotFoundHandler())
+		defer srv.Close()
+
+		if _, err := store.UpdateProviderSlot(ctx, provider.SlotReranker, api.ProviderSlotConfig{
+			Type: provider.ProviderTypeSGLang, URL: srv.URL, Model: "qwen",
+			DisableThinking: &disable,
+		}, api.UpdateProviderSlotOpts{}); err != nil {
+			t.Fatalf("UpdateProviderSlot: %v", err)
+		}
+
+		row, err := repo.Get(ctx, "provider."+provider.SlotReranker, "global")
+		if err != nil || row == nil {
+			t.Fatalf("read back slot: %v", err)
+		}
+		var stored api.ProviderSlotConfig
+		if err := json.Unmarshal(row.Value, &stored); err != nil {
+			t.Fatalf("decode slot: %v", err)
+		}
+		if stored.RerankMethod != provider.RerankMethodJudge {
+			t.Fatalf("RerankMethod = %q, want judge", stored.RerankMethod)
+		}
+		if stored.DisableThinking == nil || !*stored.DisableThinking {
+			t.Errorf("stored disable_thinking = %v, want true kept for a judge", stored.DisableThinking)
+		}
+	})
+}
+
+// TestJudgeCalibrationLadder pins the sweep order: thinking off at the configured
+// cap first (the resting state of every slot, so a healthy judge calibrates in one
+// attempt), then a raised cap, and thinking-on last and only at the ceiling, since
+// a reasoning trace never fits a cap sized for one number.
+func TestJudgeCalibrationLadder(t *testing.T) {
+	// Resolve the setting's registered Max by a path independent of
+	// judgeCalibrationCeiling(). Expressing the expectation in terms of that
+	// function would be tautological: a maxForKey that silently missed would fall
+	// back to the floor and both sides would agree, which is precisely the
+	// stranding the schema lookup exists to prevent.
+	var schemaMax float64
+	for _, sc := range settingsSchemas {
+		if sc.Key == service.SettingRerankJudgeMaxTokens {
+			if sc.Max == nil {
+				t.Fatalf("%s has no registered Max; the ladder ceiling has nothing to track",
+					service.SettingRerankJudgeMaxTokens)
+			}
+			schemaMax = *sc.Max
+		}
+	}
+	if schemaMax == 0 {
+		t.Fatalf("%s is not in settingsSchemas", service.SettingRerankJudgeMaxTokens)
+	}
+	if ceiling := judgeCalibrationCeiling(); float64(ceiling) != schemaMax {
+		t.Errorf("ceiling = %d, want the registered Max %v (maxForKey missed and fell back)", ceiling, schemaMax)
+	}
+
+	got := judgeCalibrationLadder(16)
+	want := []provider.JudgeCalibrationCandidate{
+		{DisableThinking: true, MaxTokens: 16},
+		{DisableThinking: true, MaxTokens: judgeCalibrationTokenFloor},
+		{DisableThinking: false, MaxTokens: int(schemaMax)},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ladder = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("rung %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A cap already at or above the floor does not get a duplicate rung.
+	if got := judgeCalibrationLadder(64); len(got) != 2 || got[0].MaxTokens != 64 {
+		t.Errorf("ladder(64) = %+v, want the configured rung then thinking-on", got)
+	}
+
+	// An unset/invalid cap falls back to the registered default.
+	if got := judgeCalibrationLadder(0); got[0].MaxTokens != service.GetDefaultInt(service.SettingRerankJudgeMaxTokens) {
+		t.Errorf("ladder(0) first rung = %+v, want the registered default cap", got[0])
 	}
 }

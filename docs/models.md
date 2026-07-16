@@ -119,6 +119,15 @@ You do not need to enter the embedding model's dimension count. nram auto-detect
 The reranker is off by default and not required. When configured, it re-scores the top recall and `ask` candidates for relevance before they are returned, demoting results that ranked high on vector or lexical similarity but are not actually on topic. nram detects which of two methods the configured endpoint supports at save time:
 
 - **Cross-encoder** (`cross_encoder`): a dedicated relevance model served over a `/v1/rerank` endpoint (for example a `bge-reranker`-class model). It scores every `(query, candidate)` pair in one call, is deterministic, and is cheap per call. Prefer it when you can run one.
-- **LLM judge** (`judge`): any generative chat model, scored one candidate at a time. It needs no separate reranker server, but is non-deterministic and costs more tokens. Use it to reuse a chat model you already host when a dedicated cross-encoder is not available.
+- **LLM judge** (`judge`): a generative chat model, scored one candidate at a time. It needs no separate reranker server, but is non-deterministic and costs more tokens. Use it to reuse a chat model you already host when a dedicated cross-encoder is not available.
+
+Detection keys off the endpoint, not the model: a server that answers `/v1/rerank` is a cross-encoder, and anything else is driven as a judge. That distinction matters, because a cross-encoder *model* served over a chat-only endpoint (Ollama, say) is detected as a judge and cannot act as one. **Test** the slot to find out: when the method resolves to `judge`, the test drives the real judge against a known-answer pair and reports the scores it got, rather than only checking reachability.
+
+A judge must reply with the bare relevance number and nothing else, which is what the test is checking. Two things stop that from happening, and both used to fail silently by flattening every score to the same value:
+
+- **A reasoning pass.** Leave the slot's **Disable Thinking** toggle on (its default). A thinking model spends the token budget on its trace and never reaches the number. The toggle is offered on the reranker only when the method is `judge`; a cross-encoder does not generate, so it has no use for it.
+- **Too small a token budget.** `ranking.rerank.judge.max_tokens` (default 16) has to leave room for the number. The test calibrates this: if the model cannot reach a number within the current cap, it raises the setting to the smallest value that works and saves it.
+
+Editing `ranking.rerank.judge.system_prompt` is subject to the same contract: prompt for a bare number, or the reranker parses nothing and falls back to the prior order.
 
 Sizing is modest: a cross-encoder in the `bge-reranker` class is far smaller than the extraction models, and the judge reuses an extraction-tier chat model. The reranker only runs over the small candidate window already retrieved, so it adds a single extra call per recall or `ask`, not per memory.

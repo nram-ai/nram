@@ -1001,10 +1001,30 @@ export interface UpdateProviderSlotResult {
 // provider slot), each carrying its own identity and metadata.
 export type ProviderConfigResponse = ProviderSlot[];
 
+// What the reranker Test found when it drove the LLM-judge path against a fixed
+// known-answer pair. Present only when rerank_method is "judge": the probe alone
+// only proves the server did not answer /v1/rerank, so the Test runs the judge for
+// real and reports the scores it got.
+export interface RerankJudgeCalibration {
+  calibrated: boolean;
+  disable_thinking: boolean;
+  max_tokens: number;
+  // Whether the server wrote max_tokens back to the global
+  // ranking.rerank.judge.max_tokens setting (it has no slot-level form field).
+  max_tokens_applied: boolean;
+  relevant_score: number;
+  irrelevant_score: number;
+  diagnosis?: string;
+  last_output?: string;
+}
+
 export interface TestProviderResult {
   success: boolean;
   message?: string;
   latency_ms: number;
+  // Reranker slot only: the method the probe detected on this test.
+  rerank_method?: string;
+  calibration?: RerankJudgeCalibration;
 }
 
 export interface OllamaModel {

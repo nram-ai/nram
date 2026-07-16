@@ -102,6 +102,18 @@ func defaultValueForKey(key string) (json.RawMessage, bool) {
 	return nil, false
 }
 
+// maxForKey returns a registered setting's upper bound, so a caller that must
+// stay inside the range the admin UI enforces can read it from the schema rather
+// than hand-copying the number and silently stranding when the schema moves.
+func maxForKey(key string) (float64, bool) {
+	for i := range settingsSchemas {
+		if settingsSchemas[i].Key == key && settingsSchemas[i].Max != nil {
+			return *settingsSchemas[i].Max, true
+		}
+	}
+	return 0, false
+}
+
 // ResetSetting reverts one setting at (key, scope) to its registered default.
 // At scope "global" the row is upserted with the canonical default value, so
 // the registry stays seeded and updated_by reflects the admin who reset it.
@@ -302,7 +314,7 @@ var settingsSchemas = []api.SettingSchema{
 	{Key: service.SettingRankWeightRerank, Type: "number", DefaultValue: json.RawMessage(`0.3`), Description: "How much the reranker's relevance score counts toward recall rank (0.0 to 1.0), added on top of the composite score rather than replacing similarity. Default 0.3, tuned on a live corpus so a confident reranker reorders the close calls without overriding a clearly stronger composite match; set it to 0 to suppress the reranker's effect while leaving it enabled. Only used when Reranking is enabled and a Reranker slot is configured.", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
 	{Key: service.SettingRerankCandidates, Type: "number", DefaultValue: json.RawMessage(`25`), Description: "How many top candidates the reranker scores per query, after MMR and before the final result is returned. One cross-encoder pass each, so this bounds the reranking cost. Keep it at or above your typical result limit so a buried answer the reranker would promote isn't cut off first. Used by both recall and ask.", Category: "ranking", Min: ptrF(1), Max: ptrF(200), Step: ptrF(1)},
 	{Key: service.SettingRerankMaxDocChars, Type: "number", DefaultValue: json.RawMessage(`1200`), Description: "Maximum characters of each memory sent to the reranker. Cross-encoders only read the first few hundred tokens, so the rest is wasted, and trimming keeps a single long memory from overflowing the reranker server's batch and failing the request. Default 1200 keeps a query+memory pair under a stock llama-server's 512-token batch; raise it only if your reranker server is launched with a larger --ubatch-size. Used by both recall and ask.", Category: "ranking", Min: ptrF(256), Max: ptrF(16000), Step: ptrF(64)},
-	{Key: service.SettingRerankJudgeMaxTokens, Type: "number", DefaultValue: json.RawMessage(`16`), Description: "Maximum tokens the LLM-judge reranker may generate per candidate. Only used when the Reranker slot is a generative chat model (detected method \"judge\") rather than a cross-encoder; the judge outputs a single relevance number, so this stays small.", Category: "ranking", Min: ptrF(1), Max: ptrF(256), Step: ptrF(1)},
+	{Key: service.SettingRerankJudgeMaxTokens, Type: "number", DefaultValue: json.RawMessage(`16`), Description: "Maximum tokens the LLM-judge reranker may generate per candidate. Only used when the Reranker slot is a generative chat model (detected method \"judge\") rather than a cross-encoder; the judge outputs a single relevance number, so this stays small. Testing a judge reranker calibrates this: if the model cannot reach a number within the current cap, the test raises this value to the smallest one that works and saves it.", Category: "ranking", Min: ptrF(1), Max: ptrF(256), Step: ptrF(1)},
 	{Key: service.SettingRerankJudgeTemperature, Type: "number", DefaultValue: json.RawMessage(`0`), Description: "Sampling temperature for the LLM-judge reranker's per-candidate scoring call (0.0 to 1.0). 0 keeps the relevance score as deterministic as a generative model allows. Only used when the Reranker slot's detected method is \"judge\".", Category: "ranking", Min: ptrF(0), Max: ptrF(1), Step: ptrF(0.05)},
 	{Key: service.SettingRecallFusionNormalizePerChan, Type: "boolean", DefaultValue: json.RawMessage(`false`), Description: "When hybrid recall is on, balance each searched tier evenly so a large corpus (like the global tier) doesn't crowd out a small project. Off by default, which keeps the original behaviour.", Category: "recall_fusion"},
 
@@ -560,7 +572,7 @@ var promptSchemaEntries = []api.SettingSchema{
 	{Key: service.SettingQueryAugmentSystemPrompt, Type: "prompt", Description: "System prompt for the query-augmentation phase: the task and the strict JSON-array output rules. The requested query count and memory content are supplied as the user message.", Category: "enrichment_prompts"},
 	{Key: service.SettingAskSynthesisSystemPrompt, Type: "prompt", Description: "System prompt for the ask tool: answer only from the supplied memory neighborhood, cite memory ids inline, say \"Not in neighborhood.\" when the answer is absent, no commentary. The question and the tagged neighborhood are supplied as the user message.", Category: "ask_prompts"},
 	{Key: service.SettingAskDecompositionSystemPrompt, Type: "prompt", Description: "System prompt for the ask query-decomposition step: rewrite an aggregation/compare/classify question into one focused retrieval sub-query per class as a JSON {\"subqueries\":[...]} list, or an empty list when no breakdown is warranted. The question is supplied as the user message.", Category: "ask_prompts"},
-	{Key: service.SettingRerankJudgeSystemPrompt, Type: "prompt", Description: "System prompt for the LLM-judge reranker: instructs the model to output a single relevance number in [0,1] for a (query, document) pair. Only used when the Reranker slot is a generative chat model (detected method \"judge\"), not a cross-encoder. The query and document are supplied as the user message.", Category: "ranking_prompts"},
+	{Key: service.SettingRerankJudgeSystemPrompt, Type: "prompt", Description: "System prompt for the LLM-judge reranker: instructs the model to output a single relevance number in [0,1] for a (query, document) pair. Only used when the Reranker slot is a generative chat model (detected method \"judge\"), not a cross-encoder. The query and document are supplied as the user message. The reply must be the bare number and nothing else: a completion carrying any other prose scores nothing and fails the rerank (the caller keeps its prior order), so keep any edit here as strict as the default. Test the Reranker slot after editing to confirm the model still answers with a number.", Category: "ranking_prompts"},
 }
 
 func init() {

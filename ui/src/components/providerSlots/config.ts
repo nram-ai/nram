@@ -93,6 +93,11 @@ export const SINGLE_MODEL_PROVIDERS = new Set(["vllm", "sglang", "llama-server"]
 // chat_template_kwargs.enable_thinking, Gemini thinkingConfig.thinkingBudget).
 // openai/anthropic/openai-compatible are omitted: an explicit disable 400s on
 // current OpenAI/Anthropic models, so the toggle would be a dead control there.
+//
+// Type is necessary but not sufficient: the reranker slot additionally requires
+// the judge method, since a cross-encoder does not generate (see
+// showThinkingToggle in ProviderSlotEditor). Membership here does not by itself
+// mean the toggle should render.
 export const SUPPORTS_THINKING_TOGGLE = new Set([
   "ollama",
   "openrouter",

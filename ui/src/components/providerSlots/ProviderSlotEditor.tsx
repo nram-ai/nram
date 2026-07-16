@@ -21,6 +21,7 @@ import type {
   UpdateProviderSlotRequest,
   UpdateProviderSlotResult,
   TestProviderResult,
+  RerankJudgeCalibration,
   OllamaModel,
 } from "../../api/client";
 import { APIError } from "../../api/client";
@@ -75,22 +76,61 @@ export function StatusDot({
 // Test Result Display
 // ---------------------------------------------------------------------------
 
+// JudgeCalibrationDetail renders what the judge calibration actually observed.
+// The scores are shown rather than summarized: a judge fails silently by flattening
+// its scores, so "it worked" is only believable next to the separation it produced.
+function JudgeCalibrationDetail({ cal }: { cal: RerankJudgeCalibration }) {
+  if (!cal.calibrated) {
+    return (
+      <div className="mt-1 space-y-1 text-xs">
+        <p>{cal.diagnosis}</p>
+        {cal.last_output && (
+          <p className="font-mono break-all opacity-80">
+            model said: {JSON.stringify(cal.last_output)}
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 space-y-0.5 text-xs">
+      <p>
+        Calibrated: thinking {cal.disable_thinking ? "off" : "on"}, max_tokens{" "}
+        {cal.max_tokens}
+        {cal.max_tokens_applied && " (saved)"}
+      </p>
+      <p className="opacity-80">
+        Known-answer scores: relevant {cal.relevant_score.toFixed(3)} vs irrelevant{" "}
+        {cal.irrelevant_score.toFixed(3)}
+      </p>
+    </div>
+  );
+}
+
 export function TestResultDisplay({ result }: { result: TestProviderResult }) {
   if (result.success) {
     return (
-      <div className="mt-2 flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
-        <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
-        Connection successful ({result.latency_ms}ms)
+      <div className="mt-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+        <div className="flex items-center gap-2">
+          <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
+          Connection successful ({result.latency_ms}ms)
+        </div>
+        {result.calibration && <JudgeCalibrationDetail cal={result.calibration} />}
       </div>
     );
   }
   return (
     <div
-      className="mt-2 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      className="mt-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
       title={result.message || undefined}
     >
-      <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
-      {humanizeProviderError(result.message)}
+      <div className="flex items-center gap-2">
+        <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
+        {result.calibration
+          ? "Reranker reachable, but it is not a working judge"
+          : humanizeProviderError(result.message)}
+      </div>
+      {result.calibration && <JudgeCalibrationDetail cal={result.calibration} />}
     </div>
   );
 }
@@ -438,6 +478,7 @@ function ProviderSlotEditForm({
   saveError,
   requireTest,
   onConfigChange,
+  rerankMethod,
 }: {
   slotName: string;
   initial: EditFormState;
@@ -460,8 +501,18 @@ function ProviderSlotEditForm({
   // field changes so the wrapper can invalidate a stale green test.
   requireTest?: boolean;
   onConfigChange?: () => void;
+  // The reranker slot's last detected rerank method ("cross_encoder" | "judge"),
+  // used to gate the thinking toggle. Undefined for every other slot and for a
+  // reranker that has never been probed.
+  rerankMethod?: string;
 }) {
   const [form, setForm] = useState<EditFormState>(initial);
+
+  // Set when the calibration effect below writes the form itself. That write is
+  // not an operator edit, so it must not invalidate the test result that produced
+  // it (the result is valid *for* the calibrated value, and clearing it would also
+  // hide the calibration readout).
+  const applyingCalibration = useRef(false);
 
   // Notify the wrapper on any config edit so it can clear a prior test result
   // (a green test must not carry over to an edited, untested config). Skip the
@@ -473,10 +524,31 @@ function ProviderSlotEditForm({
       firstFormRender.current = false;
       return;
     }
+    if (applyingCalibration.current) {
+      applyingCalibration.current = false;
+      return;
+    }
     onConfigChange?.();
     // onConfigChange is stabilized (useCallback) by the wrapper; depend on form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
+
+  // A judge calibration reports the thinking value that actually produced a
+  // usable score, so flip the operator's toggle to it: the Test deliberately does
+  // not write the slot row (it may be running against an unsaved form), which
+  // makes the operator's next Save the thing that persists it. Guarded on an
+  // actual change so a no-op cannot leave applyingCalibration set and swallow the
+  // next real edit.
+  const calibration = testResult?.calibration;
+  useEffect(() => {
+    if (!calibration?.calibrated) return;
+    if (form.disable_thinking === calibration.disable_thinking) return;
+    applyingCalibration.current = true;
+    setForm((p) => ({ ...p, disable_thinking: calibration.disable_thinking }));
+    // Keyed on the calibration only: re-running on every form edit would fight
+    // an operator who deliberately overrides the calibrated value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calibration]);
   // Tracks an explicit "clear saved key" action. Distinct from a blank field,
   // which means "keep the stored key" (preserve-on-blank).
   const [clearApiKey, setClearApiKey] = useState(false);
@@ -492,6 +564,33 @@ function ProviderSlotEditForm({
   // "leave blank to keep" placeholder on their (masked) value inputs. Reuses
   // the same name-normalization as the save path.
   const existingHeaderKeys = new Set(Object.keys(headerRowsToRecord(initial.custom_headers)));
+
+  // The rerank method is a property of the endpoint, so remember what the last
+  // Test detected together with the endpoint it was detected for. Reading it off
+  // testResult directly would make the toggle vanish the instant an operator
+  // touched it: any edit invalidates the test result, so the control would erase
+  // itself (and the operator's change) on a slot with no persisted method yet.
+  const endpointKey = `${form.type}|${form.url}|${form.model}`;
+  const [detected, setDetected] = useState<{ key: string; method: string } | null>(null);
+  useEffect(() => {
+    if (testResult?.rerank_method) {
+      setDetected({ key: endpointKey, method: testResult.rerank_method });
+    }
+    // Keyed on the test result: endpointKey is read at detection time, and a later
+    // endpoint edit is handled by the key comparison below, not by re-running.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testResult]);
+
+  // The thinking toggle is only a real control where the knob both reaches the
+  // wire (type gate) and drives something that generates. On the reranker slot
+  // that means the judge only: createRerankProvider builds the cross-encoder
+  // without DisableThinking, so offering the toggle there stores a value nothing
+  // ever emits. A freshly detected method wins over the persisted one, but only
+  // while the endpoint it was detected for is still the one in the form.
+  const effectiveRerankMethod = detected?.key === endpointKey ? detected.method : rerankMethod;
+  const showThinkingToggle =
+    SUPPORTS_THINKING_TOGGLE.has(form.type) &&
+    (slotName !== "reranker" || effectiveRerankMethod === "judge");
 
   const isCloud = CLOUD_PROVIDERS.has(form.type);
   const isOllama = form.type === "ollama";
@@ -551,9 +650,12 @@ function ProviderSlotEditForm({
     if (extraBodyParse.value && Object.keys(extraBodyParse.value).length > 0) {
       req.extra_body = extraBodyParse.value;
     }
-    // Persist the thinking toggle only for types where it has an effect; for
-    // the others the key is omitted and the slot stays at the server default.
-    if (SUPPORTS_THINKING_TOGGLE.has(form.type)) {
+    // Persist the thinking toggle only where it has an effect; elsewhere the key
+    // is omitted and the slot stays at the server default. Gated on the same
+    // condition the checkbox renders under, so a control the operator cannot see
+    // can never send a value (a cross-encoder reranker stops storing the dead
+    // disable_thinking it used to carry).
+    if (showThinkingToggle) {
       req.disable_thinking = form.disable_thinking;
     }
     return req;
@@ -775,14 +877,23 @@ function ProviderSlotEditForm({
             <p className="mt-1 text-xs text-destructive">{extraBodyError}</p>
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
-              Merged onto every request body (OpenAI <code className="rounded bg-muted px-1 py-0.5">extra_body</code>). vLLM, SGLang, and llama.cpp send <code className="rounded bg-muted px-1 py-0.5">chat_template_kwargs.enable_thinking=false</code> when Disable Thinking is on; set it here to override, or add other params.
+              Merged onto every request body (OpenAI <code className="rounded bg-muted px-1 py-0.5">extra_body</code>).{" "}
+              {showThinkingToggle ? (
+                <>
+                  vLLM, SGLang, and llama.cpp send <code className="rounded bg-muted px-1 py-0.5">chat_template_kwargs.enable_thinking=false</code> when Disable Thinking is on; set it here to override, or add other params.
+                </>
+              ) : (
+                <>Add any other request params here.</>
+              )}
             </p>
           )}
         </div>
       )}
 
-      {/* Disable Thinking (only for types where the knob has an effect) */}
-      {SUPPORTS_THINKING_TOGGLE.has(form.type) && (
+      {/* Disable Thinking (only where the knob has an effect: a type that emits
+          it, and — on the reranker — the generative judge rather than the
+          cross-encoder) */}
+      {showThinkingToggle && (
         <div>
           <label className="flex items-center gap-2 text-sm font-medium text-foreground">
             <input
@@ -1048,6 +1159,7 @@ export function ProviderSlotEditor({
       testResult={testResult}
       testing={testMutation.isPending}
       saveError={saveError}
+      rerankMethod={slot.rerank_method}
       requireTest={showTest && requireTest}
       onConfigChange={showTest ? handleConfigChange : undefined}
     />
