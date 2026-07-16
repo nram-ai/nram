@@ -245,9 +245,8 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	if req.MaxTokens > 0 {
 		body.MaxTokens = req.MaxTokens
 	}
-	if req.Temperature != 0 {
-		t := req.Temperature
-		body.Temperature = &t
+	if req.Temperature != nil {
+		body.Temperature = req.Temperature
 	}
 	if len(req.Stop) > 0 {
 		body.Stop = req.Stop

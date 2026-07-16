@@ -233,7 +233,7 @@ func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string)
 		user := Fence("query", query) + "\n\n" + Fence("document", doc)
 		resp, err := j.llm.Complete(ctx, &CompletionRequest{
 			Messages:    BuildGuardedMessages(jc.SystemPrompt, user),
-			Temperature: jc.Temperature,
+			Temperature: Float64(jc.Temperature),
 			MaxTokens:   jc.MaxTokens,
 		})
 		if err != nil {

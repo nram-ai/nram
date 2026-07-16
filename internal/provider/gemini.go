@@ -245,14 +245,13 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	disableThinking := p.config.DisableThinking && geminiThinkingOffSupported(model)
-	if req.MaxTokens > 0 || req.Temperature != 0 || len(req.Stop) > 0 || req.JSONMode || disableThinking {
+	if req.MaxTokens > 0 || req.Temperature != nil || len(req.Stop) > 0 || req.JSONMode || disableThinking {
 		gc := &geminiGenerationConfig{}
 		if req.MaxTokens > 0 {
 			gc.MaxOutputTokens = req.MaxTokens
 		}
-		if req.Temperature != 0 {
-			t := req.Temperature
-			gc.Temperature = &t
+		if req.Temperature != nil {
+			gc.Temperature = req.Temperature
 		}
 		if len(req.Stop) > 0 {
 			gc.StopSequences = req.Stop

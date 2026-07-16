@@ -89,13 +89,23 @@ func JoinMessages(msgs []Message) string {
 
 // CompletionRequest contains the parameters for an LLM completion call.
 type CompletionRequest struct {
-	Messages    []Message
-	Model       string
-	MaxTokens   int
-	Temperature float64
+	Messages  []Message
+	Model     string
+	MaxTokens int
+	// Temperature is the sampling temperature. nil leaves it unset so the
+	// server applies its own default; a non-nil value is sent verbatim,
+	// including 0 to request greedy/deterministic decoding. A bare float64
+	// could not distinguish "unset" from an explicit 0, so a configured 0
+	// (e.g. the ingestion-decision, rerank-judge, and ask-decomposition paths)
+	// was silently dropped and sampled at the server default.
+	Temperature *float64
 	Stop        []string
 	JSONMode    bool // request JSON-formatted output from the model
 }
+
+// Float64 returns a pointer to v, for setting optional pointer fields such as
+// CompletionRequest.Temperature (where a non-nil 0 means greedy decoding).
+func Float64(v float64) *float64 { return &v }
 
 // CompletionResponse contains the result of an LLM completion call.
 type CompletionResponse struct {

@@ -704,8 +704,8 @@ func newJudgeRerankTestServer(t *testing.T, reply func(maxTokens int, user strin
 		}
 		var body struct {
 			MaxTokens int `json:"max_tokens"`
-			// Temperature is a pointer so a test can tell "omitted" (the provider
-			// skips the field at 0) from an explicitly sent value.
+			// Temperature is a pointer so a test can tell "omitted" (nil) from an
+			// explicitly sent value, including a deliberate 0 for greedy decoding.
 			Temperature *float64 `json:"temperature"`
 			Messages    []struct {
 				Content string `json:"content"`
@@ -932,10 +932,12 @@ func TestTestProvider_JudgeCalibration(t *testing.T) {
 		if !res.Success {
 			t.Fatalf("Success = false: %q", res.Message)
 		}
-		// Production clamps 5 to the 0 fallback, and the provider omits a zero
-		// temperature entirely. Reading the row raw would have sent 5.
-		if lastChatTemperature != nil {
-			t.Errorf("judge driven at temperature %v, want it clamped to production's 0 (field omitted)", *lastChatTemperature)
+		// Production clamps 5 to the 0 fallback and now sends that 0 explicitly
+		// (greedy decoding). Reading the row raw would have sent 5.
+		if lastChatTemperature == nil {
+			t.Error("judge temperature omitted; want production's clamped 0 sent explicitly")
+		} else if *lastChatTemperature != 0 {
+			t.Errorf("judge driven at temperature %v, want production's clamped 0", *lastChatTemperature)
 		}
 	})
 

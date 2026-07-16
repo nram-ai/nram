@@ -972,7 +972,7 @@ func (p *ContradictionPhase) checkContradiction(
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
 				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: temperature,
+				Temperature: provider.Float64(temperature),
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseContradictions), e

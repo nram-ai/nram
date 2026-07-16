@@ -677,7 +677,7 @@ func handleEnrichmentTestPrompt(w http.ResponseWriter, r *http.Request, cfg Enri
 		Messages: provider.BuildGuardedMessages(systemTemplate, user),
 		// Model left empty: the resolved provider slot supplies its own model.
 		MaxTokens:   maxTokens,
-		Temperature: 0.1,
+		Temperature: provider.Float64(0.1),
 		// Augmentation and ingestion both expect a JSON response. The runtime
 		// ingestion phase and the per-memory augment preview set JSONMode;
 		// without it here, the Test button can fail to parse on providers that
@@ -870,7 +870,7 @@ func runRelationshipPromptTest(
 	entReq := &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(entitySystem, service.RenderExtractionUser(sampleInput)),
 		MaxTokens:   maxTokens,
-		Temperature: 0.1,
+		Temperature: provider.Float64(0.1),
 		JSONMode:    true,
 	}
 	entResp, err := llmProvider.Complete(provider.WithOperation(r.Context(), provider.OperationProbe), entReq)
@@ -892,7 +892,7 @@ func runRelationshipPromptTest(
 	relReq := &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(relSystem, service.RenderRelationshipUser(sampleInput, names)),
 		MaxTokens:   maxTokens,
-		Temperature: 0.1,
+		Temperature: provider.Float64(0.1),
 		JSONMode:    true,
 	}
 	relResp, err := llmProvider.Complete(provider.WithOperation(r.Context(), provider.OperationProbe), relReq)

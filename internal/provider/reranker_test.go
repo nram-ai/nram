@@ -500,7 +500,7 @@ func TestJudgeReranker_UsesContextConfig(t *testing.T) {
 	if stub.lastReq.MaxTokens != 7 {
 		t.Errorf("MaxTokens = %d, want 7 (from ctx)", stub.lastReq.MaxTokens)
 	}
-	if stub.lastReq.Temperature != 0.3 {
+	if stub.lastReq.Temperature == nil || *stub.lastReq.Temperature != 0.3 {
 		t.Errorf("Temperature = %v, want 0.3 (from ctx)", stub.lastReq.Temperature)
 	}
 	// The system half is guarded (untrusted-data directive prepended) so an

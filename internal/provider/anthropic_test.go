@@ -81,7 +81,7 @@ func TestAnthropicComplete(t *testing.T) {
 	resp, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "Hello"}},
 		MaxTokens:   100,
-		Temperature: 0.7,
+		Temperature: Float64(0.7),
 		Stop:        []string{"\n"},
 	})
 	if err != nil {
@@ -289,7 +289,7 @@ func TestAnthropicCompleteTemperatureAndStopSequences(t *testing.T) {
 	_, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "test"}},
 		MaxTokens:   256,
-		Temperature: 0.5,
+		Temperature: Float64(0.5),
 		Stop:        []string{"END", "STOP"},
 	})
 	if err != nil {
@@ -304,6 +304,41 @@ func TestAnthropicCompleteTemperatureAndStopSequences(t *testing.T) {
 	}
 	if len(receivedReq.StopSequences) != 2 || receivedReq.StopSequences[0] != "END" || receivedReq.StopSequences[1] != "STOP" {
 		t.Errorf("StopSequences = %v, want [END STOP]", receivedReq.StopSequences)
+	}
+}
+
+// TestAnthropicComplete_TemperaturePointer mirrors the OpenAI pointer-semantics
+// test: an explicit 0 is sent, a nil temperature is omitted.
+func TestAnthropicComplete_TemperaturePointer(t *testing.T) {
+	run := func(t *testing.T, temp *float64) anthropicMessagesRequest {
+		var req anthropicMessagesRequest
+		srv := newAnthropicTestServer(t, map[string]http.HandlerFunc{
+			"/v1/messages": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				_ = json.NewEncoder(w).Encode(anthropicMessagesResponse{
+					ID: "msg", Type: "message", Role: "assistant", StopReason: "end_turn",
+					Content: []anthropicContentBlock{{Type: "text", Text: "ok"}},
+					Usage:   anthropicUsage{InputTokens: 1, OutputTokens: 1},
+				})
+			},
+		})
+		defer srv.Close()
+		if _, err := NewAnthropicProvider(AnthropicConfig{BaseURL: srv.URL, APIKey: "k", DefaultModel: "claude-sonnet-4-20250514"}).
+			Complete(context.Background(), &CompletionRequest{
+				Messages:    []Message{{Role: "user", Content: "x"}},
+				MaxTokens:   16,
+				Temperature: temp,
+			}); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		return req
+	}
+
+	if got := run(t, Float64(0)); got.Temperature == nil || *got.Temperature != 0 {
+		t.Errorf("explicit 0: Temperature = %v, want a non-nil 0", got.Temperature)
+	}
+	if got := run(t, nil); got.Temperature != nil {
+		t.Errorf("nil: Temperature = %v, want omitted", *got.Temperature)
 	}
 }
 

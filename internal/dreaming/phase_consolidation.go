@@ -515,7 +515,7 @@ func (p *ConsolidationPhase) scoreAlignment(
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
 				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: temperature,
+				Temperature: provider.Float64(temperature),
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e
@@ -1695,7 +1695,7 @@ func (p *ConsolidationPhase) synthesize(
 			r, e := llm.Complete(ctx, &provider.CompletionRequest{
 				Messages:    msgs,
 				MaxTokens:   budget.PerCallCap(),
-				Temperature: temperature,
+				Temperature: provider.Float64(temperature),
 			})
 			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e
 		})
@@ -1877,7 +1877,7 @@ func (p *ConsolidationPhase) auditNovelty(
 			r, e := llm.Complete(provider.WithOperation(ctx, llmOperation), &provider.CompletionRequest{
 				Messages:    msgs,
 				MaxTokens:   maxTokens,
-				Temperature: noveltyTemperature,
+				Temperature: provider.Float64(noveltyTemperature),
 				JSONMode:    true,
 			})
 			return r, usageOrEstimateLLM(r, msgs, budget, llm.Name(), model.DreamPhaseConsolidation), e

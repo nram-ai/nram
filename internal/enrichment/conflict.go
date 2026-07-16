@@ -160,7 +160,7 @@ func (cd *ConflictDetector) Detect(ctx context.Context, memory *model.Memory) ([
 		resp, err := llm.Complete(ctx, &provider.CompletionRequest{
 			Messages:    provider.BuildGuardedMessages(systemPrompt, user),
 			MaxTokens:   maxTokens,
-			Temperature: temperature,
+			Temperature: provider.Float64(temperature),
 			JSONMode:    true,
 		})
 		if err != nil {

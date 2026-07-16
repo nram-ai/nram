@@ -190,7 +190,7 @@ func buildExtractionRequest(messages []provider.Message, opts CallOptions) *prov
 	return &provider.CompletionRequest{
 		Messages:    messages,
 		MaxTokens:   opts.MaxTokens,
-		Temperature: opts.Temperature,
+		Temperature: provider.Float64(opts.Temperature),
 		JSONMode:    true,
 	}
 }

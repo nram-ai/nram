@@ -557,9 +557,8 @@ func (s *ProviderAdminStore) TestProvider(ctx context.Context, req api.ProviderT
 			return notCreated()
 		}
 		_, err = p.Complete(ctx, &provider.CompletionRequest{
-			Messages:    []provider.Message{{Role: "user", Content: "test"}},
-			MaxTokens:   10,
-			Temperature: 0,
+			Messages:  []provider.Message{{Role: "user", Content: "test"}},
+			MaxTokens: 10,
 		})
 	}
 

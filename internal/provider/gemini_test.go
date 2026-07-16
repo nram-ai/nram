@@ -82,7 +82,7 @@ func TestGeminiComplete(t *testing.T) {
 	resp, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "Hello"}},
 		MaxTokens:   100,
-		Temperature: 0.7,
+		Temperature: Float64(0.7),
 		Stop:        []string{"\n"},
 	})
 	if err != nil {
@@ -504,7 +504,7 @@ func TestGeminiRequestFormat(t *testing.T) {
 	_, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "Hello"}},
 		MaxTokens:   256,
-		Temperature: 0.5,
+		Temperature: Float64(0.5),
 		Stop:        []string{"END"},
 	})
 	if err != nil {
@@ -539,6 +539,42 @@ func TestGeminiRequestFormat(t *testing.T) {
 	}
 	if len(receivedReq.GenerationConfig.StopSequences) != 1 || receivedReq.GenerationConfig.StopSequences[0] != "END" {
 		t.Errorf("StopSequences = %v, want [END]", receivedReq.GenerationConfig.StopSequences)
+	}
+}
+
+// TestGeminiComplete_TemperaturePointer mirrors the OpenAI pointer-semantics
+// test: an explicit 0 is sent in generationConfig, a nil temperature is omitted.
+func TestGeminiComplete_TemperaturePointer(t *testing.T) {
+	run := func(t *testing.T, temp *float64) geminiGenerateRequest {
+		var req geminiGenerateRequest
+		srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
+			":generateContent": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				_ = json.NewEncoder(w).Encode(geminiGenerateResponse{
+					Candidates: []geminiCandidate{{
+						Content:      geminiContent{Role: "model", Parts: []geminiPart{{Text: "ok"}}},
+						FinishReason: "STOP",
+					}},
+				})
+			},
+		})
+		defer srv.Close()
+		if _, err := NewGeminiProvider(GeminiConfig{BaseURL: srv.URL, APIKey: "k", DefaultModel: "gemini-2.0-flash"}).
+			Complete(context.Background(), &CompletionRequest{
+				Messages:    []Message{{Role: "user", Content: "x"}},
+				MaxTokens:   16,
+				Temperature: temp,
+			}); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		return req
+	}
+
+	if got := run(t, Float64(0)); got.GenerationConfig == nil || got.GenerationConfig.Temperature == nil || *got.GenerationConfig.Temperature != 0 {
+		t.Errorf("explicit 0: GenerationConfig = %+v, want a non-nil 0 temperature", got.GenerationConfig)
+	}
+	if got := run(t, nil); got.GenerationConfig != nil && got.GenerationConfig.Temperature != nil {
+		t.Errorf("nil: Temperature = %v, want omitted", *got.GenerationConfig.Temperature)
 	}
 }
 

@@ -261,9 +261,8 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			body.System = systemText
 		}
 	}
-	if req.Temperature != 0 {
-		t := req.Temperature
-		body.Temperature = &t
+	if req.Temperature != nil {
+		body.Temperature = req.Temperature
 	}
 	if len(req.Stop) > 0 {
 		body.StopSequences = req.Stop

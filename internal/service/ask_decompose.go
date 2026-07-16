@@ -49,7 +49,7 @@ func (s *AskService) decomposeQuery(
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   maxTokens,
-		Temperature: temperature,
+		Temperature: provider.Float64(temperature),
 	})
 	if err != nil || resp == nil {
 		return nil

@@ -63,7 +63,7 @@ func TestOpenAIComplete(t *testing.T) {
 	resp, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "Hello"}},
 		MaxTokens:   100,
-		Temperature: 0.7,
+		Temperature: Float64(0.7),
 		Stop:        []string{"\n"},
 	})
 	if err != nil {
@@ -647,7 +647,7 @@ func TestOpenAIComplete_OllamaExtensionsGated_Ollama(t *testing.T) {
 	_, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "ping"}},
 		MaxTokens:   128,
-		Temperature: 0.1,
+		Temperature: Float64(0.1),
 	})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
@@ -696,7 +696,7 @@ func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 	_, err := p.Complete(context.Background(), &CompletionRequest{
 		Messages:    []Message{{Role: "user", Content: "ping"}},
 		MaxTokens:   128,
-		Temperature: 0.1,
+		Temperature: Float64(0.1),
 	})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
@@ -705,6 +705,59 @@ func TestOpenAIComplete_OllamaExtensionsGated_OpenAI(t *testing.T) {
 	if _, present := receivedBody["reasoning_effort"]; present {
 		t.Errorf("OpenAI provider must not send Ollama extension \"reasoning_effort\"; body had it")
 	}
+}
+
+// TestOpenAIComplete_TemperaturePointer pins the pointer semantics of
+// CompletionRequest.Temperature over the OpenAI-compatible path (SGLang and
+// friends): an explicit 0 is sent so the model decodes greedily, while a nil
+// temperature is omitted so the server applies its own default. A bare float64
+// field could not send 0, so the ingestion-decision, rerank-judge, and
+// ask-decomposition calls (all configured to temperature 0) were silently
+// sampled at the server default.
+func TestOpenAIComplete_TemperaturePointer(t *testing.T) {
+	newProvider := func(url string) *OpenAIProvider {
+		return NewOpenAIProvider(OpenAIConfig{
+			BaseURL:      url,
+			DefaultModel: "qwen3",
+			ProviderType: ProviderTypeSGLang,
+			Timeout:      5 * time.Second,
+		})
+	}
+
+	t.Run("explicit zero is sent", func(t *testing.T) {
+		var got map[string]any
+		srv := chatCaptureServer(t, &got)
+		defer srv.Close()
+		if _, err := newProvider(srv.URL).Complete(context.Background(), &CompletionRequest{
+			Messages:    []Message{{Role: "user", Content: "ping"}},
+			MaxTokens:   16,
+			Temperature: Float64(0),
+		}); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		v, ok := got["temperature"]
+		if !ok {
+			t.Fatal("temperature absent from body; an explicit 0 must be sent for greedy decoding")
+		}
+		if f, isNum := v.(float64); !isNum || f != 0 {
+			t.Errorf("temperature = %v, want 0", v)
+		}
+	})
+
+	t.Run("nil is omitted", func(t *testing.T) {
+		var got map[string]any
+		srv := chatCaptureServer(t, &got)
+		defer srv.Close()
+		if _, err := newProvider(srv.URL).Complete(context.Background(), &CompletionRequest{
+			Messages:  []Message{{Role: "user", Content: "ping"}},
+			MaxTokens: 16,
+		}); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		if _, ok := got["temperature"]; ok {
+			t.Error("temperature present in body; a nil temperature must be omitted so the server default applies")
+		}
+	})
 }
 
 // chatCaptureServer returns a test server whose chat-completions handler decodes

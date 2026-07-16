@@ -149,10 +149,11 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 	// is set, per Registry.GetIngestionDecision).
 	system := cfg.systemPrompt
 	user := RenderIngestionUser(mem.Content, matches)
+	temperature := wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global")
 	req := &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   wp.settings.ResolveIntWithDefault(ctx, service.SettingEnrichmentIngestionDecisionMaxTokens, "global"),
-		Temperature: wp.settings.ResolveFloatWithDefault(ctx, service.SettingEnrichmentIngestionDecisionTemperature, "global"),
+		Temperature: provider.Float64(temperature),
 		JSONMode:    true,
 	}
 
@@ -178,7 +179,7 @@ func (wp *WorkerPool) runIngestionDecision(ctx context.Context, job *model.Enric
 		// identically and fail to parse again: skip it and fall through to the
 		// fallback, saving a guaranteed-wasted completion. At temperature > 0,
 		// or when the finish reason is unknown, retry exactly as before.
-		if req.Temperature == 0 && provider.IsTruncated(resp.FinishReason) {
+		if temperature == 0 && provider.IsTruncated(resp.FinishReason) {
 			slog.Warn("enrichment: ingestion_decision parse (truncated at temp=0, deterministic retry skipped)",
 				"job", job.ID, "finish_reason", resp.FinishReason, "llm_latency_ms", llmLatency.Milliseconds())
 			res.decision = IngestionOpAddFallback

@@ -98,3 +98,52 @@ func TestIngestion_UnknownFinishReason_Temp0_StillRetries(t *testing.T) {
 		t.Fatalf("ingestion completions = %d, want 2 (retry preserved on unknown finish reason)", calls)
 	}
 }
+
+// TestIngestion_Temp0_SentAsNonNilPointer verifies the ingestion-decision call
+// carries an explicit (non-nil) temperature of 0, so the model decodes greedily
+// as the "0 keeps the add/update/delete/skip choice consistent" setting
+// promises, rather than the 0 being dropped and sampled at the server default.
+func TestIngestion_Temp0_SentAsNonNilPointer(t *testing.T) {
+	target := testMemory()
+	dedupResults := []storage.VectorSearchResult{
+		{ID: target.ID, Score: 0.95, NamespaceID: target.NamespaceID},
+	}
+	var captured *provider.CompletionRequest
+	capturingLLM := &mockLLMProvider{
+		name: "ingest",
+		respond: func(req *provider.CompletionRequest) (*provider.CompletionResponse, error) {
+			captured = req
+			return &provider.CompletionResponse{
+				Content:      "this is not json at all",
+				Model:        "ingest-model",
+				FinishReason: "length",
+				Usage:        provider.TokenUsage{TotalTokens: 10},
+			}, nil
+		},
+	}
+	overrides := map[string]string{
+		service.SettingIngestionDecisionEnabled:               "true",
+		service.SettingIngestionDecisionShadow:                "false",
+		service.SettingEnrichmentIngestionDecisionTemperature: "0",
+	}
+	h := newIngestionHarness(overrides, dedupResults, minimalFactLLM(), minimalEntityLLM(), capturingLLM, constEmbedder())
+
+	newMem := testMemory()
+	newMem.NamespaceID = target.NamespaceID
+	h.reader.byID[newMem.ID] = newMem
+	h.reader.byID[target.ID] = target
+	job := testJob(newMem.ID, newMem.NamespaceID)
+
+	if err := h.pool.processJob(context.Background(), "w-0", job); err != nil {
+		t.Fatalf("processJob: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("ingestion-decision LLM was never called")
+	}
+	if captured.Temperature == nil {
+		t.Fatal("ingestion-decision temperature was nil (dropped); want an explicit 0 so the call is greedy")
+	}
+	if *captured.Temperature != 0 {
+		t.Errorf("ingestion-decision temperature = %v, want 0", *captured.Temperature)
+	}
+}
