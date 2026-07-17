@@ -640,3 +640,117 @@ func TestEnrichment_SelfQueueStatus_Pagination(t *testing.T) {
 		t.Errorf("default params: got %d items, want 7 (5 pending + 2 failed)", len(all.Items))
 	}
 }
+
+// TestEnrichment_SelfQueueStatus_ScopedCounts asserts the single GROUP BY count
+// path is scoped to the caller's namespace subtree (a second org's rows never
+// leak in) and still counts rows whose memory was soft-deleted, matching the old
+// join's behavior (which had no deleted_at filter). Runs on both backends so the
+// $N/? placeholder branch of scopedCountByStatus is covered.
+func TestEnrichment_SelfQueueStatus_ScopedCounts(t *testing.T) {
+	for _, backend := range adminTestBackends {
+		t.Run(backend.name, func(t *testing.T) {
+			db := backend.setup(t)
+			ctx := context.Background()
+			queueRepo := storage.NewEnrichmentQueueRepo(db)
+			settingsRepo := storage.NewSettingsRepo(db)
+			store := NewEnrichmentAdminStore(queueRepo, settingsRepo, nil, db)
+
+			// Caller: 1 pending + 1 failed (seedEnrichmentFixture).
+			userNsID, _, _, _ := seedEnrichmentFixture(t, db, ctx)
+			// Cross-tenant control: another org with every status.
+			seedSecondOrgEnrichmentFixture(t, db, ctx, "other-org", "bob", "bob-proj",
+				[]string{"pending", "processing", "completed", "failed"})
+
+			resp, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{})
+			if err != nil {
+				t.Fatalf("SelfQueueStatus: %v", err)
+			}
+			if resp.Counts.Pending != 1 || resp.Counts.Failed != 1 ||
+				resp.Counts.Processing != 0 || resp.Counts.Completed != 0 {
+				t.Fatalf("counts not scoped to caller: %+v (want pending=1 failed=1, rest 0)", resp.Counts)
+			}
+
+			// Soft-delete the caller's memory; its queue rows must still count
+			// (the count keys on enrichment_queue.namespace_id, and the old join
+			// applied no deleted_at filter either).
+			execSeed(t, db, ctx,
+				"UPDATE memories SET deleted_at = ? WHERE namespace_id IN (SELECT id FROM namespaces WHERE path LIKE ?)",
+				"2020-01-01T00:00:00Z", "test-org/"+userNsID.String()+"/%")
+
+			resp2, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{})
+			if err != nil {
+				t.Fatalf("SelfQueueStatus after soft-delete: %v", err)
+			}
+			if resp2.Counts.Pending != 1 || resp2.Counts.Failed != 1 {
+				t.Fatalf("soft-deleted memory should still count: %+v (want pending=1 failed=1)", resp2.Counts)
+			}
+		})
+	}
+}
+
+// TestEnrichment_ClearFailed_ScopedAndGlobal asserts the self-tier clear deletes
+// only the caller's failed rows (other tenants and non-failed statuses intact),
+// and the global admin clear deletes every remaining failed row while leaving
+// pending rows untouched. Runs on both backends.
+func TestEnrichment_ClearFailed_ScopedAndGlobal(t *testing.T) {
+	for _, backend := range adminTestBackends {
+		t.Run(backend.name, func(t *testing.T) {
+			db := backend.setup(t)
+			ctx := context.Background()
+			queueRepo := storage.NewEnrichmentQueueRepo(db)
+			settingsRepo := storage.NewSettingsRepo(db)
+			store := NewEnrichmentAdminStore(queueRepo, settingsRepo, nil, db)
+
+			// Caller: 1 pending + 1 failed. Control org: 1 pending + 1 failed.
+			userNsID, _, _, _ := seedEnrichmentFixture(t, db, ctx)
+			seedSecondOrgEnrichmentFixture(t, db, ctx, "other-org", "bob", "bob-proj",
+				[]string{"pending", "failed"})
+
+			userPath := "test-org/" + userNsID.String()
+
+			// Self clear: only the caller's failed row (1) is removed.
+			n, err := store.SelfClearFailed(ctx, userPath, 0)
+			if err != nil {
+				t.Fatalf("SelfClearFailed: %v", err)
+			}
+			if n != 1 {
+				t.Fatalf("SelfClearFailed deleted %d, want 1", n)
+			}
+			resp, err := store.SelfQueueStatus(ctx, userNsID, api.QueueListParams{})
+			if err != nil {
+				t.Fatalf("SelfQueueStatus: %v", err)
+			}
+			if resp.Counts.Failed != 0 || resp.Counts.Pending != 1 {
+				t.Fatalf("after self clear, caller counts=%+v, want failed=0 pending=1", resp.Counts)
+			}
+
+			// The control org's failed row is untouched (system still sees 1).
+			sys, err := store.QueueStatus(ctx, api.QueueListParams{})
+			if err != nil {
+				t.Fatalf("QueueStatus: %v", err)
+			}
+			if sys.Counts.Failed != 1 {
+				t.Fatalf("other org's failed row should remain, system failed=%d want 1", sys.Counts.Failed)
+			}
+
+			// Global clear removes the remaining failed row; pending untouched.
+			gn, err := store.ClearFailedJobs(ctx, 0)
+			if err != nil {
+				t.Fatalf("ClearFailedJobs: %v", err)
+			}
+			if gn != 1 {
+				t.Fatalf("ClearFailedJobs deleted %d, want 1", gn)
+			}
+			sys2, err := store.QueueStatus(ctx, api.QueueListParams{})
+			if err != nil {
+				t.Fatalf("QueueStatus after global clear: %v", err)
+			}
+			if sys2.Counts.Failed != 0 {
+				t.Fatalf("after global clear, system failed=%d want 0", sys2.Counts.Failed)
+			}
+			if sys2.Counts.Pending != 2 {
+				t.Fatalf("pending rows must be untouched, system pending=%d want 2", sys2.Counts.Pending)
+			}
+		})
+	}
+}

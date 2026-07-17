@@ -45,7 +45,7 @@ import {
   type MultiVectorBackfillResponse,
   type MissingEmbeddingsBackfillResponse,
   type ConsolidationEntitiesBackfillResponse,
-  type ClearCompletedJobsResponse,
+  type DeletedCountResponse,
   type RelabelGraphResponse,
   type ReExtractResponse,
   type VectorMigrationResult,
@@ -1203,6 +1203,12 @@ export function useAbandonDreamCycle(scope: TierWithOrg = { tier: "system" }) {
 // is paged through this many items per "Load more".
 export const ENRICHMENT_PAGE_SIZE = 50;
 
+// ENRICHMENT_MAX_PAGES caps how many pages the infinite query retains, so a deep
+// scroll cannot make the poll refetch an unbounded number of offset queries each
+// tick. 20 pages * 50 = 1000 rows kept in view; the per-status counts still
+// report the true totals on the stat cards and filter pills.
+export const ENRICHMENT_MAX_PAGES = 20;
+
 // enrichmentTotalForFilter derives the total row count for the active status
 // filter from the per-status counts the server always returns. With no filter
 // it sums every status; with one selected it reads that bucket. This is what
@@ -1261,6 +1267,12 @@ export function useEnrichmentStatusInfinite(opts: {
       const total = enrichmentTotalForFilter(lastPage.counts, status);
       return next >= total ? undefined : next;
     },
+    // Bound how many pages are retained so a deep scroll cannot make the poll
+    // re-issue an unbounded number of offset queries every tick. When the cap
+    // is exceeded, fetching the next page drops the oldest one (the queue is a
+    // monitor; nobody eyeballs tens of thousands of rows). ENRICHMENT_MAX_PAGES
+    // * pageSize is the in-view ceiling; counts still report the true total.
+    maxPages: ENRICHMENT_MAX_PAGES,
     refetchInterval: opts.intervalMs ?? 10_000,
     placeholderData: keepPreviousData,
   });
@@ -1311,6 +1323,22 @@ export function useRetryEnrichment(scope: TierWithOrg = { tier: "system" }) {
       if (scope.tier === "org") return orgAPI.retryEnrichment(scope.orgId!, ids);
       if (scope.tier === "self") return meAPI.retryEnrichment(ids);
       return adminAPI.retryEnrichment(ids);
+    },
+    onSuccess: () => invalidateAllEnrichmentScopes(qc, scope.orgId),
+  });
+}
+
+// useClearFailedEnrichment deletes failed enrichment jobs in the active tier's
+// scope (self/org/system, mirroring useRetryEnrichment). The mutation argument
+// is olderThanDays; 0 (the default) clears all failed rows in scope.
+export function useClearFailedEnrichment(scope: TierWithOrg = { tier: "system" }) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (olderThanDays?: number) => {
+      const req = { older_than_days: olderThanDays ?? 0 };
+      if (scope.tier === "org") return orgAPI.clearFailedJobs(scope.orgId!, req);
+      if (scope.tier === "self") return meAPI.clearFailedJobs(req);
+      return adminAPI.clearFailedJobs(req);
     },
     onSuccess: () => invalidateAllEnrichmentScopes(qc, scope.orgId),
   });
@@ -1449,7 +1477,7 @@ export function useBackfillConsolidationEntities() {
 export function useClearCompletedJobs() {
   const qc = useQueryClient();
   return useMutation<
-    ClearCompletedJobsResponse,
+    DeletedCountResponse,
     Error,
     { older_than_days?: number }
   >({

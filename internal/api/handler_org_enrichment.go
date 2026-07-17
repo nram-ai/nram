@@ -14,6 +14,7 @@ import (
 type OrgEnrichmentStore interface {
 	OrgQueueStatus(ctx context.Context, orgID uuid.UUID, params QueueListParams) (*EnrichmentQueueStatus, error)
 	OrgRetryFailed(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, error)
+	OrgClearFailed(ctx context.Context, orgID uuid.UUID, olderThanDays int) (int64, error)
 	// OrgNamespacePath returns the org's root namespace path, used as the
 	// path-prefix scope for the per-memory re-extract.
 	OrgNamespacePath(ctx context.Context, orgID uuid.UUID) (string, error)
@@ -53,6 +54,8 @@ func NewOrgEnrichmentHandler(cfg OrgEnrichmentConfig) http.HandlerFunc {
 			handleOrgEnrichmentQueue(w, r, cfg, *orgID)
 		case "retry":
 			handleOrgEnrichmentRetry(w, r, cfg, *orgID)
+		case "clear-failed":
+			handleOrgEnrichmentClearFailed(w, r, cfg, *orgID)
 		case "re-extract":
 			handleOrgEnrichmentReExtract(w, r, cfg, *orgID)
 		default:
@@ -93,6 +96,27 @@ func handleOrgEnrichmentRetry(w http.ResponseWriter, r *http.Request, cfg OrgEnr
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"retried": retried})
+}
+
+// handleOrgEnrichmentClearFailed handles POST /orgs/{orgId}/enrichment/clear-failed:
+// delete failed enrichment jobs in the org's namespace subtree. older_than_days
+// 0 clears all in scope. Returns rows deleted.
+func handleOrgEnrichmentClearFailed(w http.ResponseWriter, r *http.Request, cfg OrgEnrichmentConfig, orgID uuid.UUID) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	var body enrichmentClearRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	deleted, err := cfg.Store.OrgClearFailed(r.Context(), orgID, body.OlderThanDays)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to clear failed enrichment jobs"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
 }
 
 // handleOrgEnrichmentReExtract handles POST /orgs/{orgId}/enrichment/re-extract:

@@ -454,6 +454,93 @@ func buildQueueListItemsQuery(cols, fromJoin, where string, args []any, ph func(
 	return q, args
 }
 
+// scopedNamespaceSubtree renders the scope predicate shared by the self and org
+// queue-list and count queries: match enrichment_queue rows whose namespace is
+// the given path or descended from it, via the denormalized
+// enrichment_queue.namespace_id rather than a memories+namespaces join. A queue
+// row cannot outlive its memory (memory_id is an ON DELETE CASCADE FK, migration
+// 000023_memory_fk_cascade) and namespace_id is that memory's namespace, so this
+// is equivalent to the old n.path join but lets idx_enrichment_queue_ns_status_created
+// serve the filter, count grouping, and ordering. ph must be the generator used
+// for the surrounding query so placeholder numbering stays contiguous; it is
+// invoked twice and the caller must append exactPath then prefixPattern.
+func scopedNamespaceSubtree(ph func() string) string {
+	return "eq.namespace_id IN (SELECT id FROM namespaces WHERE path = " + ph() + " OR path LIKE " + ph() + ")"
+}
+
+// scopedCountByStatus returns per-status queue counts for a namespace subtree as
+// a single GROUP BY over enrichment_queue.namespace_id, replacing four separate
+// scoped COUNT(*) queries that each joined memories+namespaces and full-scanned
+// the queue on a large failed backlog. Mirrors the system tier's
+// EnrichmentQueueRepo.CountByStatus, scoped to the subtree.
+func (s *EnrichmentAdminStore) scopedCountByStatus(ctx context.Context, exactPath, prefixPattern string) (api.EnrichmentQueueCounts, error) {
+	var counts api.EnrichmentQueueCounts
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	q := `SELECT eq.status, COUNT(*) FROM enrichment_queue eq WHERE ` +
+		scopedNamespaceSubtree(ph) + ` GROUP BY eq.status`
+	rows, err := s.db.Query(ctx, q, exactPath, prefixPattern)
+	if err != nil {
+		return counts, fmt.Errorf("scoped queue counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return api.EnrichmentQueueCounts{}, fmt.Errorf("scoped queue counts scan: %w", err)
+		}
+		switch status {
+		case model.EnrichmentStatusPending:
+			counts.Pending = count
+		case model.EnrichmentStatusProcessing:
+			counts.Processing = count
+		case model.EnrichmentStatusCompleted:
+			counts.Completed = count
+		case model.EnrichmentStatusFailed:
+			counts.Failed = count
+		}
+	}
+	return counts, rows.Err()
+}
+
+// scopedQueueStatus returns the counts + one page of items for a namespace
+// subtree. It is the shared body of SelfQueueStatus and OrgQueueStatus, which
+// differ only in how they resolve the path and whether project names are
+// surfaced (self callers own every returned project; org/system see UUIDs only,
+// matching the privacy posture). withProjectName threads through both
+// queueItemSelectColumns and scanQueueItems.
+func (s *EnrichmentAdminStore) scopedQueueStatus(ctx context.Context, exactPath, prefixPattern string, withProjectName bool, params api.QueueListParams) (*api.EnrichmentQueueStatus, error) {
+	counts, err := s.scopedCountByStatus(ctx, exactPath, prefixPattern)
+	if err != nil {
+		return nil, err
+	}
+
+	params = params.Normalize()
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	itemsQ, args := buildQueueListItemsQuery(
+		queueItemSelectColumns(withProjectName),
+		`
+		FROM enrichment_queue eq
+		JOIN memories m ON eq.memory_id = m.id
+		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
+		scopedNamespaceSubtree(ph), []any{exactPath, prefixPattern}, ph, params,
+	)
+
+	rows, err := s.db.Query(ctx, itemsQ, args...)
+	if err != nil {
+		return nil, fmt.Errorf("scoped queue items: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	queueItems, err := s.scanQueueItems(ctx, rows, withProjectName)
+	if err != nil {
+		return nil, fmt.Errorf("scoped queue scan: %w", err)
+	}
+
+	paused, _ := s.IsPaused(ctx)
+	return &api.EnrichmentQueueStatus{Counts: counts, Items: queueItems, Paused: paused}, nil
+}
+
 // SelfQueueStatus returns the queue items whose memory.namespace_id is
 // descended from the given user namespace. Counts are also scoped to the
 // caller. Used by /v1/me/enrichment.
@@ -466,67 +553,8 @@ func (s *EnrichmentAdminStore) SelfQueueStatus(ctx context.Context, userNamespac
 	if err := row.Scan(&callerPath); err != nil {
 		return nil, fmt.Errorf("self queue caller namespace: %w", err)
 	}
-
-	prefixPattern := callerPath + "/%"
-	exactPath := callerPath
-
-	var counts api.EnrichmentQueueCounts
-	for _, st := range []struct {
-		status string
-		dest   *int
-	}{
-		{model.EnrichmentStatusPending, &counts.Pending},
-		{model.EnrichmentStatusProcessing, &counts.Processing},
-		{model.EnrichmentStatusCompleted, &counts.Completed},
-		{model.EnrichmentStatusFailed, &counts.Failed},
-	} {
-		var q string
-		if s.db.Backend() == storage.BackendPostgres {
-			q = `SELECT COUNT(*) FROM enrichment_queue eq
-				JOIN memories m ON eq.memory_id = m.id
-				JOIN namespaces n ON m.namespace_id = n.id
-				WHERE eq.status = $1 AND (n.path = $2 OR n.path LIKE $3)`
-		} else {
-			q = `SELECT COUNT(*) FROM enrichment_queue eq
-				JOIN memories m ON eq.memory_id = m.id
-				JOIN namespaces n ON m.namespace_id = n.id
-				WHERE eq.status = ? AND (n.path = ? OR n.path LIKE ?)`
-		}
-		row := s.db.QueryRow(ctx, q, st.status, exactPath, prefixPattern)
-		_ = row.Scan(st.dest)
-	}
-
-	params = params.Normalize()
-	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
-	where := "n.path = " + ph() + " OR n.path LIKE " + ph()
-	itemsQ, args := buildQueueListItemsQuery(
-		queueItemSelectColumns(true),
-		`
-		FROM enrichment_queue eq
-		JOIN memories m ON eq.memory_id = m.id
-		JOIN namespaces n ON m.namespace_id = n.id
-		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
-		where, []any{exactPath, prefixPattern}, ph, params,
-	)
-
-	rows, err := s.db.Query(ctx, itemsQ, args...)
-	if err != nil {
-		return nil, fmt.Errorf("self queue items: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	queueItems, err := s.scanQueueItems(ctx, rows, true)
-	if err != nil {
-		return nil, fmt.Errorf("self queue scan: %w", err)
-	}
-
-	paused, _ := s.IsPaused(ctx)
-
-	return &api.EnrichmentQueueStatus{
-		Counts: counts,
-		Items:  queueItems,
-		Paused: paused,
-	}, nil
+	// Self callers own every returned project, so project names are surfaced.
+	return s.scopedQueueStatus(ctx, callerPath, callerPath+"/%", true, params)
 }
 
 func parseQueueTime(s string) (t time.Time, err error) {
@@ -590,24 +618,36 @@ func (s *EnrichmentAdminStore) QueueStatus(ctx context.Context, params api.Queue
 	}, nil
 }
 
+// extractionHealthWindow bounds the extraction-health tally to recent rows. The
+// panel reports current ("rolling") extraction outcomes, so an all-time SUM over
+// every last_error row is both unnecessary and, on a large failed backlog, a
+// full table scan on every System-tab load. Bounding to a recent created_at
+// window keeps the meaning (recent health) and lets the partial
+// idx_enrichment_queue_error_created serve it.
+const extractionHealthWindow = 7 * 24 * time.Hour
+
 // extractionHealth counts enrichment_queue jobs whose latest last_error carries
 // each extraction outcome marker (the stable ExtractionReason strings). last_error
 // is JSONB on Postgres and text on SQLite; a substring match over its text form
 // covers both the structured warnings ({"warnings":[{"reason":...}]}) and the
-// top-level failure payloads without parsing per-backend JSON paths.
+// top-level failure payloads without parsing per-backend JSON paths. Scoped to
+// rows created within extractionHealthWindow (see the const).
 func (s *EnrichmentAdminStore) extractionHealth(ctx context.Context) (api.EnrichmentExtractionHealthInfo, error) {
 	var info api.EnrichmentExtractionHealthInfo
 	errText := "last_error::text"
+	placeholder := "$1"
 	if s.db.Backend() != storage.BackendPostgres {
 		errText = "CAST(last_error AS TEXT)"
+		placeholder = "?"
 	}
 	cnt := func(marker string) string {
 		return fmt.Sprintf("COALESCE(SUM(CASE WHEN %s LIKE '%%%s%%' THEN 1 ELSE 0 END),0)", errText, marker)
 	}
-	q := fmt.Sprintf(`SELECT %s, %s, %s, %s, %s FROM enrichment_queue WHERE last_error IS NOT NULL`,
+	q := fmt.Sprintf(`SELECT %s, %s, %s, %s, %s FROM enrichment_queue WHERE last_error IS NOT NULL AND created_at > %s`,
 		cnt("partial_recovery"), cnt("parse_failed"), cnt("length_no_recovery"),
-		cnt("empty_response"), cnt("llm_call_failed"))
-	row := s.db.QueryRow(ctx, q)
+		cnt("empty_response"), cnt("llm_call_failed"), placeholder)
+	cutoff := time.Now().UTC().Add(-extractionHealthWindow).Format(time.RFC3339)
+	row := s.db.QueryRow(ctx, q, cutoff)
 	if err := row.Scan(&info.PartialRecovery, &info.ParseFailed, &info.LengthNoRecovery,
 		&info.EmptyResponse, &info.LLMCallFailed); err != nil {
 		return api.EnrichmentExtractionHealthInfo{}, fmt.Errorf("extraction health counts: %w", err)
@@ -647,69 +687,9 @@ func (s *EnrichmentAdminStore) OrgQueueStatus(ctx context.Context, orgID uuid.UU
 	if err != nil {
 		return nil, err
 	}
-	prefixPattern := orgPath + "/%"
-	exactPath := orgPath
-
-	var counts api.EnrichmentQueueCounts
-	for _, st := range []struct {
-		status string
-		dest   *int
-	}{
-		{model.EnrichmentStatusPending, &counts.Pending},
-		{model.EnrichmentStatusProcessing, &counts.Processing},
-		{model.EnrichmentStatusCompleted, &counts.Completed},
-		{model.EnrichmentStatusFailed, &counts.Failed},
-	} {
-		var q string
-		if s.db.Backend() == storage.BackendPostgres {
-			q = `SELECT COUNT(*) FROM enrichment_queue eq
-				JOIN memories m ON eq.memory_id = m.id
-				JOIN namespaces n ON m.namespace_id = n.id
-				WHERE eq.status = $1 AND (n.path = $2 OR n.path LIKE $3)`
-		} else {
-			q = `SELECT COUNT(*) FROM enrichment_queue eq
-				JOIN memories m ON eq.memory_id = m.id
-				JOIN namespaces n ON m.namespace_id = n.id
-				WHERE eq.status = ? AND (n.path = ? OR n.path LIKE ?)`
-		}
-		row := s.db.QueryRow(ctx, q, st.status, exactPath, prefixPattern)
-		_ = row.Scan(st.dest)
-	}
-
-	params = params.Normalize()
-	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
-	where := "n.path = " + ph() + " OR n.path LIKE " + ph()
-	itemsQ, args := buildQueueListItemsQuery(
-		queueItemSelectColumns(false),
-		`
-		FROM enrichment_queue eq
-		JOIN memories m ON eq.memory_id = m.id
-		JOIN namespaces n ON m.namespace_id = n.id
-		LEFT JOIN projects p ON p.namespace_id = m.namespace_id`,
-		where, []any{exactPath, prefixPattern}, ph, params,
-	)
-
-	rows, err := s.db.Query(ctx, itemsQ, args...)
-	if err != nil {
-		return nil, fmt.Errorf("org queue items: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	queueItems, err := s.scanQueueItems(ctx, rows, false)
-	if err != nil {
-		return nil, fmt.Errorf("org queue scan: %w", err)
-	}
-
-	// Pause is a global flag. Surface it so the org tab can render the
-	// "workers paused" indicator, but the org-tier handler does not expose
-	// the pause/resume control.
-	paused, _ := s.IsPaused(ctx)
-
-	return &api.EnrichmentQueueStatus{
-		Counts: counts,
-		Items:  queueItems,
-		Paused: paused,
-	}, nil
+	// Org owners see project UUIDs only (no names) for projects owned by other
+	// users in the org, matching the system-tier privacy posture.
+	return s.scopedQueueStatus(ctx, orgPath, orgPath+"/%", false, params)
 }
 
 // jobInNamespacePrefix returns true iff the queue job's memory namespace
@@ -819,6 +799,62 @@ func (s *EnrichmentAdminStore) ClearCompletedJobs(ctx context.Context, olderThan
 		return 0, fmt.Errorf("clear completed jobs rows affected: %w", err)
 	}
 	return n, nil
+}
+
+// deleteFailedInNamespacePath hard-deletes failed enrichment jobs whose memory
+// namespace matches or is descended from prefix. An empty prefix means global
+// (no scope filter), the admin path. When olderThanDays > 0 only rows whose
+// updated_at (the last-failure timestamp, matching the retention sweep's
+// DeleteFailedBefore) is older than the cutoff are removed; 0 deletes every
+// failed row in scope. Scoped strictly to status='failed', so it never touches
+// pending/processing/completed rows and cannot strand an in-flight memory. It is
+// a single set-based DELETE (not the retry path's per-row loop, which on SQLite
+// serializes tens of thousands of writes and hangs). Returns rows deleted.
+func (s *EnrichmentAdminStore) deleteFailedInNamespacePath(ctx context.Context, prefix string, olderThanDays int) (int64, error) {
+	ph := placeholderFn(s.db.Backend() == storage.BackendPostgres)
+	query := "DELETE FROM enrichment_queue WHERE status = 'failed'"
+	var args []any
+	if olderThanDays > 0 {
+		cutoff := time.Now().UTC().AddDate(0, 0, -olderThanDays).Format(time.RFC3339)
+		query += " AND updated_at < " + ph()
+		args = append(args, cutoff)
+	}
+	if prefix != "" {
+		// No table alias: SQLite DELETE does not accept one. namespace_id is the
+		// denormalized memory namespace (see scopedNamespaceSubtree).
+		query += " AND namespace_id IN (SELECT id FROM namespaces WHERE path = " + ph() + " OR path LIKE " + ph() + ")"
+		args = append(args, prefix, prefix+"/%")
+	}
+	res, err := s.db.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("clear failed jobs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("clear failed jobs rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// SelfClearFailed deletes failed jobs whose memory namespace is descended from
+// (or equal to) the caller's user namespace path.
+func (s *EnrichmentAdminStore) SelfClearFailed(ctx context.Context, userNamespacePath string, olderThanDays int) (int64, error) {
+	return s.deleteFailedInNamespacePath(ctx, userNamespacePath, olderThanDays)
+}
+
+// OrgClearFailed deletes failed jobs scoped to the given org's namespace subtree.
+func (s *EnrichmentAdminStore) OrgClearFailed(ctx context.Context, orgID uuid.UUID, olderThanDays int) (int64, error) {
+	orgPath, err := s.orgNamespacePath(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	return s.deleteFailedInNamespacePath(ctx, orgPath, olderThanDays)
+}
+
+// ClearFailedJobs deletes failed jobs globally (the system/admin path). Shares
+// the one set-based mechanism with the org/self paths via an empty prefix.
+func (s *EnrichmentAdminStore) ClearFailedJobs(ctx context.Context, olderThanDays int) (int64, error) {
+	return s.deleteFailedInNamespacePath(ctx, "", olderThanDays)
 }
 
 func (s *EnrichmentAdminStore) SetPaused(ctx context.Context, paused bool) error {

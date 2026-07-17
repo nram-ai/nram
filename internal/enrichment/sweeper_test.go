@@ -25,6 +25,12 @@ type fakeSweeperSettings struct {
 	// default.
 	failedRetentionDays    int
 	failedRetentionDaysSet bool
+
+	// failedMaxRows overrides enrichment.failed_max_rows when failedMaxRowsSet is
+	// true (so a test can assert the 0=disabled path); otherwise
+	// ResolveIntWithDefault falls through to the registered default.
+	failedMaxRows    int
+	failedMaxRowsSet bool
 }
 
 func (f *fakeSweeperSettings) ResolveDurationSecondsWithDefault(_ context.Context, key, _ string) time.Duration {
@@ -51,6 +57,9 @@ func (f *fakeSweeperSettings) ResolveIntWithDefault(_ context.Context, key, _ st
 	if key == service.SettingEnrichmentFailedRetentionDays && f.failedRetentionDaysSet {
 		return f.failedRetentionDays
 	}
+	if key == service.SettingEnrichmentFailedMaxRows && f.failedMaxRowsSet {
+		return f.failedMaxRows
+	}
 	return service.GetDefaultInt(key)
 }
 
@@ -76,6 +85,13 @@ type fakeStuckJobStore struct {
 	deleteFailedCalls  int
 	lastDeleteCutoff   time.Time
 	lastDeleteLimit    int
+
+	// Count-cap prune capture.
+	deleteBeyondReturn int
+	deleteBeyondErr    error
+	deleteBeyondCalls  int
+	lastBeyondMaxRows  int
+	lastBeyondLimit    int
 }
 
 func (s *fakeStuckJobStore) ListStaleClaimed(_ context.Context, updatedThreshold, claimedAtMaxAge time.Duration, _ int) ([]*model.EnrichmentJob, error) {
@@ -124,6 +140,18 @@ func (s *fakeStuckJobStore) DeleteFailedBefore(_ context.Context, cutoff time.Ti
 		return 0, s.deleteFailedErr
 	}
 	return s.deleteFailedReturn, nil
+}
+
+func (s *fakeStuckJobStore) DeleteFailedBeyondCount(_ context.Context, maxRows, limit int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteBeyondCalls++
+	s.lastBeyondMaxRows = maxRows
+	s.lastBeyondLimit = limit
+	if s.deleteBeyondErr != nil {
+		return 0, s.deleteBeyondErr
+	}
+	return s.deleteBeyondReturn, nil
 }
 
 // stuckJob constructs a stale-looking *model.EnrichmentJob for the fake store.
@@ -468,6 +496,51 @@ func TestStuckJobSweeper_RetentionDisabled(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.deleteFailedCalls != 0 {
 		t.Fatalf("DeleteFailedBefore calls = %d, want 0 when retention disabled", store.deleteFailedCalls)
+	}
+}
+
+func TestStuckJobSweeper_PrunesFailedCountCap(t *testing.T) {
+	store := &fakeStuckJobStore{deleteBeyondReturn: 3}
+	// Default cap (10000) and default scan limit, no stale jobs; the count-cap
+	// prune still runs because it precedes the empty-stale early return.
+	sweeper := newTestSweeper(store, events.NewMemoryBus(8, 8))
+
+	if err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.deleteBeyondCalls != 1 {
+		t.Fatalf("DeleteFailedBeyondCount calls = %d, want 1", store.deleteBeyondCalls)
+	}
+	if store.lastBeyondMaxRows != service.GetDefaultInt(service.SettingEnrichmentFailedMaxRows) {
+		t.Errorf("cap max rows = %d, want failed_max_rows default %d",
+			store.lastBeyondMaxRows, service.GetDefaultInt(service.SettingEnrichmentFailedMaxRows))
+	}
+	if store.lastBeyondLimit != service.GetDefaultInt(service.SettingEnrichmentStuckScanLimit) {
+		t.Errorf("cap limit = %d, want stuck_scan_limit default %d",
+			store.lastBeyondLimit, service.GetDefaultInt(service.SettingEnrichmentStuckScanLimit))
+	}
+}
+
+func TestStuckJobSweeper_CountCapDisabled(t *testing.T) {
+	store := &fakeStuckJobStore{deleteBeyondReturn: 3}
+	settings := &fakeSweeperSettings{
+		stuckThreshold:   30 * time.Minute,
+		failedMaxRows:    0,
+		failedMaxRowsSet: true,
+	}
+	sweeper := NewStuckJobSweeper(store, settings, events.NewMemoryBus(8, 8))
+
+	if err := sweeper.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.deleteBeyondCalls != 0 {
+		t.Fatalf("DeleteFailedBeyondCount calls = %d, want 0 when count cap disabled", store.deleteBeyondCalls)
 	}
 }
 

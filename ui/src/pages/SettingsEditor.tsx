@@ -29,6 +29,7 @@ import { MultiVectorBackfillBlock } from "../components/MultiVectorBackfillBlock
 import { MissingEmbeddingBackfillBlock } from "../components/MissingEmbeddingBackfillBlock";
 import { ConsolidationEntityBackfillBlock } from "../components/ConsolidationEntityBackfillBlock";
 import { ClearCompletedJobsBlock } from "../components/ClearCompletedJobsBlock";
+import { ClearFailedJobsBlock } from "../components/ClearFailedJobsBlock";
 import { GraphCleanupBlock } from "../components/GraphCleanupBlock";
 import { GraphMaintenanceBlock } from "../components/GraphMaintenanceBlock";
 import { VectorMigrationBlock } from "../components/VectorMigrationBlock";
@@ -804,6 +805,7 @@ function CategoryTrailingBlock({ category }: { category: string }) {
         <MissingEmbeddingBackfillBlock />
         <ConsolidationEntityBackfillBlock />
         <ClearCompletedJobsBlock />
+        <ClearFailedJobsBlock />
       </>
     );
   if (category === "lifecycle") return <GraphMaintenanceBlock />;

@@ -1696,7 +1696,9 @@ export interface MissingEmbeddingsBackfillResponse {
 
 // Response for POST /admin/enrichment/clear-completed-jobs. deleted is the
 // number of completed enrichment_queue rows removed.
-export interface ClearCompletedJobsResponse {
+// Response for the clear-jobs endpoints (completed and failed): the number of
+// rows deleted.
+export interface DeletedCountResponse {
   deleted: number;
 }
 
@@ -2270,9 +2272,19 @@ export const adminAPI = {
   // older_than_days 0 clears all completed rows; a positive value keeps rows
   // completed within that window. Never touches pending/processing.
   clearCompletedJobs: (req: { older_than_days?: number }) =>
-    request<ClearCompletedJobsResponse>(
+    request<DeletedCountResponse>(
       "POST",
       "/admin/enrichment/clear-completed-jobs",
+      req,
+    ),
+
+  // Delete failed enrichment queue rows across all tenants. older_than_days 0
+  // clears all failed rows; a positive value keeps rows that last failed within
+  // that window. Never touches pending/processing/completed.
+  clearFailedJobs: (req: { older_than_days?: number }) =>
+    request<DeletedCountResponse>(
+      "POST",
+      "/admin/enrichment/clear-failed-jobs",
       req,
     ),
 
@@ -2779,6 +2791,11 @@ export const meAPI = {
   retryEnrichment: (ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", "/me/enrichment/retry", { ids: ids ?? [] }),
 
+  // Delete the caller's failed enrichment queue rows (scoped server-side to the
+  // caller's namespace subtree). older_than_days 0 clears all in scope.
+  clearFailedJobs: (req: { older_than_days?: number }) =>
+    request<DeletedCountResponse>("POST", "/me/enrichment/clear-failed", req),
+
   // Per-memory re-extract of the caller's own memories, scoped server-side to
   // the caller's namespace. memoryIds are memory IDs, not queue job IDs.
   reExtractMemories: (memoryIds: string[]) =>
@@ -2891,6 +2908,11 @@ export const orgAPI = {
     ),
   retryEnrichment: (orgId: string, ids?: string[]) =>
     request<EnrichmentRetryResponse>("POST", `/orgs/${orgId}/enrichment/retry`, { ids: ids ?? [] }),
+
+  // Delete failed enrichment queue rows in the org's namespace subtree.
+  // older_than_days 0 clears all in scope.
+  clearFailedJobs: (orgId: string, req: { older_than_days?: number }) =>
+    request<DeletedCountResponse>("POST", `/orgs/${orgId}/enrichment/clear-failed`, req),
 
   // Per-memory re-extract within the org, scoped server-side to the org's
   // namespace subtree. memoryIds are memory IDs, not queue job IDs.

@@ -14,6 +14,7 @@ import (
 type MeEnrichmentStore interface {
 	SelfQueueStatus(ctx context.Context, userNamespaceID uuid.UUID, params QueueListParams) (*EnrichmentQueueStatus, error)
 	SelfRetryFailed(ctx context.Context, userNamespacePath string, ids []uuid.UUID) (int, error)
+	SelfClearFailed(ctx context.Context, userNamespacePath string, olderThanDays int) (int64, error)
 }
 
 // MeEnrichmentConfig wires NewSelfEnrichmentHandler.
@@ -54,6 +55,8 @@ func NewSelfEnrichmentHandler(cfg MeEnrichmentConfig) http.HandlerFunc {
 			handleMeEnrichmentQueue(w, r, cfg, user.NamespaceID)
 		case "retry":
 			handleMeEnrichmentRetry(w, r, cfg, user.NamespaceID)
+		case "clear-failed":
+			handleMeEnrichmentClearFailed(w, r, cfg, user.NamespaceID)
 		case "re-extract":
 			handleMeEnrichmentReExtract(w, r, cfg, user.NamespaceID)
 		default:
@@ -103,6 +106,36 @@ func handleMeEnrichmentRetry(w http.ResponseWriter, r *http.Request, cfg MeEnric
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"retried": retried})
+}
+
+// handleMeEnrichmentClearFailed handles POST /me/enrichment/clear-failed: delete
+// the caller's failed enrichment jobs (scoped to the caller's namespace path
+// prefix). older_than_days 0 clears all in scope. Returns rows deleted.
+func handleMeEnrichmentClearFailed(w http.ResponseWriter, r *http.Request, cfg MeEnrichmentConfig, userNS uuid.UUID) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.Namespaces == nil {
+		WriteError(w, ErrInternal("namespace lookup unavailable"))
+		return
+	}
+	ns, err := cfg.Namespaces.GetByID(r.Context(), userNS)
+	if err != nil || ns == nil {
+		WriteError(w, ErrInternal("failed to resolve user namespace"))
+		return
+	}
+	var body enrichmentClearRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	deleted, err := cfg.Store.SelfClearFailed(r.Context(), ns.Path, body.OlderThanDays)
+	if err != nil {
+		WriteError(w, ErrInternal("failed to clear failed enrichment jobs"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
 }
 
 // handleMeEnrichmentReExtract handles POST /me/enrichment/re-extract: re-extract

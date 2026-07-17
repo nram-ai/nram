@@ -1253,3 +1253,48 @@ func (r *EnrichmentQueueRepo) DeleteFailedBefore(ctx context.Context, cutoff tim
 	}
 	return int(rows), nil
 }
+
+// DeleteFailedBeyondCount hard-deletes failed enrichment_queue rows in excess of
+// maxRows per namespace, keeping the newest maxRows (by created_at, id) in each
+// namespace and deleting the rest, up to limit rows total per call (0 or
+// negative falls through to stuckScanLimit). It is the count-based companion to
+// DeleteFailedBefore: age retention cannot help a burst of failures newer than
+// its cutoff, and that fresh backlog is what makes the queue view slow to load.
+// A maxRows of 0 or below disables the cap and deletes nothing. Returns the
+// number of rows deleted. The (namespace_id, status, created_at) index serves
+// the window's partition/order.
+func (r *EnrichmentQueueRepo) DeleteFailedBeyondCount(ctx context.Context, maxRows, limit int) (int, error) {
+	if maxRows <= 0 {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = stuckScanLimit
+	}
+
+	// Rank failed rows newest-first within each namespace; rn > maxRows are the
+	// surplus older rows. The DELETE ... WHERE id IN (SELECT ... LIMIT n) form is
+	// portable (Postgres has no DELETE LIMIT; SQLite only with a non-default
+	// build flag), and the inner LIMIT bounds work per call so a huge backlog
+	// drains over several sweeps rather than locking the writer in one statement.
+	query := `DELETE FROM enrichment_queue WHERE id IN (
+		SELECT id FROM (
+			SELECT id, ROW_NUMBER() OVER (
+				PARTITION BY namespace_id ORDER BY created_at DESC, id DESC) AS rn
+			FROM enrichment_queue WHERE status = 'failed'
+		) ranked
+		WHERE rn > ?
+		LIMIT ?)`
+	if r.db.Backend() == BackendPostgres {
+		query = postgresPlaceholders(query)
+	}
+
+	res, err := r.db.Exec(ctx, query, maxRows, limit)
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue delete failed beyond count: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("enrichment queue delete failed beyond count rows affected: %w", err)
+	}
+	return int(rows), nil
+}

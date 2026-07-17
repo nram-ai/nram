@@ -20,6 +20,7 @@ type stuckJobStore interface {
 	ListStaleClaimed(ctx context.Context, updatedThreshold, claimedAtMaxAge time.Duration, limit int) ([]*model.EnrichmentJob, error)
 	RequeueStale(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 	DeleteFailedBefore(ctx context.Context, cutoff time.Time, limit int) (int, error)
+	DeleteFailedBeyondCount(ctx context.Context, maxRows, limit int) (int, error)
 }
 
 // sweeperSettingsResolver is the slice of *service.SettingsService the
@@ -141,6 +142,7 @@ func (s *StuckJobSweeper) run(ctx context.Context) {
 // empty stale set (the common case) does not skip it.
 func (s *StuckJobSweeper) Sweep(ctx context.Context) error {
 	s.pruneFailedRetention(ctx)
+	s.pruneFailedCountCap(ctx)
 
 	threshold := s.settings.ResolveDurationSecondsWithDefault(ctx,
 		service.SettingEnrichmentStuckThreshold, "global")
@@ -271,6 +273,35 @@ func (s *StuckJobSweeper) pruneFailedRetention(ctx context.Context) {
 	if deleted > 0 {
 		slog.Info("enrichment: pruned failed jobs past retention",
 			"count", deleted, "retention_days", days)
+	}
+}
+
+// pruneFailedCountCap hard-deletes failed enrichment jobs in excess of
+// enrichment.failed_max_rows per namespace, keeping the newest rows and deleting
+// the surplus, bounded to stuck_scan_limit rows per sweep so a large backlog
+// drains over several ticks. It is the count-based companion to
+// pruneFailedRetention: a burst of failures newer than the age cutoff is exactly
+// what age retention cannot reap, and that fresh backlog is what makes the queue
+// view slow to load. A cap of 0 (or below) disables it. Errors are logged, not
+// returned: like the age prune, this is best-effort and must not block the
+// stale-claim recovery that follows it in Sweep.
+func (s *StuckJobSweeper) pruneFailedCountCap(ctx context.Context) {
+	maxRows := s.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentFailedMaxRows, "global")
+	if maxRows <= 0 {
+		return
+	}
+	limit := s.settings.ResolveIntWithDefault(ctx,
+		service.SettingEnrichmentStuckScanLimit, "global")
+
+	deleted, err := s.queueRepo.DeleteFailedBeyondCount(ctx, maxRows, limit)
+	if err != nil {
+		slog.Warn("enrichment: failed-job count-cap prune failed", "err", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("enrichment: pruned failed jobs past count cap",
+			"count", deleted, "max_rows", maxRows)
 	}
 }
 

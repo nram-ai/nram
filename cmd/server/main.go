@@ -1477,6 +1477,7 @@ func main() {
 			// repeated full scan; an informational indicator tolerates TTL staleness.
 			CountMissingEmbeddings: cachedInt64(30*time.Second, memoryRepo.CountMissingEmbeddings),
 			ClearCompletedJobs:     enrichmentAdminStore.ClearCompletedJobs,
+			ClearFailedJobs:        enrichmentAdminStore.ClearFailedJobs,
 		}),
 		AdminOAuth:           api.NewAdminOAuthHandler(api.OAuthAdminConfig{Store: oauthAdminStore}),
 		AdminWebhooks:        api.NewAdminWebhooksHandler(api.WebhookAdminConfig{Store: webhookAdminStore}),

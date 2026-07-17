@@ -1670,6 +1670,21 @@ describe("API Client E2E", () => {
       }
     });
 
+    it("clearFailedJobs() admin + self returns deleted count or errors", async () => {
+      try {
+        const admin = await adminAPI.clearFailedJobs({ older_than_days: 0 });
+        expect(admin).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+      try {
+        const me = await meAPI.clearFailedJobs({ older_than_days: 7 });
+        expect(me).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
     it("getGraphHealth() + repairGraph() run", async () => {
       const health = await adminAPI.getGraphHealth();
       expect(health).toBeDefined();
@@ -2409,6 +2424,15 @@ describe("API Client E2E", () => {
         const r = await meAPI.reExtractMemories([
           "00000000-0000-0000-0000-000000000001",
         ]);
+        expect(r).toBeDefined();
+      } catch (e) {
+        expect(e).toBeInstanceOf(APIError);
+      }
+    });
+
+    it("orgAPI.clearFailedJobs returns deleted count or errors", async () => {
+      try {
+        const r = await orgAPI.clearFailedJobs(orgId, { older_than_days: 0 });
         expect(r).toBeDefined();
       } catch (e) {
         expect(e).toBeInstanceOf(APIError);

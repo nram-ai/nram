@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.46
+  version: 0.18.47
   license:
     name: MIT
 
@@ -3395,6 +3395,39 @@ paths:
               schema:
                 $ref: "#/components/schemas/EnrichmentRetryResponse"
 
+  /v1/me/enrichment/clear-failed:
+    post:
+      operationId: meClearFailedEnrichment
+      tags: [Enrichment]
+      summary: Delete the caller's failed enrichment jobs
+      description: >
+        Deletes the caller's failed enrichment_queue rows (scoped to the caller's
+        namespace subtree) so the queue view stays readable after a burst of
+        failures. Scoped strictly to failed jobs; pending, processing and
+        completed rows are never touched. older_than_days 0 clears all failed
+        rows in scope.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                older_than_days:
+                  type: integer
+                  minimum: 0
+                  description: Keep rows that last failed within this many days; 0 clears all.
+      responses:
+        "200":
+          description: Number of failed rows deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+
   # ── Tier-A: usage cost rates ────────────────────────────────────────────
   /v1/usage/cost_rates:
     get:
@@ -3583,6 +3616,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EnrichmentRetryResponse"
+
+  /v1/orgs/{org_id}/enrichment/clear-failed:
+    post:
+      operationId: orgClearFailedEnrichment
+      tags: [Enrichment]
+      summary: Delete failed org enrichment jobs (org_owner+)
+      description: >
+        Deletes failed enrichment_queue rows in the org's namespace subtree so
+        the queue view stays readable after a burst of failures. Scoped strictly
+        to failed jobs; pending, processing and completed rows are never touched.
+        older_than_days 0 clears all failed rows in scope.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                older_than_days:
+                  type: integer
+                  minimum: 0
+                  description: Keep rows that last failed within this many days; 0 clears all.
+      responses:
+        "200":
+          description: Number of failed rows deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
 
   /v1/orgs/{org_id}/idp/{id}:
     put:
@@ -4175,6 +4242,38 @@ paths:
       responses:
         "200":
           description: Number of completed rows deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+
+  /v1/admin/enrichment/clear-failed-jobs:
+    post:
+      operationId: adminClearFailedJobs
+      tags: [Enrichment]
+      summary: Delete failed enrichment queue rows (administrator only)
+      description: >
+        Deletes failed enrichment_queue rows across all tenants so the queue view
+        stays readable after a burst of failures. Scoped strictly to failed jobs;
+        pending, processing and completed rows are never touched. older_than_days
+        0 clears all failed rows.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                older_than_days:
+                  type: integer
+                  minimum: 0
+                  description: Keep rows that last failed within this many days; 0 clears all.
+      responses:
+        "200":
+          description: Number of failed rows deleted
           content:
             application/json:
               schema:
@@ -6438,6 +6537,7 @@ components:
         - "enrichment.fact_extraction.max_tokens"
         - "enrichment.fact_extraction.sync.temperature"
         - "enrichment.fact_system_prompt"
+        - "enrichment.failed_max_rows"
         - "enrichment.failed_retention_days"
         - "enrichment.ingestion.rationale_max_len"
         - "enrichment.ingestion_decision.enabled"

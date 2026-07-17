@@ -409,6 +409,16 @@ const (
 	// moved on), so reaping it keeps the queue lean.
 	SettingEnrichmentFailedRetentionDays = "enrichment.failed_retention_days"
 
+	// SettingEnrichmentFailedMaxRows caps how many failed enrichment jobs are
+	// retained per namespace regardless of age. It is the count-based companion
+	// to failed_retention_days: age retention drains a steady trickle of stale
+	// failures, but a sudden burst (a misconfigured provider failing every job)
+	// can pile up tens of thousands of rows in minutes, all newer than the age
+	// cutoff, and that backlog is what makes the queue view slow to load. The
+	// sweeper keeps the newest N failed rows per namespace (by created_at) and
+	// deletes the rest. 0 disables the count cap. Default 10000.
+	SettingEnrichmentFailedMaxRows = "enrichment.failed_max_rows"
+
 	// Fact and entity extraction LLM-call tunables. Resolved per call by both
 	// ExtractionService (sync HTTP path) and WorkerPool (async queue worker)
 	// so changes hot-reload within the cascade cache TTL. max_tokens caps
@@ -1274,6 +1284,7 @@ var settingDefaults = map[string]string{
 	SettingEnrichmentStuckSweep:                   "300",
 	SettingEnrichmentClaimMaxAge:                  "7200",
 	SettingEnrichmentFailedRetentionDays:          "7",
+	SettingEnrichmentFailedMaxRows:                "10000",
 
 	SettingFactExtractionMaxTokens:          "4096",
 	SettingEntityExtractionMaxTokens:        "4096",

@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import {
   useEnrichmentStatusInfinite,
   useRetryEnrichment,
+  useClearFailedEnrichment,
   useReExtractMemories,
   usePauseEnrichment,
   enrichmentTotalForFilter,
@@ -1098,7 +1099,7 @@ function EnrichmentMonitor() {
   const { isAdmin, isOrgOwner, user } = useAuth();
   const orgId = user?.org_id;
   const { liveJobs, poolTick, connected } = useEnrichmentLiveState();
-  const statusIntervalMs = connected ? 10_000 : 3_000;
+  const statusIntervalMs = connected ? 10_000 : 15_000;
 
   // Default to self-tier for everyone. The TierTabs picker only renders
   // additional tiers when the caller's role grants them; plain users see
@@ -1123,6 +1124,7 @@ function EnrichmentMonitor() {
     status: statusFilter,
   });
   const retryMutation = useRetryEnrichment({ tier, orgId });
+  const clearFailedMutation = useClearFailedEnrichment({ tier, orgId });
   const reExtractMutation = useReExtractMemories({ tier, orgId });
   const pauseMutation = usePauseEnrichment();
   const showWriteActions =
@@ -1131,6 +1133,10 @@ function EnrichmentMonitor() {
     (tier === "system" && isAdmin);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Inline confirm gate for Clear Failed: deleting failed rows is irreversible,
+  // so the button opens a confirm strip (showing the count) rather than firing
+  // immediately.
+  const [clearFailedConfirm, setClearFailedConfirm] = useState(false);
   // Last successful re-extract summary, shown in the mutation-feedback banner so
   // a 0/partial enqueue (rows that were ineligible or out of scope) is visible
   // instead of looking like a dead button. Errors use reExtractMutation.isError
@@ -1271,6 +1277,15 @@ function EnrichmentMonitor() {
       },
     });
   }, [retryMutation]);
+
+  const handleClearFailed = useCallback(() => {
+    setClearFailedConfirm(false);
+    clearFailedMutation.mutate(0, {
+      onSuccess: () => {
+        setSelectedIds(new Set());
+      },
+    });
+  }, [clearFailedMutation]);
 
   const handleTogglePause = useCallback(() => {
     pauseMutation.mutate(!isPaused);
@@ -1435,7 +1450,50 @@ function EnrichmentMonitor() {
                 Retry All Failed ({counts.failed})
               </button>
             )}
+
+            {counts.failed > 0 && (
+              <button
+                type="button"
+                onClick={() => setClearFailedConfirm(true)}
+                disabled={clearFailedMutation.isPending}
+                title="Delete failed enrichment jobs in this scope so the queue view stays fast. Does not touch pending, processing, or completed rows."
+                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-3 py-2 text-sm font-medium text-destructive shadow-sm hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {clearFailedMutation.isPending && <Spinner />}
+                Clear Failed ({counts.failed})
+              </button>
+            )}
           </div>
+          )}
+
+          {/* Clear Failed confirm strip: deleting failed rows is irreversible,
+              so surface the count and require an explicit confirm. */}
+          {clearFailedConfirm && (
+            <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-900/30">
+              <p className="text-xs text-yellow-900 dark:text-yellow-100">
+                Delete all {counts.failed} failed enrichment job
+                {counts.failed === 1 ? "" : "s"} in this scope? This is
+                irreversible. Pending, processing, and completed jobs are not
+                affected. Memories still needing enrichment may be re-queued as
+                pending on the next dreaming cycle.
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearFailed}
+                  className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground shadow-sm hover:bg-destructive/90"
+                >
+                  Delete failed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClearFailedConfirm(false)}
+                  className="rounded-md border border-input px-3 py-1 text-xs font-medium text-foreground shadow-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Missing embeddings: live memories with no stored vector, which are
@@ -1489,6 +1547,20 @@ function EnrichmentMonitor() {
             <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
               Failed to retry: {(retryMutation.error as Error).message}
+            </div>
+          )}
+
+          {clearFailedMutation.isSuccess && (
+            <div className="flex items-center gap-2 rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+              <FontAwesomeIcon icon={faCheck} className="h-4 w-4 flex-shrink-0" />
+              {clearFailedMutation.data.deleted} failed job(s) deleted.
+            </div>
+          )}
+
+          {clearFailedMutation.isError && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <FontAwesomeIcon icon={faXmark} className="h-4 w-4 flex-shrink-0" />
+              Failed to clear: {(clearFailedMutation.error as Error).message}
             </div>
           )}
 

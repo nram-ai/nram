@@ -1012,6 +1012,93 @@ func TestEnrichmentQueueRepo_DeleteFailedBefore(t *testing.T) {
 	})
 }
 
+// TestEnrichmentQueueRepo_DeleteFailedBeyondCount verifies the per-namespace
+// count cap: it keeps the newest maxRows failed rows in each namespace and
+// deletes the older surplus, leaves namespaces under the cap untouched, never
+// touches non-failed statuses, and deletes nothing when the cap is disabled (0).
+func TestEnrichmentQueueRepo_DeleteFailedBeyondCount(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEnrichmentQueueRepo(db)
+		memRepo := NewMemoryRepo(db)
+		cleanEnrichmentQueue(t, ctx, db)
+		now := time.Now().UTC()
+
+		// Namespace A: five failed rows at distinct created_at. aIDs[0] is the
+		// newest; aIDs[4] the oldest. With cap 2 the newest two survive.
+		nsA := createTestNamespace(t, ctx, db)
+		var aIDs []uuid.UUID
+		for i := range 5 {
+			mem := newTestMemory(nsA)
+			if err := memRepo.Create(ctx, mem); err != nil {
+				t.Fatalf("create mem A%d: %v", i, err)
+			}
+			job := &model.EnrichmentJob{MemoryID: mem.ID, NamespaceID: nsA, CreatedAt: now.Add(time.Duration(-i) * time.Hour)}
+			if _, err := repo.Enqueue(ctx, job); err != nil {
+				t.Fatalf("enqueue A%d: %v", i, err)
+			}
+			if err := repo.Fail(ctx, job.ID, "", "x"); err != nil {
+				t.Fatalf("fail A%d: %v", i, err)
+			}
+			aIDs = append(aIDs, job.ID)
+		}
+
+		// Namespace A also holds a pending row: not failed, must survive.
+		memAP := newTestMemory(nsA)
+		if err := memRepo.Create(ctx, memAP); err != nil {
+			t.Fatalf("create memAP: %v", err)
+		}
+		pend := &model.EnrichmentJob{MemoryID: memAP.ID, NamespaceID: nsA}
+		if _, err := repo.Enqueue(ctx, pend); err != nil {
+			t.Fatalf("enqueue pending: %v", err)
+		}
+
+		// Namespace B: one failed row, under the cap, must survive.
+		nsB, memB := createTestMemoryForQueue(t, ctx, db)
+		bJob := &model.EnrichmentJob{MemoryID: memB, NamespaceID: nsB}
+		if _, err := repo.Enqueue(ctx, bJob); err != nil {
+			t.Fatalf("enqueue B: %v", err)
+		}
+		if err := repo.Fail(ctx, bJob.ID, "", "b"); err != nil {
+			t.Fatalf("fail B: %v", err)
+		}
+
+		deleted, err := repo.DeleteFailedBeyondCount(ctx, 2, 100)
+		if err != nil {
+			t.Fatalf("DeleteFailedBeyondCount: %v", err)
+		}
+		if deleted != 3 {
+			t.Fatalf("deleted = %d, want 3 (nsA has 5 failed, cap 2)", deleted)
+		}
+
+		for i, id := range aIDs {
+			_, err := repo.GetByID(ctx, id)
+			if i < 2 {
+				if err != nil {
+					t.Errorf("aIDs[%d] (newest, kept) should survive: %v", i, err)
+				}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				t.Errorf("aIDs[%d] (older surplus) should be deleted, got err=%v", i, err)
+			}
+		}
+		if _, err := repo.GetByID(ctx, pend.ID); err != nil {
+			t.Errorf("nsA pending row should survive: %v", err)
+		}
+		if _, err := repo.GetByID(ctx, bJob.ID); err != nil {
+			t.Errorf("nsB failed row (under cap) should survive: %v", err)
+		}
+
+		// Cap disabled (0) deletes nothing.
+		d2, err := repo.DeleteFailedBeyondCount(ctx, 0, 100)
+		if err != nil {
+			t.Fatalf("DeleteFailedBeyondCount(0): %v", err)
+		}
+		if d2 != 0 {
+			t.Errorf("cap 0 should delete nothing, deleted %d", d2)
+		}
+	})
+}
+
 // TestEnrichmentQueueRepo_MarkStepCompleted exercises the per-step
 // progress marker the worker writes between phases. Idempotent across
 // repeats, preserves prior contents, and survives the round-trip.

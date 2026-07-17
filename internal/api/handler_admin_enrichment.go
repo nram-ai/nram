@@ -119,6 +119,12 @@ type EnrichmentAdminConfig struct {
 	// those older than olderThanDays; 0 = all completed). Never touches
 	// pending/processing. Returns rows deleted. Nil disables the endpoint with 503.
 	ClearCompletedJobs func(ctx context.Context, olderThanDays int) (int64, error)
+
+	// ClearFailedJobs deletes failed enrichment_queue rows globally (optionally
+	// only those older than olderThanDays; 0 = all failed). Never touches
+	// pending/processing/completed. Returns rows deleted. Nil disables the
+	// endpoint with 503.
+	ClearFailedJobs func(ctx context.Context, olderThanDays int) (int64, error)
 }
 
 // EnrichmentRelabelResult is the response for POST /enrichment/relabel-graph.
@@ -360,7 +366,7 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 		sub := extractEnrichmentSubPath(r.URL.Path)
 
 		// Write operations require administrator role.
-		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "backfill-consolidation-entities" || sub == "clear-completed-jobs" || sub == "re-extract-memories" {
+		if sub == "retry" || sub == "pause" || sub == "test-prompt" || sub == "backfill-augmentation" || sub == "backfill-extracted-fact-paraphrase" || sub == "backfill-missing-embeddings" || sub == "backfill-consolidation-entities" || sub == "clear-completed-jobs" || sub == "clear-failed-jobs" || sub == "re-extract-memories" {
 			ac := auth.FromContext(r.Context())
 			if ac == nil || ac.Role != auth.RoleAdministrator {
 				http.Error(w, "forbidden: administrator required", http.StatusForbidden)
@@ -397,6 +403,8 @@ func NewAdminEnrichmentHandler(cfg EnrichmentAdminConfig) http.HandlerFunc {
 			handleEnrichmentBackfillConsolidationEntities(w, r, cfg)
 		case "clear-completed-jobs":
 			handleEnrichmentClearCompletedJobs(w, r, cfg)
+		case "clear-failed-jobs":
+			handleEnrichmentClearFailedJobs(w, r, cfg)
 		default:
 			WriteError(w, ErrBadRequest("unknown enrichment sub-path"))
 		}
@@ -1077,10 +1085,11 @@ func handleEnrichmentBackfillConsolidationEntities(w http.ResponseWriter, r *htt
 	})
 }
 
-// enrichmentClearCompletedRequest scopes a completed-jobs purge. OlderThanDays
-// 0 deletes all completed rows; a positive value keeps rows completed within
-// that window.
-type enrichmentClearCompletedRequest struct {
+// enrichmentClearRequest scopes a clear-jobs purge (completed or failed).
+// OlderThanDays 0 deletes all matching rows in scope; a positive value keeps
+// rows whose relevant timestamp falls within that window. Shared by the
+// completed-jobs and the admin/org/self clear-failed handlers.
+type enrichmentClearRequest struct {
 	OlderThanDays int `json:"older_than_days,omitempty"`
 }
 
@@ -1096,7 +1105,7 @@ func handleEnrichmentClearCompletedJobs(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "clear-completed-jobs not available in this deployment", http.StatusServiceUnavailable)
 		return
 	}
-	var body enrichmentClearCompletedRequest
+	var body enrichmentClearRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteError(w, ErrBadRequest("invalid JSON body"))
 		return
@@ -1104,6 +1113,32 @@ func handleEnrichmentClearCompletedJobs(w http.ResponseWriter, r *http.Request, 
 	deleted, err := cfg.ClearCompletedJobs(r.Context(), body.OlderThanDays)
 	if err != nil {
 		WriteError(w, ErrInternal("clear completed jobs: "+err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
+}
+
+// handleEnrichmentClearFailedJobs handles POST /enrichment/clear-failed-jobs.
+// Deletes failed enrichment_queue rows across all tenants (never
+// pending/processing/completed), the system-tier companion to the self/org
+// clear-failed endpoints. Returns how many rows were deleted.
+func handleEnrichmentClearFailedJobs(w http.ResponseWriter, r *http.Request, cfg EnrichmentAdminConfig) {
+	if r.Method != http.MethodPost {
+		WriteError(w, ErrBadRequest("method not allowed"))
+		return
+	}
+	if cfg.ClearFailedJobs == nil {
+		http.Error(w, "clear-failed-jobs not available in this deployment", http.StatusServiceUnavailable)
+		return
+	}
+	var body enrichmentClearRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, ErrBadRequest("invalid JSON body"))
+		return
+	}
+	deleted, err := cfg.ClearFailedJobs(r.Context(), body.OlderThanDays)
+	if err != nil {
+		WriteError(w, ErrInternal("clear failed jobs: "+err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
