@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,8 +13,14 @@ import (
 	"github.com/nram-ai/nram/internal/model"
 )
 
-// mockSettingsRepo implements SettingsRepository for testing.
+// mockSettingsRepo implements SettingsRepository for testing. The real
+// SettingsRepository is DB-backed and safe under concurrent Get, and
+// RecallService.Recall fans out subquery goroutines that each resolve settings,
+// so the mock guards its map and call counters with a mutex to honor that same
+// concurrent-safe contract. Call-count reads in assertions happen in the
+// single-threaded phase after the concurrent work has joined.
 type mockSettingsRepo struct {
+	mu       sync.Mutex
 	settings map[string]map[string]*model.Setting // key -> scope -> setting
 	getCalls int
 	setCalls int
@@ -31,6 +38,8 @@ func newMockSettingsRepo() *mockSettingsRepo {
 }
 
 func (m *mockSettingsRepo) put(key, scope, value string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.settings[key] == nil {
 		m.settings[key] = make(map[string]*model.Setting)
 	}
@@ -44,6 +53,8 @@ func (m *mockSettingsRepo) put(key, scope, value string) {
 }
 
 func (m *mockSettingsRepo) Get(_ context.Context, key string, scope string) (*model.Setting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.getCalls++
 	if m.getErr != nil {
 		return nil, m.getErr
@@ -60,6 +71,8 @@ func (m *mockSettingsRepo) Get(_ context.Context, key string, scope string) (*mo
 }
 
 func (m *mockSettingsRepo) Set(_ context.Context, setting *model.Setting) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.setCalls++
 	if m.settings[setting.Key] == nil {
 		m.settings[setting.Key] = make(map[string]*model.Setting)
@@ -69,6 +82,8 @@ func (m *mockSettingsRepo) Set(_ context.Context, setting *model.Setting) error 
 }
 
 func (m *mockSettingsRepo) Delete(_ context.Context, key string, scope string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.delCalls++
 	if scopes, ok := m.settings[key]; ok {
 		delete(scopes, scope)
@@ -77,6 +92,8 @@ func (m *mockSettingsRepo) Delete(_ context.Context, key string, scope string) e
 }
 
 func (m *mockSettingsRepo) ListByScope(_ context.Context, scope string) ([]model.Setting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var result []model.Setting
 	for _, scopes := range m.settings {
 		if s, ok := scopes[scope]; ok {

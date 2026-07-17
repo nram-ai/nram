@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,12 +116,21 @@ func (m *mockIngestionLogRepo) Create(_ context.Context, log *model.IngestionLog
 	return nil
 }
 
+// mockTokenUsageRepo records usage entries. The real TokenUsageRepo handles
+// concurrent Record calls (independent DB writes), and RecallService.Recall
+// fans out subquery goroutines that each embed and record usage, so the mock
+// guards its slice with a mutex to honor that same concurrent-safe contract.
+// Reads of usages happen in the single-threaded assertion phase after the
+// concurrent work has joined, so they need no lock.
 type mockTokenUsageRepo struct {
+	mu     sync.Mutex
 	usages []*model.TokenUsage
 }
 
 func (m *mockTokenUsageRepo) Record(_ context.Context, usage *model.TokenUsage) error {
+	m.mu.Lock()
 	m.usages = append(m.usages, usage)
+	m.mu.Unlock()
 	return nil
 }
 
