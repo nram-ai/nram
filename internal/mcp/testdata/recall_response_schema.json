@@ -223,6 +223,9 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "subquery_count": {
+      "type": "integer"
     }
   },
   "required": [

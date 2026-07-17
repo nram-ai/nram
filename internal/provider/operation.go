@@ -48,6 +48,12 @@ const (
 	// analytics can isolate ask traffic from the enrichment/dream operations.
 	OperationAskSynthesis Operation = "ask_synthesis"
 
+	// OperationRecallDecomposition is the small LLM call a decomposing recall
+	// makes to break a multi-facet query into focused sub-queries before the
+	// per-sub-query fan-out. Kept distinct from ask_synthesis so recall-path
+	// decomposition spend is isolated in token analytics.
+	OperationRecallDecomposition Operation = "recall_decomposition"
+
 	// OperationRerank is the relevance-scoring call the reranker slot makes over
 	// recall's top-K or the ask neighborhood. For a cross-encoder it is one
 	// batched /v1/rerank call whose cost is all prefill (no generation); for the

@@ -46,7 +46,10 @@ type mcpRecallResponse struct {
 	Graph        graphResponse         `json:"graph"`
 	LatencyMs    int64                 `json:"latency_ms"`
 	CoverageGaps []service.CoverageGap `json:"coverage_gaps,omitempty"`
-	Truncated    *truncationInfo       `json:"_truncated,omitempty"`
+	// SubqueryCount is how many decomposition sub-queries were recalled and
+	// interleaved into this result (0 when the query was not decomposed).
+	SubqueryCount int             `json:"subquery_count,omitempty"`
+	Truncated     *truncationInfo `json:"_truncated,omitempty"`
 }
 
 // The strip-key sets and extractDerivedFrom below now serve only the list
@@ -208,9 +211,10 @@ func buildMCPRecallResponse(
 	rankGraphSlice(seedIDs, entities, rels)
 
 	return &mcpRecallResponse{
-		Memories:     memories,
-		Graph:        graphResponse{Entities: entities, Relationships: rels},
-		LatencyMs:    resp.LatencyMs,
-		CoverageGaps: resp.CoverageGaps,
+		Memories:      memories,
+		Graph:         graphResponse{Entities: entities, Relationships: rels},
+		LatencyMs:     resp.LatencyMs,
+		CoverageGaps:  resp.CoverageGaps,
+		SubqueryCount: resp.SubqueryCount,
 	}
 }

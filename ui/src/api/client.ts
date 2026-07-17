@@ -379,6 +379,9 @@ export interface RecallResponse {
   };
   total_searched: number;
   latency_ms: number;
+  /** How many decomposition sub-queries were recalled and interleaved into this
+   * result. Omitted (or 0) when the query was not decomposed. */
+  subquery_count?: number;
 }
 
 export interface RecallEntity {

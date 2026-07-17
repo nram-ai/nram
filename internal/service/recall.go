@@ -162,6 +162,12 @@ type RecallRequest struct {
 	// alone). Scoped recalls leave it false so the chosen project keeps its
 	// boost.
 	DemotePrimaryOrigin bool `json:"-"`
+	// Decompose overrides the recall.decomposition.enabled setting for this
+	// call: nil uses the setting, a non-nil value forces decomposition on or
+	// off. Internal only (not surfaced in the MCP tool args or REST body); the
+	// operator-facing control is the setting. The ask tool sets it false so its
+	// own decomposition is not re-run underneath by the recall service.
+	Decompose *bool `json:"-"`
 }
 
 // RecallResult holds a single recalled memory with its computed score.
@@ -229,6 +235,9 @@ type RecallResponse struct {
 	// embedder (lexical or list-fallback path). Not serialized.
 	QueryEmbedding    []float32 `json:"-"`
 	QueryEmbeddingDim int       `json:"-"`
+	// SubqueryCount is how many decomposition sub-queries were recalled and
+	// interleaved into this response (0 when the query was not decomposed).
+	SubqueryCount int `json:"subquery_count,omitempty"`
 }
 
 // CoverageGap describes a prefix-group observed in the candidate pool but
@@ -402,6 +411,10 @@ type RecallService struct {
 	// (reranker slot unconfigured) the rerank stage is skipped. Wired via
 	// SetReranker so the recall stage can re-score the top candidates before MMR.
 	rerankProvider func() provider.RerankProvider
+	// decomposeProvider is optional. When nil (the default) or when it returns
+	// nil (decomposition slot unconfigured) query decomposition is skipped and
+	// Recall runs a single-vector recall. Wired via SetDecomposer.
+	decomposeProvider func() provider.LLMProvider
 }
 
 // WithMetrics attaches the Prometheus metrics sink. Returns the same service
@@ -455,6 +468,15 @@ func (s *RecallService) SetSettings(svc *SettingsService) {
 // gated by the ranking.rerank.enabled setting.
 func (s *RecallService) SetReranker(fn func() provider.RerankProvider) {
 	s.rerankProvider = fn
+}
+
+// SetDecomposer wires the LLM provider accessor used by the optional query
+// decomposition stage. Passing nil (or an accessor that returns nil when the
+// decomposition slot is unconfigured) leaves decomposition off, so Recall runs
+// a single-vector recall. The stage is additionally gated by the
+// recall.decomposition.enabled setting and the per-call RecallRequest.Decompose.
+func (s *RecallService) SetDecomposer(fn func() provider.LLMProvider) {
+	s.decomposeProvider = fn
 }
 
 // SetLexical wires the lexical (BM25/tsvector) searcher used by the hybrid
@@ -522,13 +544,234 @@ type projectAttribution struct {
 	IsPrimary   bool
 }
 
-// Recall retrieves and ranks memories matching the given query.
+// Recall is the public recall entry point. When query decomposition is enabled
+// for the call and the query looks multi-facet, it breaks the query into focused
+// sub-queries, recalls each plus the original concurrently, and round-robin
+// interleaves the results so a dominant facet cannot bury an explicitly-requested
+// minority one (the multi-facet facet-drop that a single blended query vector
+// suffers). Otherwise it runs a single-vector recall. Decomposition is strictly
+// additive and fail-soft: a nil decomposer, a disabled setting, a short or
+// single-facet query, an empty decomposition, or a failed original recall all
+// fall through to the single-vector path, so behavior is unchanged there.
+//
+// Recall owns the read-path side effects (the reinforcement write and the
+// recalled-memories metric) and fires them exactly once per logical recall, over
+// the single-vector result or the final interleaved decomposition result.
 func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*RecallResponse, error) {
+	if !s.shouldDecompose(ctx, req) {
+		return s.singleRecall(ctx, req)
+	}
+	llm := s.decomposeProvider()
+	if llm == nil {
+		return s.singleRecall(ctx, req)
+	}
+
+	usageCtx := provider.WithUsageContext(ctx, model.NewUsageContext(req.UserID, req.ProjectID, req.OrgID))
+	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)
+	usageCtx = provider.WithOperation(usageCtx, provider.OperationRecallDecomposition)
+	if req.NamespaceID != nil {
+		usageCtx = provider.WithNamespaceID(usageCtx, *req.NamespaceID)
+	}
+
+	subs := decomposeSubqueries(ctx, llm, req.Query, s.settings, usageCtx)
+	if len(subs) == 0 {
+		return s.singleRecall(ctx, req)
+	}
+
+	// Fan out the original query (graph-bearing) plus each sub-query concurrently.
+	// recallSingle is side-effect-free, so no leg reinforces; this Recall fires the
+	// side effects once below. Sub-queries carry no graph work: the returned graph,
+	// and the edges reinforced, are the original query's (relRefs[0]).
+	reqs := make([]*RecallRequest, 0, len(subs)+1)
+	reqs = append(reqs, req)
+	for _, sub := range subs {
+		sr := *req
+		sr.Query = sub
+		sr.IncludeGraph = false
+		reqs = append(reqs, &sr)
+	}
+
+	responses := make([]*RecallResponse, len(reqs))
+	relRefs := make([][]RelationshipRef, len(reqs))
+	g, gctx := errgroup.WithContext(ctx)
+	for i := range reqs {
+		g.Go(func() error {
+			if resp, refs, err := s.recallSingle(gctx, reqs[i]); err == nil {
+				responses[i] = resp
+				relRefs[i] = refs
+			}
+			return nil // fail-soft: a failed leg leaves a nil slot, skipped below
+		})
+	}
+	_ = g.Wait()
+
+	original := responses[0]
+	if original == nil {
+		// The original recall failed; never regress below a plain recall.
+		return s.singleRecall(ctx, req)
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = s.recallDefaultLimit(ctx)
+	}
+
+	// Assemble the final response from the original query's response (its graph,
+	// coverage gaps, and query embedding), swapping in the interleaved memory list,
+	// then fire the deferred side effects once over that final set.
+	final := *original
+	final.Memories = interleaveRecall(responses, s.recallDecompositionFloorRatio(ctx), limit)
+	final.SubqueryCount = len(subs)
+	s.fireRecallSideEffects(final.Memories, relRefs[0])
+	return &final, nil
+}
+
+// singleRecall runs one recall via recallSingle and fires its read-path side
+// effects once. It is the non-decomposed path and the fallback for every case
+// where decomposition does not run.
+func (s *RecallService) singleRecall(ctx context.Context, req *RecallRequest) (*RecallResponse, error) {
+	resp, relRefs, err := s.recallSingle(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	s.fireRecallSideEffects(resp.Memories, relRefs)
+	return resp, nil
+}
+
+// fireRecallSideEffects performs the read-path side effects of one logical recall:
+// the fire-and-forget reconsolidation write over the surfaced memories and edges,
+// and the recalled-memories metric. Called once per Recall.
+func (s *RecallService) fireRecallSideEffects(results []RecallResult, relRefs []RelationshipRef) {
+	s.fireReinforcement(results, relRefs)
+	if s.metrics != nil {
+		s.metrics.IncMemoriesRecalled()
+	}
+}
+
+// shouldDecompose reports whether this recall should attempt query decomposition.
+// It honors the per-call Decompose override and the recall.decomposition.enabled
+// setting, skips the mutually-exclusive DiversifyByTagPrefix shaping, and gates on
+// a zero-cost structural pre-filter so short single-facet queries never pay the
+// decomposer LLM call. The setting-free signal check runs before any settings
+// lookup, so the common short recall rejects without touching the settings cache.
+func (s *RecallService) shouldDecompose(ctx context.Context, req *RecallRequest) bool {
+	if s.decomposeProvider == nil || req.DiversifyByTagPrefix != "" {
+		return false
+	}
+	if !hasMultiFacetSignal(req.Query) {
+		return false
+	}
+	if req.Decompose != nil {
+		if !*req.Decompose {
+			return false
+		}
+	} else if s.settings == nil || !s.settings.ResolveBoolWithDefault(ctx, SettingRecallDecompositionEnabled, "global") {
+		return false
+	}
+	minWords := 6
+	if s.settings != nil {
+		minWords = s.settings.ResolveIntWithDefault(ctx, SettingRecallDecompositionMinWords, "global")
+	}
+	return len(strings.Fields(req.Query)) >= minWords
+}
+
+// recallDecompositionFloorRatio is the per-response relevance floor applied when
+// interleaving a decomposed recall (see interleaveRecall for the mechanic).
+// 0 (no settings) disables the floor.
+func (s *RecallService) recallDecompositionFloorRatio(ctx context.Context) float64 {
+	if s.settings == nil {
+		return 0
+	}
+	return s.settings.ResolveFloatWithDefault(ctx, SettingRecallDecompositionFloorRatio, "global")
+}
+
+// hasMultiFacetSignal reports whether a query carries a cheap, setting-free
+// multi-facet signal: a comma or an enumerating conjunction. It is the structural
+// half of the decomposition pre-filter (shouldDecompose adds the min-words length
+// gate). A miss just takes the unchanged single-vector path, so the English-centric
+// conjunction list is safe. Words longer than the longest keyword ("compare", 7)
+// cannot match and skip the lowercasing.
+func hasMultiFacetSignal(query string) bool {
+	if strings.Contains(query, ",") {
+		return true
+	}
+	for w := range strings.FieldsSeq(query) {
+		if len(w) > 7 {
+			continue
+		}
+		switch strings.Trim(strings.ToLower(w), ".,;:!?") {
+		case "and", "or", "vs", "versus", "compare", "each", "both":
+			return true
+		}
+	}
+	return false
+}
+
+// interleaveRecall merges per-response recall results round-robin (rank-1 of each
+// response, then rank-2, …), dropping each response's weak tail below
+// floorRatio×its-own-top, deduping by memory ID, and truncating to limit. The
+// floor is per-response (never a global top) so a minority sub-query's on-topic
+// hits are not floored out by the majority query's higher absolute scores. Nil
+// response slots (failed sub-query legs) are skipped.
+func interleaveRecall(responses []*RecallResponse, floorRatio float64, limit int) []RecallResult {
+	floored := make([][]RecallResult, 0, len(responses))
+	for _, resp := range responses {
+		if resp == nil {
+			continue
+		}
+		var top float64
+		for i := range resp.Memories {
+			if resp.Memories[i].Score > top {
+				top = resp.Memories[i].Score
+			}
+		}
+		floor := floorRatio * top
+		survivors := make([]RecallResult, 0, len(resp.Memories))
+		for i := range resp.Memories {
+			if resp.Memories[i].Score >= floor {
+				survivors = append(survivors, resp.Memories[i])
+			}
+		}
+		floored = append(floored, survivors)
+	}
+	out := make([]RecallResult, 0, limit)
+	seen := make(map[uuid.UUID]struct{}, limit)
+	for rank := 0; len(out) < limit; rank++ {
+		progressed := false
+		for _, survivors := range floored {
+			if rank >= len(survivors) {
+				continue
+			}
+			progressed = true
+			m := survivors[rank]
+			if _, dup := seen[m.ID]; dup {
+				continue
+			}
+			seen[m.ID] = struct{}{}
+			out = append(out, m)
+			if len(out) >= limit {
+				break
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return out
+}
+
+// recallSingle runs one single-vector recall: embed the query, search, rank,
+// MMR, rerank, diversify, and assemble the response. It is the side-effect-free
+// primitive the public Recall composes: it performs NO reinforcement write and
+// increments NO metric, and it returns the surfaced graph relationship refs
+// alongside the response so the caller can reinforce once. Recall fires those
+// side effects for both the single-vector and the decomposed path.
+func (s *RecallService) recallSingle(ctx context.Context, req *RecallRequest) (*RecallResponse, []RelationshipRef, error) {
 	start := time.Now()
 
 	// Validate required fields.
 	if strings.TrimSpace(req.Query) == "" {
-		return nil, fmt.Errorf("query is required")
+		return nil, nil, fmt.Errorf("query is required")
 	}
 
 	// Resolve similarity-threshold mode. An entirely missing field
@@ -547,7 +790,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	switch simMode {
 	case SimilarityThresholdModeRawCosine, SimilarityThresholdModeFusedCombined:
 	default:
-		return nil, fmt.Errorf("invalid similarity_threshold_mode %q (allowed: %q, %q)",
+		return nil, nil, fmt.Errorf("invalid similarity_threshold_mode %q (allowed: %q, %q)",
 			rawMode,
 			SimilarityThresholdModeRawCosine,
 			SimilarityThresholdModeFusedCombined,
@@ -555,7 +798,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	}
 	simThreshold := req.SimilarityThreshold
 	if math.IsNaN(simThreshold) || simThreshold < 0 || simThreshold > 1 {
-		return nil, fmt.Errorf("invalid similarity_threshold %v (must be a finite value in [0, 1])", simThreshold)
+		return nil, nil, fmt.Errorf("invalid similarity_threshold %v (must be a finite value in [0, 1])", simThreshold)
 	}
 
 	// Resolve ranking weights and fusion config once at the top of the
@@ -574,7 +817,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 	// the misalignment to the caller as a 400 instead of a quiet behavior
 	// drift.
 	if simMode == SimilarityThresholdModeFusedCombined && simThreshold > 0 && !effFusion.Enabled {
-		return nil, fmt.Errorf("similarity_threshold_mode=fused_combined requires recall.fusion.enabled=true")
+		return nil, nil, fmt.Errorf("similarity_threshold_mode=fused_combined requires recall.fusion.enabled=true")
 	}
 
 	// Apply defaults from the registry (with in-code fallback when settings
@@ -608,11 +851,11 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		}
 	} else {
 		if req.ProjectID == uuid.Nil {
-			return nil, fmt.Errorf("project_id is required")
+			return nil, nil, fmt.Errorf("project_id is required")
 		}
 		project, err := s.projects.GetByID(ctx, req.ProjectID)
 		if err != nil {
-			return nil, fmt.Errorf("project not found: %w", err)
+			return nil, nil, fmt.Errorf("project not found: %w", err)
 		}
 		namespaceID = project.NamespaceID
 		projectID = project.ID
@@ -1329,38 +1572,12 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		results = []RecallResult{}
 	}
 
-	// Reconsolidation hook. Fire-and-forget goroutine that cannot panic or
-	// error its way back into the recall response: this is a read-path write
-	// and must never affect the caller's outcome. Gated by SetReinforcement;
-	// when reinforcement is not wired, reinforce returns immediately.
-	if s.reinforcement != nil && len(results) > 0 {
-		ids := make([]uuid.UUID, 0, len(results))
-		for _, r := range results {
-			ids = append(ids, r.ID)
-		}
-		go func(ids []uuid.UUID) {
-			defer func() { _ = recover() }()
-			s.reinforce(context.Background(), ids)
-		}(ids)
-	}
-
-	// seenRels above guarantees graphRelRefs holds one entry per edge
-	// surfaced in this call, the per-relationship throttle.
-	if s.reinforcement != nil && len(graphRelRefs) > 0 {
-		refs := make([]RelationshipRef, len(graphRelRefs))
-		copy(refs, graphRelRefs)
-		go func(refs []RelationshipRef) {
-			defer func() { _ = recover() }()
-			s.reinforceRels(context.Background(), refs)
-		}(refs)
-	}
-
 	latency := time.Since(start).Milliseconds()
 
-	if s.metrics != nil {
-		s.metrics.IncMemoriesRecalled()
-	}
-
+	// The reconsolidation write and recalled-memories metric are the caller's
+	// job: Recall fires them once, over the single-vector result or the final
+	// interleaved decomposition result. graphRelRefs rides back so the caller can
+	// reinforce the surfaced edges without this function owning any side effect.
 	return &RecallResponse{
 		Memories: results,
 		Graph: RecallGraph{
@@ -1372,7 +1589,35 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		CoverageGaps:      coverageGaps,
 		QueryEmbedding:    queryEmbedding,
 		QueryEmbeddingDim: queryEmbeddingDim,
-	}, nil
+	}, graphRelRefs, nil
+}
+
+// fireReinforcement runs the read-path reconsolidation write: a fire-and-forget
+// bump of access_count/last_accessed/confidence on the surfaced memories and of
+// the surfaced graph edges. No-op when reinforcement is not wired. Neither
+// goroutine can panic or error back into the caller's outcome.
+func (s *RecallService) fireReinforcement(results []RecallResult, graphRelRefs []RelationshipRef) {
+	if s.reinforcement == nil {
+		return
+	}
+	if len(results) > 0 {
+		ids := make([]uuid.UUID, 0, len(results))
+		for _, r := range results {
+			ids = append(ids, r.ID)
+		}
+		go func(ids []uuid.UUID) {
+			defer func() { _ = recover() }()
+			s.reinforce(context.Background(), ids)
+		}(ids)
+	}
+	if len(graphRelRefs) > 0 {
+		refs := make([]RelationshipRef, len(graphRelRefs))
+		copy(refs, graphRelRefs)
+		go func(refs []RelationshipRef) {
+			defer func() { _ = recover() }()
+			s.reinforceRels(context.Background(), refs)
+		}(refs)
+	}
 }
 
 // runHybridArgs bundles the inputs to the hybrid search fan-out so the

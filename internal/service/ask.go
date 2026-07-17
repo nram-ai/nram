@@ -425,6 +425,12 @@ func (s *AskService) Ask(ctx context.Context, req *AskRequest) (*AskResponse, er
 		APIKeyID:             req.APIKeyID,
 		ApertureNamespaceIDs: apertureNS,
 	}
+	// ask owns its own query decomposition and neighborhood assembly (below), so
+	// disable the recall service's in-built decomposition on every recall ask
+	// issues (this original and each sub-query copy, subRR := *rr, inherit it)
+	// to avoid decomposing the query a second time underneath.
+	noRecallDecompose := false
+	rr.Decompose = &noRecallDecompose
 	// In the wide owner aperture the primary is the reserved global tier, used
 	// only as a structural search seed; do not origin-boost it, so world
 	// knowledge does not outrank the caller's own project and persona memories

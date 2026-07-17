@@ -25,6 +25,9 @@ type recallResponseBody struct {
 	TotalSearched int                   `json:"total_searched"`
 	LatencyMs     int64                 `json:"latency_ms"`
 	CoverageGaps  []service.CoverageGap `json:"coverage_gaps,omitempty"`
+	// SubqueryCount is how many decomposition sub-queries were recalled and
+	// interleaved into this result (0 when the query was not decomposed).
+	SubqueryCount int `json:"subquery_count,omitempty"`
 }
 
 // buildRecallResponseBody projects the internal service result into the slim
@@ -43,6 +46,7 @@ func buildRecallResponseBody(resp *service.RecallResponse, opts recallview.Optio
 		TotalSearched: resp.TotalSearched,
 		LatencyMs:     resp.LatencyMs,
 		CoverageGaps:  resp.CoverageGaps,
+		SubqueryCount: resp.SubqueryCount,
 	}
 }
 

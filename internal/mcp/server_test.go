@@ -448,3 +448,18 @@ func TestBuildInstructions_BehavioralTriggers(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildInstructions_FocusedRecallGuidance: whenever semantic search is
+// active, the recall step must steer agents away from keyword-stuffed grab-bag
+// queries toward focused, single-intent recalls (the multi-facet facet-drop
+// guidance), regardless of whether enrichment is also configured.
+func TestBuildInstructions_FocusedRecallGuidance(t *testing.T) {
+	for _, hasEnrichment := range []bool{true, false} {
+		full := buildInstructions(true, hasEnrichment, false)
+		for _, want := range []string{"focused", "single-intent", "keyword grab-bag"} {
+			if !strings.Contains(full, want) {
+				t.Errorf("hasEnrichment=%v: expected focused-recall guidance %q in instructions", hasEnrichment, want)
+			}
+		}
+	}
+}

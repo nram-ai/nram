@@ -31,20 +31,36 @@ func (s *AskService) decomposeQuery(
 	if !s.settings.ResolveBoolWithDefault(ctx, SettingAskDecompositionEnabled, "global") {
 		return nil
 	}
-	system := s.settings.ResolveStringWithDefault(ctx, SettingAskDecompositionSystemPrompt, "global")
-	temperature := s.settings.ResolveFloatWithDefault(ctx, SettingAskDecompositionTemperature, "global")
-	maxTokens := s.settings.ResolveIntWithDefault(ctx, SettingAskDecompositionMaxTokens, "global")
-	maxSubqueries := s.settings.ResolveIntWithDefault(ctx, SettingAskDecompositionMaxSubqueries, "global")
-	if maxSubqueries <= 0 {
-		return nil
-	}
-
-	user := provider.Fence("question", strings.TrimSpace(req.Query))
 
 	usageCtx := provider.WithUsageContext(ctx, model.NewUsageContext(req.UserID, primaryProjectID, req.OrgID))
 	usageCtx = provider.WithNamespaceID(usageCtx, primaryNS)
 	usageCtx = provider.WithAPIKeyID(usageCtx, req.APIKeyID)
 	usageCtx = provider.WithOperation(usageCtx, provider.OperationAskSynthesis)
+
+	return decomposeSubqueries(ctx, llm, req.Query, s.settings, usageCtx)
+}
+
+// decomposeSubqueries runs the LLM decomposer over a query and returns the
+// focused sub-queries, or nil when the model declines to decompose or on any
+// provider/parse failure (fail-soft). It does NOT gate on any enabled setting;
+// each caller gates independently (ask on ask.decomposition.enabled, recall on
+// recall.decomposition.enabled) so the two paths toggle separately while sharing
+// one prompt, parser, and knobs. The caller passes a usageCtx already stamped
+// with attribution and the operation so decomposition spend lands on the right
+// analytics line. The question is nonce-fenced and the system prompt is
+// GuardedSystem-wrapped, matching the synthesis call's prompt-injection defense.
+func decomposeSubqueries(ctx context.Context, llm provider.LLMProvider, query string, settings *SettingsService, usageCtx context.Context) []string {
+	// settings may be nil in test/unwired paths; the Resolve*WithDefault methods
+	// are nil-receiver-safe and fall back to the registered defaults.
+	system := settings.ResolveStringWithDefault(ctx, SettingAskDecompositionSystemPrompt, "global")
+	temperature := settings.ResolveFloatWithDefault(ctx, SettingAskDecompositionTemperature, "global")
+	maxTokens := settings.ResolveIntWithDefault(ctx, SettingAskDecompositionMaxTokens, "global")
+	maxSubqueries := settings.ResolveIntWithDefault(ctx, SettingAskDecompositionMaxSubqueries, "global")
+	if maxSubqueries <= 0 {
+		return nil
+	}
+
+	user := provider.Fence("question", strings.TrimSpace(query))
 
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(system, user),

@@ -450,6 +450,25 @@ func TestAsk_WideApertureUnionsOwnedProjects(t *testing.T) {
 	}
 }
 
+// TestAsk_DisablesInServiceRecallDecomposition guards that ask, which owns its
+// own decomposition and neighborhood assembly, sets Decompose=false on every
+// recall it issues so the recall service's in-built decomposition never runs
+// underneath and decomposes the query a second time.
+func TestAsk_DisablesInServiceRecallDecomposition(t *testing.T) {
+	projects := askTestProjects()
+	rc := &askFakeRecaller{resp: &RecallResponse{Memories: []RecallResult{askCandidate("aaaaaaaa", "work", 0.8)}}}
+	svc := newAskSvc(t, rc, &askFakeMem{}, projects, askFakeLLM{content: "ok"}, nil)
+	if _, err := svc.Ask(context.Background(), &AskRequest{Query: "q", OwnerNamespaceID: uuid.New()}); err != nil {
+		t.Fatal(err)
+	}
+	if rc.lastRequest == nil {
+		t.Fatal("recall was not called")
+	}
+	if rc.lastRequest.Decompose == nil || *rc.lastRequest.Decompose {
+		t.Errorf("ask must set Decompose=false on its recall requests, got %v", rc.lastRequest.Decompose)
+	}
+}
+
 func TestAsk_ScopedProjectNarrowsAperture(t *testing.T) {
 	projects := askTestProjects()
 	rc := &askFakeRecaller{resp: &RecallResponse{Memories: []RecallResult{askCandidate("aaaaaaaa", "work", 0.8)}}}

@@ -173,9 +173,9 @@ RETRIEVAL: follow this order at each task start:
 
 	if hasEnrichment && hasEmbedding {
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
-2. recall: then search for detailed memories with natural language.
+2. recall: then search memories in natural language; issue one focused, single-intent recall per intent, not a keyword grab-bag.
 3. list: browse/paginate when you need a full overview, not a query.
-If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory.
+If recall misses a fact, walk the graph to its source.
 `)
 	} else if hasEnrichment {
 		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
@@ -184,7 +184,7 @@ If recall is noisy or misses an expected fact, walk the graph from that concept 
 If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory.
 `)
 	} else if hasEmbedding {
-		b.WriteString(`1. recall: search with natural language (semantic search is active).
+		b.WriteString(`1. recall: search with natural language (semantic search active); issue one focused, single-intent recall per intent, not a keyword grab-bag.
 2. list: browse/paginate when you need a full overview, not a query.
 `)
 	} else {

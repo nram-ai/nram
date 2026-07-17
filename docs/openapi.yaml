@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.45
+  version: 0.18.46
   license:
     name: MIT
 
@@ -5442,6 +5442,11 @@ components:
         latency_ms:
           type: integer
           format: int64
+        subquery_count:
+          type: integer
+          description: >-
+            How many decomposition sub-queries were recalled and interleaved
+            into this result. Omitted (or 0) when the query was not decomposed.
 
     RecallRelationship:
       type: object
@@ -6532,6 +6537,9 @@ components:
         - "ranking.weight.recency"
         - "ranking.weight.rerank"
         - "ranking.weight.similarity"
+        - "recall.decomposition.enabled"
+        - "recall.decomposition.floor_ratio"
+        - "recall.decomposition.min_query_words"
         - "recall.default_limit"
         - "recall.fusion.enabled"
         - "recall.fusion.lexical_weight"

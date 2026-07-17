@@ -599,6 +599,25 @@ const (
 	SettingRecallGraphReserveFraction = "recall.graph.reserve_fraction"
 	SettingRecallOverfetchMultiplier  = "recall.overfetch_multiplier"
 	SettingRecallOverfetchMin         = "recall.overfetch_min"
+	// SettingRecallDecompositionEnabled gates recall-path query decomposition:
+	// break a multi-facet recall query into focused per-facet sub-queries and
+	// interleave them so a dominant facet cannot bury a requested one. Default
+	// true; a no-op for single-facet queries and when no decomposition LLM slot
+	// is configured. Independent of ask.decomposition.enabled but reuses the
+	// same ask.decomposition.* prompt and knobs.
+	SettingRecallDecompositionEnabled = "recall.decomposition.enabled"
+	// SettingRecallDecompositionMinWords is the zero-cost pre-filter threshold:
+	// a query shorter than this word count skips the decomposer LLM call and
+	// takes the single-vector path, keeping default-on decomposition off the hot
+	// path for the common short/focused recall.
+	SettingRecallDecompositionMinWords = "recall.decomposition.min_query_words"
+	// SettingRecallDecompositionFloorRatio is the per-response relevance floor
+	// used when interleaving a decomposed recall: a sub-query candidate joins the
+	// merge only if its score clears this fraction of that response's own top,
+	// so a minority sub-query's on-topic hits are not swamped by the majority
+	// query's higher absolute scores. Mirrors ask.neighborhood.min_score_ratio's
+	// rule but is owned by the recall path.
+	SettingRecallDecompositionFloorRatio = "recall.decomposition.floor_ratio"
 	// Cross-namespace vector-channel entity activation: recall activates
 	// graph entities by vector similarity across the [project, global]
 	// aperture (in addition to the lexical name match) and boosts their
@@ -1340,6 +1359,9 @@ var settingDefaults = map[string]string{
 	SettingRecallGraphReserveFraction:         "0.15",
 	SettingRecallOverfetchMultiplier:          "3",
 	SettingRecallOverfetchMin:                 "10",
+	SettingRecallDecompositionEnabled:         "true",
+	SettingRecallDecompositionMinWords:        "6",
+	SettingRecallDecompositionFloorRatio:      "0.5",
 	SettingRecallGraphVectorActivationEnabled: "true",
 	SettingRecallGraphVectorActivationTopK:    "5",
 	SettingRecallGraphMaxEdges:                "2000",

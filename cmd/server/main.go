@@ -797,6 +797,12 @@ func main() {
 		}
 		return registry.GetAsk()
 	}
+	// Recall-path query decomposition reuses the ask provider slot: a small LLM
+	// call that breaks a multi-facet recall query into focused sub-queries before
+	// the per-sub-query fan-out. Read live like the reranker; an unconfigured slot
+	// yields nil so recall stays single-vector, and the stage is additionally
+	// gated by recall.decomposition.enabled (default on).
+	recallSvc.SetDecomposer(askProvider)
 	askSvc := service.NewAskService(
 		recallSvc, memoryRepo, projectRepo, relationshipRepo, askProvider, settingsSvc,
 	).WithMetrics(promMetrics).WithVectorHydrator(vectorStore).WithReranker(rerankProvider)
