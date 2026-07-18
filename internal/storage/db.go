@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,32 +75,53 @@ func Open(cfg config.DatabaseConfig) (DB, error) {
 	return openSQLite()
 }
 
-// sqlitePragmas are applied to every SQLite connection (both read and write pools).
-var sqlitePragmas = []string{
-	"PRAGMA journal_mode=WAL",   // concurrent readers + single writer
-	"PRAGMA busy_timeout=10000", // 10s wait on lock contention
-	"PRAGMA foreign_keys=ON",    // enforce FK constraints
-	"PRAGMA synchronous=NORMAL", // safe with WAL, much faster than FULL
-	"PRAGMA cache_size=-64000",  // 64MB in-memory page cache
-}
+// sqliteDBPath is the SQLite database filename, relative to the working
+// directory (honoured after any --workdir chdir in main).
+const sqliteDBPath = "nram.db"
 
-// applySQLitePragmas sets all required PRAGMAs on a SQLite *sql.DB.
-func applySQLitePragmas(db *sql.DB) error {
-	for _, pragma := range sqlitePragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			return fmt.Errorf("sqlite pragma %q: %w", pragma, err)
-		}
-	}
-	return nil
+// buildSQLiteDSN returns a modernc.org/sqlite DSN that carries every
+// connection-level PRAGMA as a "_pragma" query parameter. This matters because
+// PRAGMAs like cache_size, busy_timeout, synchronous, and foreign_keys are
+// per-connection: applying them once via db.Exec after Open only touches
+// whichever pooled connection database/sql happens to hand out, so later-opened
+// pool connections would silently run on SQLite defaults (a ~2MB cache and
+// busy_timeout=0). modernc applies each _pragma on every connection it opens
+// (see modernc.org/sqlite conn.go newConn -> applyQueryParams), so routing the
+// PRAGMAs through the DSN guarantees the whole read pool is configured.
+//
+// The DSN is deliberately built without a "file:" prefix so modernc strips the
+// query from the filesystem path and hands SQLite the bare path; the _pragma
+// values are percent-encoded by url.Values and decoded again by modernc.
+//
+//   - journal_mode=WAL      concurrent readers + single writer
+//   - busy_timeout=10000    10s wait on lock contention (not the default 0)
+//   - foreign_keys=ON       enforce FK constraints
+//   - synchronous=NORMAL    safe with WAL, much faster than FULL
+//   - cache_size=-128000    128MB in-memory page cache (per connection)
+//   - auto_vacuum=INCREMENTAL  born incremental on a fresh DB so the maintenance
+//     sweeper can reclaim free pages; a no-op on an already-populated DB until
+//     the sweeper runs a one-time converting VACUUM (see SQLiteMaintenanceService).
+func buildSQLiteDSN(path string) string {
+	q := url.Values{}
+	q.Add("_pragma", "busy_timeout(10000)")
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "foreign_keys(ON)")
+	q.Add("_pragma", "synchronous(NORMAL)")
+	q.Add("_pragma", "cache_size(-128000)")
+	q.Add("_pragma", "auto_vacuum(INCREMENTAL)")
+	return path + "?" + q.Encode()
 }
 
 // openSQLite opens a SQLite database with separate read and write connection
 // pools. The write pool is limited to a single connection to serialize all
 // writes and eliminate SQLITE_BUSY contention. The read pool allows multiple
-// concurrent readers via WAL mode.
+// concurrent readers via WAL mode. All connection PRAGMAs are carried in the
+// DSN so every pooled connection is configured identically (see buildSQLiteDSN).
 func openSQLite() (DB, error) {
+	dsn := buildSQLiteDSN(sqliteDBPath)
+
 	// Write pool: single connection, all writes serialized.
-	writeDB, err := sql.Open("sqlite", "nram.db")
+	writeDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite write pool: %w", err)
 	}
@@ -107,13 +129,8 @@ func openSQLite() (DB, error) {
 	writeDB.SetMaxIdleConns(1)
 	writeDB.SetConnMaxLifetime(0) // keep connection alive forever
 
-	if err := applySQLitePragmas(writeDB); err != nil {
-		_ = writeDB.Close()
-		return nil, err
-	}
-
 	// Read pool: multiple connections for concurrent reads.
-	readDB, err := sql.Open("sqlite", "nram.db")
+	readDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("failed to open sqlite read pool: %w", err)
@@ -121,12 +138,6 @@ func openSQLite() (DB, error) {
 	readDB.SetMaxOpenConns(4)
 	readDB.SetMaxIdleConns(4)
 	readDB.SetConnMaxLifetime(0)
-
-	if err := applySQLitePragmas(readDB); err != nil {
-		_ = writeDB.Close()
-		_ = readDB.Close()
-		return nil, err
-	}
 
 	if err := writeDB.Ping(); err != nil {
 		_ = writeDB.Close()

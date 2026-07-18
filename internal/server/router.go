@@ -186,8 +186,12 @@ type Handlers struct {
 	// Mounted at /v1/dashboard, /v1/activity, /v1/analytics, /v1/usage,
 	// /v1/graph, /v1/namespaces/tree. Self-scoped to caller (post-2026-04-30
 	// leak fix); admin sees own data only on these surfaces.
-	AdminSetupStatus      http.HandlerFunc
-	AdminSetup            http.HandlerFunc
+	AdminSetupStatus http.HandlerFunc
+	AdminSetup       http.HandlerFunc
+	// MaintenanceStatus reports whether a performance-degrading maintenance
+	// operation (e.g. a SQLite VACUUM) is running. Public, pre-auth: the UI
+	// banner reads it without a session and it never touches the database.
+	MaintenanceStatus     http.HandlerFunc
 	AdminOnboarding       http.HandlerFunc
 	AdminDashboard        http.HandlerFunc
 	AdminActivity         http.HandlerFunc
@@ -298,6 +302,11 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		r.Handle("/metrics", metrics.Handler(config.Metrics))
 	}
 	r.Get("/v1/health", handler(handlers.Health))
+
+	// Maintenance status is public so the UI banner can read it pre-auth and
+	// independently of the auth-gated SSE stream. Pure in-memory, no DB access.
+	// Registered unconditionally like /v1/health; handler() serves 501 if nil.
+	r.Get("/v1/maintenance/status", handler(handlers.MaintenanceStatus))
 
 	// Serve the OpenAPI spec publicly so tooling can fetch the contract
 	// without auth and before initial setup completes.

@@ -2967,6 +2967,25 @@ export const healthAPI = {
   check: () => request<HealthResponse>("GET", "/health"),
 };
 
+// --- Maintenance API (public: drives the maintenance banner) ---
+
+export interface MaintenanceOp {
+  label: string;
+  message: string;
+  since: string;
+}
+
+export interface MaintenanceStatus {
+  active: boolean;
+  operations: MaintenanceOp[];
+}
+
+export const maintenanceAPI = {
+  // Public, pre-auth, in-memory read on the server (no DB access), so it stays
+  // responsive even while a SQLite VACUUM holds the exclusive lock.
+  getStatus: () => request<MaintenanceStatus>("GET", "/maintenance/status"),
+};
+
 // --- System API (tier-C: admin-only system aggregate views) ---
 //
 // Mounted server-side at /v1/admin/system/*. RoleAdministrator only;

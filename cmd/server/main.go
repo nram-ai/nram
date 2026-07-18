@@ -21,6 +21,7 @@ import (
 	"github.com/nram-ai/nram/internal/enrichment"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/logging"
+	"github.com/nram-ai/nram/internal/maintenance"
 	"github.com/nram-ai/nram/internal/mcp"
 	"github.com/nram-ai/nram/internal/migration"
 	"github.com/nram-ai/nram/internal/observability/metrics"
@@ -637,6 +638,11 @@ func main() {
 	eventBus := events.NewEventBus(db.Backend(), nil, eventBusBuf, eventBusReplay)
 	defer func() { _ = eventBus.Close() }()
 
+	// Shared registry of in-flight maintenance operations. Raised by the SQLite
+	// maintenance sweeper (below) and read by the public maintenance-status
+	// endpoint; announces transitions on the event bus for an instant UI flip.
+	maintenanceReg := maintenance.NewRegistry(eventBus)
+
 	// Create webhook deliverer.
 	webhookDeliverer := events.NewWebhookDeliverer(eventBus, webhookRepo)
 	delivererCtx, delivererCancel := context.WithCancel(context.Background())
@@ -778,6 +784,14 @@ func main() {
 		WithGraphReaper(graphReaper)
 	lifecycleSvc.Start()
 	defer lifecycleSvc.Stop()
+
+	// SQLite maintenance sweeper: reclaims free pages, refreshes planner stats,
+	// and periodically compacts the file. SQLite-only; Postgres has autovacuum.
+	if db.Backend() == storage.BackendSQLite {
+		sqliteMaintSvc := service.NewSQLiteMaintenance(db, settingsSvc, maintenanceReg)
+		sqliteMaintSvc.Start()
+		defer sqliteMaintSvc.Stop()
+	}
 
 	// Read live so a hot provider reload reopens or closes the gate
 	// without a restart.
@@ -1337,7 +1351,8 @@ func main() {
 		).ServeHTTP,
 
 		// Admin handlers
-		AdminSetupStatus: api.NewAdminSetupStatusHandler(api.SetupConfig{Store: setupStore}),
+		AdminSetupStatus:  api.NewAdminSetupStatusHandler(api.SetupConfig{Store: setupStore}),
+		MaintenanceStatus: api.NewMaintenanceStatusHandler(maintenanceReg),
 		AdminSetup: api.NewAdminSetupHandler(api.SetupConfig{
 			Store:      setupStore,
 			JWTSecret:  jwtSecret,

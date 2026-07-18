@@ -66,12 +66,19 @@ const (
 	DBMigrationProgress  = "db_migration.progress"
 	DBMigrationCompleted = "db_migration.completed"
 	DBMigrationFailed    = "db_migration.failed"
+
+	// Maintenance events. Raised by any background operation that degrades
+	// server performance while it runs (starting with the SQLite VACUUM), so
+	// the UI can show a maintenance banner. Scope: EventScopeMaintenance.
+	MaintenanceStarted = "maintenance.started"
+	MaintenanceEnded   = "maintenance.ended"
 )
 
 // Scope constants for background admin operations the UI subscribes to.
 const (
 	EventScopeVectorMigration = "vector-migration"
 	EventScopeDBMigration     = "db-migration"
+	EventScopeMaintenance     = "maintenance"
 )
 
 // Event represents a single event in the system.

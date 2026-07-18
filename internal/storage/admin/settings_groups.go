@@ -208,6 +208,13 @@ var settingsGroups = []api.SettingGroup{
 		SubSections: []api.SettingSubSection{{Category: "lifecycle"}},
 	},
 	{
+		ID:              "sqlite_maintenance",
+		Label:           "SQLite Maintenance",
+		Description:     "Background upkeep for the SQLite database file: a frequent light pass (incremental vacuum, planner-statistics refresh, and WAL checkpoint) plus an occasional full VACUUM that compacts the file and returns free space to the OS. A full VACUUM briefly locks the database, so a prominent banner is shown while it runs. Shown only when the backend is SQLite; Postgres relies on its built-in autovacuum.",
+		RequiresBackend: []string{"sqlite"},
+		SubSections:     []api.SettingSubSection{{Category: "sqlite_maintenance"}},
+	},
+	{
 		ID:          "events",
 		Label:       "Events & Streaming",
 		Description: "Buffer sizes and keepalive timing for server-sent events (SSE) and the in-process event bus. Advanced: incorrect values can stall subscribers or grow memory unboundedly.",

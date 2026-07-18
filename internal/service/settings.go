@@ -507,6 +507,13 @@ const (
 	SettingLifecycleBatchSize            = "lifecycle.batch_size"
 	SettingLifecycleOrphanGraceSeconds   = "lifecycle.orphan_grace_seconds"
 
+	// SQLite maintenance sweeper. SQLite-only (the service is not constructed
+	// on Postgres, which has autovacuum). Enabled and both intervals are read
+	// on every tick, so admin-UI edits hot-reload without a restart.
+	SettingSqliteMaintEnabled                   = "sqlite.maintenance.enabled"
+	SettingSqliteMaintLightIntervalSeconds      = "sqlite.maintenance.light_interval_seconds"
+	SettingSqliteMaintFullVacuumIntervalSeconds = "sqlite.maintenance.full_vacuum_interval_seconds"
+
 	// API rate-limit per-user-bucket cleanup. Read once at startup; changes
 	// require server restart.
 	SettingAPIRateLimitCleanupSeconds = "api.rate_limit.cleanup_interval_seconds"
@@ -1325,6 +1332,10 @@ var settingDefaults = map[string]string{
 	SettingLifecycleSweepIntervalSeconds: "300",
 	SettingLifecycleBatchSize:            "1000",
 	SettingLifecycleOrphanGraceSeconds:   "3600",
+
+	SettingSqliteMaintEnabled:                   "true",
+	SettingSqliteMaintLightIntervalSeconds:      "3600",
+	SettingSqliteMaintFullVacuumIntervalSeconds: "604800",
 
 	SettingAPIRateLimitCleanupSeconds: "60",
 	SettingAPIRateLimitStaleSeconds:   "600",

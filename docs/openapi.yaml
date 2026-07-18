@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.47
+  version: 0.18.48
   license:
     name: MIT
 
@@ -98,6 +98,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+
+  /v1/maintenance/status:
+    get:
+      operationId: getMaintenanceStatus
+      tags: [Health]
+      summary: Current maintenance status
+      description: >
+        Reports whether a performance-degrading maintenance operation (for
+        example a SQLite VACUUM) is currently running. Public and pre-auth; the
+        admin UI reads it to show a maintenance banner. Answered from an
+        in-memory flag with no database access, so it stays responsive even
+        while a VACUUM holds the database lock.
+      security: []
+      responses:
+        "200":
+          description: Maintenance status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [active, operations]
+                properties:
+                  active:
+                    type: boolean
+                    description: True when at least one maintenance operation is running.
+                  operations:
+                    type: array
+                    items:
+                      type: object
+                      required: [label, message, since]
+                      properties:
+                        label:
+                          type: string
+                        message:
+                          type: string
+                        since:
+                          type: string
+                          format: date-time
 
   /openapi.yaml:
     get:
@@ -6664,6 +6702,9 @@ components:
         - "reconsolidation.mode"
         - "reconsolidation.relationship_event_cap"
         - "settings.cache_ttl_seconds"
+        - "sqlite.maintenance.enabled"
+        - "sqlite.maintenance.full_vacuum_interval_seconds"
+        - "sqlite.maintenance.light_interval_seconds"
         - "usage.cost_rates"
         - "usage.token_retention_days"
       # END setting keys

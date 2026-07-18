@@ -55,6 +55,7 @@ import { BuildInfo } from "./components/BuildInfo";
 import { NeuralNetwork } from "./components/NeuralNetwork/NeuralNetwork";
 import { Logo } from "./components/Logo";
 import { EmptyState } from "./components/EmptyState";
+import { MaintenanceBanner } from "./components/MaintenanceBanner";
 import Dashboard from "./pages/Dashboard";
 // Dashboard, Login, and SetupWizard stay eager: they are the only pages an
 // unauthenticated/cold-start user can land on, and a Suspense flash on the
@@ -477,6 +478,7 @@ function AppLayout() {
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
+        <MaintenanceBanner />
         <div className="p-4 sm:p-6">
           <ErrorBoundary>
             <Suspense fallback={<RouteFallback />}>

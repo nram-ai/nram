@@ -16,6 +16,7 @@ import {
   changePassword,
   memoryAPI,
   healthAPI,
+  maintenanceAPI,
   type SetupRequest,
   type SetupResponse,
   type OnboardingProgressRequest,
@@ -102,6 +103,20 @@ export function useHealth() {
     queryKey: ["health"],
     queryFn: healthAPI.check,
     refetchInterval: 30_000,
+  });
+}
+
+// --- Maintenance ---
+
+// Polls the public maintenance-status endpoint so the banner reflects current
+// state even for a client that connects mid-maintenance. The MaintenanceBanner
+// also subscribes to the SSE "maintenance" scope to flip instantly; the poll is
+// the baseline and the safety net.
+export function useMaintenanceStatus() {
+  return useQuery({
+    queryKey: ["maintenance-status"],
+    queryFn: maintenanceAPI.getStatus,
+    refetchInterval: 15_000,
   });
 }
 

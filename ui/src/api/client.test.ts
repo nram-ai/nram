@@ -54,6 +54,7 @@ import {
   orgAPI,
   memoryAPI,
   healthAPI,
+  maintenanceAPI,
   systemAPI,
   oauthAPI,
   shareAcceptAPI,
@@ -337,6 +338,19 @@ describe("API Client E2E", () => {
       expect(h.providers.query_augment).toBeDefined();
       expect(h.providers.ingestion_decision).toBeDefined();
       expect(typeof h.uptime_seconds).toBe("number");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Maintenance
+  // -----------------------------------------------------------------------
+
+  describe("maintenanceAPI", () => {
+    it("getStatus() reports inactive on an idle server", async () => {
+      const s = await maintenanceAPI.getStatus();
+      expect(s.active).toBe(false);
+      expect(Array.isArray(s.operations)).toBe(true);
+      expect(s.operations.length).toBe(0);
     });
   });
 
