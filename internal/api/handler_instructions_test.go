@@ -77,6 +77,13 @@ func TestInstructionsHandler_Condensed(t *testing.T) {
 	// The condensed body is reused for ChatGPT's Custom instructions field, which
 	// hard-caps at 1500 characters and rejects input past the cap. Keep it under
 	// that limit so it stays pasteable there.
+	//
+	// It runs close enough to the cap that it is the deliberately lossy tier: the
+	// enrichment note, the single-intent recall clause, and the ask confidence
+	// caveat are omitted here on purpose and carried by the full body and the MCP
+	// handshake instead. That asymmetry is allowed in one direction only. Every
+	// rule this tier states must also appear in the other two, which is what
+	// TestTiersAgree (internal/mcp) enforces; do not add a rule here alone.
 	if len(condensed) > 1500 {
 		t.Fatalf("condensed body is %d chars, want <= 1500 to fit ChatGPT Custom instructions", len(condensed))
 	}

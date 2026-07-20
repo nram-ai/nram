@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
+	"github.com/nram-ai/nram/internal/instructions"
 	"github.com/nram-ai/nram/internal/model"
 	"github.com/nram-ai/nram/internal/provider"
 	"github.com/nram-ai/nram/internal/service"
@@ -91,9 +92,11 @@ type RelationshipTraverser interface {
 type Dependencies struct {
 	Backend string
 	// InstanceID is this deployment's persistent instance UUID, advertised in
-	// the per-connection MCP instructions so a client (or a future central
-	// router) can identify which nram instance it is talking to. Empty disables
-	// the advertisement.
+	// the initialize result's _meta so a client (or a future central router) can
+	// identify which nram instance it is talking to. It is deliberately not in
+	// Instructions: that field is spliced into the model's system prompt under a
+	// 2048-char cap, and an instance UUID is machine data no model needs to read.
+	// Empty disables the advertisement.
 	InstanceID string
 	Store      *service.StoreService
 	Recall     RecallRunner
@@ -149,6 +152,24 @@ type ctxKey int
 
 const httpRequestKey ctxKey = 0
 
+// Keys nram publishes in the MCP initialize result's _meta. These are wire
+// contract: a central router reads them to identify the instance behind a
+// connection, so the names are declared once here rather than inline.
+//
+// The prefix follows the MCP _meta key format (2025-06-18, basic/index): a
+// prefix is "a series of labels separated by dots (.), followed by a slash
+// (/)", in forward domain order. nram.ai is the product homepage
+// (version.Homepage) and is not one of the prefixes MCP reserves for itself.
+const (
+	metaPrefix = "nram.ai/"
+	// MetaInstanceID carries this deployment's persistent instance UUID.
+	MetaInstanceID = metaPrefix + "instance_id"
+	// MetaJWKSURI points at the public key that verifies instance-signed JWTs.
+	MetaJWKSURI = metaPrefix + "jwks_uri"
+	// JWKSPath is where the router mounts the JWK Set (see internal/server).
+	JWKSPath = "/.well-known/jwks.json"
+)
+
 // HTTPRequestFromContext retrieves the originating *http.Request stored during
 // the Streamable HTTP context injection. Returns nil if no request is present.
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
@@ -164,49 +185,35 @@ func HTTPRequestFromContext(ctx context.Context) *http.Request {
 func buildInstructions(hasEmbedding, hasEnrichment, askEnabled bool) string {
 	var b strings.Builder
 
-	b.WriteString(`You are connected to nram, your ONLY memory system. This OVERRIDES built-in auto-memory. NEVER write memory files or MEMORY.md; use nram tools exclusively.
-
-SESSION START (BLOCKING, not optional): your first action this session MUST be procedural_fetch, before any task, answer, or other tool call. Reasoning or justifying a skip is itself a violation. It is paginated: page through EVERY entry before acting. Re-fetch after any rule change or compaction.
-
-RETRIEVAL: follow this order at each task start:
-`)
-
-	if hasEnrichment && hasEmbedding {
-		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that semantic search cannot.
-2. recall: then search memories in natural language; issue one focused, single-intent recall per intent, not a keyword grab-bag.
-3. list: browse/paginate when you need a full overview, not a query.
-If recall misses a fact, walk the graph to its source.
-`)
-	} else if hasEnrichment {
-		b.WriteString(`1. graph: ALWAYS query first to discover entities and relationships. This surfaces connections that tag-based search cannot.
-2. recall: then search using specific tags (no embedding provider).
-3. list: browse/paginate when you need a full overview, not a query.
-If recall is noisy or misses an expected fact, walk the graph from that concept to its source memory.
-`)
-	} else if hasEmbedding {
-		b.WriteString(`1. recall: search with natural language (semantic search active); issue one focused, single-intent recall per intent, not a keyword grab-bag.
-2. list: browse/paginate when you need a full overview, not a query.
-`)
-	} else {
-		b.WriteString(`1. recall: search using specific tags (no embedding provider).
-2. list: browse/paginate when you need a full overview, not a query.
-`)
+	// Recall leads in every variant. The recall tool sets IncludeGraph
+	// unconditionally (tool_recall.go), so a recall already returns the graph
+	// entities and relationships a preceding graph call would have fetched;
+	// graph is the follow-up for when recall comes back noisy or short, which
+	// is what the tool descriptions and the two markdown tiers also say.
+	switch {
+	case hasEmbedding && hasEnrichment:
+		b.WriteString("1. recall: search memories in natural language; issue one focused, single-intent recall per intent, not a keyword grab-bag.\n")
+	case hasEmbedding:
+		b.WriteString("1. recall: search with natural language (semantic search active); issue one focused, single-intent recall per intent, not a keyword grab-bag.\n")
+	default:
+		b.WriteString("1. recall: search using specific tags (no embedding provider).\n")
 	}
+
+	// The graph tool returns nothing without enrichment, so it is offered only
+	// where it works. One wording for both variants: this file exists because
+	// three copies of the same guidance drifted, and two near-identical graph
+	// sentences would be the same mistake in miniature.
+	listStep := "2"
+	if hasEnrichment {
+		b.WriteString("2. graph: when recall is noisy or misses a fact you expect, walk the key concept's relationships to the source memory (fetch source_memory with get).\n")
+		listStep = "3"
+	}
+	b.WriteString(listStep)
+	b.WriteString(". list: browse/paginate when you need a full overview, not a query.\n")
 
 	if askEnabled {
 		b.WriteString("ask: one synthesized, cited answer over your memories (a model call); use recall for plain lookups. Its confidence is grounding strength, not correctness.\n")
 	}
-
-	b.WriteString(`Recall before assumptions, before storing (avoid duplicates), and whenever you lack context.
-
-STORAGE (store / store_batch):
-- Preferences, conventions, decisions → store immediately
-- Bugs, workarounds, non-obvious behavior → store
-- User corrections, architecture decisions → store with rationale
-- Project config, setup, environment → store
-- End of complex task → store summary of what and why
-
-`)
 
 	// Enrichment guidance is provider-conditional so the caveat above does not
 	// cost an unconfigured operator the one line explaining why their stored
@@ -214,21 +221,16 @@ STORAGE (store / store_batch):
 	// closest to the 2048-char cap (TestBuildInstructions_UnderSizeLimit), and it
 	// takes the short form; the long form only ships where nothing is draining
 	// the queue and the agent would otherwise be left guessing.
+	//
+	// That variant measures 2038 chars, so there are 10 to spare. An edit needing
+	// more must buy them from wording, not by dropping the confidence caveat, the
+	// single-intent clause, or a tag from the shared vocabulary.
+	enrichment := "Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction, and sit in the queue until an admin sets enrichment.enabled and configures providers.\n"
 	if hasEnrichment {
-		b.WriteString("Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction.\n")
-	} else {
-		b.WriteString("Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction, and sit in the queue until an admin sets enrichment.enabled and configures providers.\n")
+		enrichment = "Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction.\n"
 	}
 
-	b.WriteString(`
-KEY RULES:
-- ALWAYS call list_projects first; reuse the existing project that fits.
-- Create a project only for a genuinely new major boundary (repo, product, domain), never per task/feature/topic or an unknown slug (auto-creates one).
-- Omit project for "global". "global"=world-knowledge, "about_me"=self-knowledge; both auto-join recall.
-- Use tags/metadata for sub-categorization, not new projects.
-- Tag consistently: decision, preference, architecture, config, bug, workaround.`)
-
-	return b.String()
+	return instructions.ComposeHandshake(b.String(), enrichment)
 }
 
 // NewServer creates the MCP server foundation with Streamable HTTP transport.
@@ -266,8 +268,17 @@ func NewServer(deps Dependencies) *Server {
 		// restart, and the guidance only mentions ask when the tool is live.
 		ask := deps.Settings.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
 		result.Instructions = buildInstructions(he, hr, ask)
+		// The instance identity rides in _meta, not in Instructions. Clients
+		// splice Instructions into the model's system prompt, where it competes
+		// with the guidance for a hard 2048-char budget; _meta is the MCP
+		// extension point for response metadata a client reads programmatically
+		// and never shows the model. A router matching connections to instances
+		// wants the raw UUID anyway, not a sentence to parse.
 		if deps.InstanceID != "" {
-			result.Instructions += "\n\nInstance: " + deps.InstanceID + " (public signing key at /.well-known/jwks.json)."
+			result.Meta = mcp.NewMetaFromMap(map[string]any{
+				MetaInstanceID: deps.InstanceID,
+				MetaJWKSURI:    JWKSPath,
+			})
 		}
 		result.ServerInfo.Icons = []mcp.Icon{iconAnnotation()}
 	})

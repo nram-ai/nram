@@ -39,9 +39,11 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
 // ---------------------------------------------------------------------------
 
 // The instructions/rules snippets are served by the backend at GET
-// /instructions and fetched at runtime (see the main component). The server is
-// the single source of truth so the page and external callers read one copy;
-// nothing here hardcodes the wording.
+// /instructions and fetched at runtime (see the main component). The server
+// owns the wording and nothing here hardcodes it, so this page never drifts
+// from what the endpoint serves. That endpoint is not, however, the only copy
+// of nram's agent guidance: the MCP handshake is a third, shorter tier composed
+// per-connection in internal/mcp and never served here.
 
 type Snippets = { claude: string; condensed: string; agents: string };
 

@@ -23,6 +23,7 @@ Memories persist across all machines, agents, and conversations.
 - Before making assumptions about preferences or past decisions: recall first
 - Before storing: recall to check for duplicates
 - When you need context you lack: recall before asking the user
+- For a multi-intent need: issue one focused, single-intent recall per intent, not a keyword grab-bag. A stuffed query blends the embedding and buries the weaker facets
 Recall scoping: omit project = global + about_me; with project = project + global + about_me. global (world-knowledge) and about_me (the user's self-knowledge) are reserved tiers that always join recall. Call the about_me tool on demand when you need the user's personal context (no need to load it every session).
 
 **WHEN TO ASK** (ask, when the tool is available):
@@ -43,3 +44,4 @@ Recall scoping: omit project = global + about_me; with project = project + globa
 - Use tags and metadata for sub-categorization within a project, not new projects
 - Tag consistently: decision, preference, architecture, config, bug, workaround, convention
 - An unknown slug on store auto-creates a new project; treat auto-creation as a last resort
+- Enrichment is server-managed: every new memory is auto-enqueued for entity/relationship extraction, and sits in the queue until an admin enables enrichment and configures providers

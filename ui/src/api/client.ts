@@ -168,8 +168,9 @@ export type InstructionsFormat = "claude" | "agents" | "condensed" | "cursor";
 
 /**
  * Fetch the canonical agent instructions/rules as plain text from the public
- * /instructions endpoint. This is the single source of truth for the snippets
- * shown on the MCP config page; the backend owns the wording.
+ * /instructions endpoint. The backend owns the wording for every snippet shown
+ * on the MCP config page. This endpoint serves the two document tiers only; the
+ * MCP handshake is a separate, shorter tier composed per-connection server-side.
  */
 export function getInstructions(format: InstructionsFormat): Promise<string> {
   return fetchText(`/instructions?format=${format}`);
