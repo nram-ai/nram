@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.51
+  version: 0.18.52
   license:
     name: MIT
 
@@ -5581,6 +5581,24 @@ components:
         latency_ms:
           type: integer
           format: int64
+        coverage_gaps:
+          type: array
+          description: |
+            Prefix-groups observed in the candidate pool but absent from the
+            returned memories, with the pipeline stage that dropped each one.
+            Emitted for diversified queries; omitted when there are none.
+          items:
+            type: object
+            properties:
+              group_key:
+                type: string
+              cause:
+                type: string
+                enum: [tag_filter, threshold, limit]
+                description: |
+                  Pipeline stage that dropped this group. A gap means matching
+                  candidates existed but were filtered or capped, not that you
+                  have no memories on the topic.
         subquery_count:
           type: integer
           description: >-
@@ -5637,14 +5655,24 @@ components:
         score:
           type: number
           format: double
+          description: |
+            Composite rank score, not a cosine: per-query normalized similarity
+            plus graph relevance, multiplied by quality priors. No fixed scale,
+            so rank within one response and never threshold across calls.
         confidence:
           type: number
           format: double
+          description: |
+            The memory's own durable trust value and an input to score. It is
+            not confidence that this memory answers the query.
         low_novelty:
           type: boolean
           description: |
-            True when the dream novelty audit demoted this memory (paired with
-            confidence 0). Always present.
+            True when the dream novelty audit demoted this memory as redundant
+            with others (demotion also zeroes confidence). A redundancy flag,
+            not a judgement that the content is low quality. Always present;
+            demoted dream rows are withheld from recall unless
+            include_low_novelty is set.
         derived_from:
           type: array
           description: |

@@ -78,6 +78,7 @@
             "type": "string"
           },
           "valid_until": {
+            "description": "When this relationship stopped holding. Absent means it still holds now; it does not mean validity is unknown.",
             "format": "date-time",
             "type": "string"
           },

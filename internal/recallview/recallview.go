@@ -34,12 +34,12 @@ type Memory struct {
 	Tags        []string           `json:"tags"`
 	Source      *string            `json:"source,omitempty"`
 	Origin      model.MemoryOrigin `json:"origin"`
-	Score       float64            `json:"score"`
-	Confidence  float64            `json:"confidence"`
+	Score       float64            `json:"score" jsonschema_description:"Composite rank score, not a cosine: per-query normalized similarity plus graph relevance, multiplied by quality priors. No fixed scale, so rank within one response and never threshold across calls."`
+	Confidence  float64            `json:"confidence" jsonschema_description:"The memory's own durable trust value and an INPUT to score. It is not confidence that this memory answers the query."`
 	// LowNovelty is intentionally NOT omitempty: every recalled memory reports
 	// its novelty status, so a non-demoted memory emits low_novelty:false rather
 	// than omitting the key.
-	LowNovelty  bool            `json:"low_novelty"`
+	LowNovelty  bool            `json:"low_novelty" jsonschema_description:"True when the dream novelty audit demoted this memory as redundant with others. A redundancy flag, not a judgement that the content is low quality."`
 	DerivedFrom []uuid.UUID     `json:"derived_from,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`

@@ -9,11 +9,14 @@ import (
 	"github.com/nram-ai/nram/internal/service"
 )
 
+// mcpStoreResponse mirrors service.StoreResponse. Enriched is a hard false on
+// the insert path (store.go) because enrichment is queued, not inline; the dedup
+// path passes the existing memory's value through and queues nothing.
 type mcpStoreResponse struct {
 	ID               uuid.UUID `json:"id"`
 	ProjectSlug      string    `json:"project_slug"`
-	Enriched         bool      `json:"enriched"`
-	EnrichmentQueued bool      `json:"enrichment_queued,omitempty"`
+	Enriched         bool      `json:"enriched" jsonschema_description:"Whether entity and relationship extraction has already run for this memory. ALWAYS false on a new insert because enrichment runs later; false is not a partial failure and does not warrant a retry."`
+	EnrichmentQueued bool      `json:"enrichment_queued,omitempty" jsonschema_description:"True when this insert was enqueued for enrichment. Absent on the dedup path, where an existing memory was returned and nothing needed queueing; absence does not mean enrichment is broken."`
 }
 
 func buildMCPStoreResponse(resp *service.StoreResponse) *mcpStoreResponse {
@@ -39,11 +42,14 @@ func buildMCPBatchStoreResponse(resp *service.BatchStoreResponse) *mcpBatchStore
 	}
 }
 
+// mcpUpdateResponse mirrors service.UpdateResponse; the ID and Superseded field
+// descriptions carry the copy-on-write contract. The case they do not cover: a
+// tags/metadata-only update edits in place and leaves ID unchanged.
 type mcpUpdateResponse struct {
-	ID               uuid.UUID `json:"id"`
+	ID               uuid.UUID `json:"id" jsonschema_description:"The memory id after the update. A content change writes a NEW row, so this differs from the id you sent; use this one afterwards or you target a superseded row."`
 	PreviousMemoryID uuid.UUID `json:"previous_memory_id"`
 	ReEmbedded       bool      `json:"re_embedded"`
-	Superseded       bool      `json:"superseded"`
+	Superseded       bool      `json:"superseded" jsonschema_description:"True when the content change wrote a new row and retired the old one. It reports that the copy-on-write path succeeded, not that your memory was invalidated."`
 }
 
 func buildMCPUpdateResponse(resp *service.UpdateResponse) *mcpUpdateResponse {

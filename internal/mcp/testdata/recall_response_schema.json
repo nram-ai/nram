@@ -36,6 +36,12 @@
       "items": {
         "properties": {
           "cause": {
+            "description": "Pipeline stage that dropped this group. A gap means matching candidates existed but were filtered or capped, not that you have no memories on the topic.",
+            "enum": [
+              "tag_filter",
+              "threshold",
+              "limit"
+            ],
             "type": "string"
           },
           "group_key": {
@@ -130,6 +136,7 @@
                 "type": "string"
               },
               "valid_until": {
+                "description": "When this relationship stopped holding. Absent means it still holds now; it does not mean validity is unknown.",
                 "format": "date-time",
                 "type": "string"
               },
@@ -161,6 +168,7 @@
       "items": {
         "properties": {
           "confidence": {
+            "description": "The memory's own durable trust value and an INPUT to score. It is not confidence that this memory answers the query.",
             "type": "number"
           },
           "content": {
@@ -182,6 +190,7 @@
             "type": "string"
           },
           "low_novelty": {
+            "description": "True when the dream novelty audit demoted this memory as redundant with others. A redundancy flag, not a judgement that the content is low quality.",
             "type": "boolean"
           },
           "metadata": true,
@@ -192,6 +201,7 @@
             "type": "string"
           },
           "score": {
+            "description": "Composite rank score, not a cosine: per-query normalized similarity plus graph relevance, multiplied by quality priors. No fixed scale, so rank within one response and never threshold across calls.",
             "type": "number"
           },
           "source": {

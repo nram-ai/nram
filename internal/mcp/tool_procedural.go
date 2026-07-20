@@ -49,7 +49,7 @@ func buildMCPProceduralEntry(e *model.ProceduralEntry) mcpProceduralEntry {
 // Truncated is set only when the per-page byte budget forced a reduction.
 type mcpProceduralFetchResponse struct {
 	Entries    []mcpProceduralEntry `json:"entries"`
-	Count      int                  `json:"count"`
+	Count      int                  `json:"count" jsonschema_description:"Entries on this page only, not the total. Keep paging while offset+count is below pagination.total; the rule set is incomplete until every page is loaded."`
 	Pagination model.Pagination     `json:"pagination"`
 	Truncated  *truncationInfo      `json:"_truncated,omitempty"`
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nram-ai/nram/internal/service"
 )
 
 var updateSchemaSnapshots = flag.Bool("update-schema-snapshots", false,
@@ -109,16 +111,7 @@ func assertSchemaSnapshot(t *testing.T, typeName, fileBase string, actual json.R
 // documented repair would pass green. This assertion reads the field out of the
 // derived schema, so it fails on the deletion however the snapshot is refreshed.
 func TestAskSchemaDescribesConfidence(t *testing.T) {
-	var schema struct {
-		Properties map[string]struct {
-			Description string `json:"description"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(schemaFor[mcpAskResponse](), &schema); err != nil {
-		t.Fatalf("unmarshal ask output schema: %v", err)
-	}
-
-	desc := schema.Properties["confidence"].Description
+	desc, _ := schemaNodeAt(t, schemaFor[mcpAskResponse](), "confidence")["description"].(string)
 	if desc == "" {
 		t.Fatal("ask output schema publishes confidence with no description; an agent cannot tell grounding from correctness")
 	}
@@ -127,6 +120,132 @@ func TestAskSchemaDescribesConfidence(t *testing.T) {
 			t.Errorf("confidence description must distinguish grounding from correctness; missing %q\ngot: %s", want, desc)
 		}
 	}
+}
+
+// TestSchemasDescribeFieldContracts pins the meanings published alongside the
+// fields whose NAME understates, or actively misstates, their contract. Each
+// one is a field where an omitted or defaulted value is the load-bearing
+// signal, so an agent reading only names and types draws a specific wrong
+// inference: a missing ask score read as a weak match rather than a source no
+// cosine could be computed for, enriched:false read as a partial failure worth
+// retrying rather than the invariant every fresh insert reports, a recall score
+// read as a cosine and thresholded across calls rather than an unbounded
+// composite comparable only within one response.
+//
+// Same reasoning as TestAskSchemaDescribesConfidence, which pins the ask
+// confidence field, and deliberately not left to the snapshots for the same
+// reason: regeneration would agree with a deletion. These read the description
+// out of the derived schema instead.
+func TestSchemasDescribeFieldContracts(t *testing.T) {
+	// Derived once per type, not once per row: reflecting mcpRecallResponse
+	// walks every nested graph and memory struct.
+	schemas := map[string]json.RawMessage{
+		"ask":              schemaFor[mcpAskResponse](),
+		"store":            schemaFor[mcpStoreResponse](),
+		"update":           schemaFor[mcpUpdateResponse](),
+		"recall":           schemaFor[mcpRecallResponse](),
+		"procedural_fetch": schemaFor[mcpProceduralFetchResponse](),
+		"graph":            schemaFor[graphResponse](),
+	}
+
+	cases := []struct {
+		tool string
+		path []string
+		want string
+	}{
+		{"ask", []string{"sources", "score"}, "Absent"},
+		{"ask", []string{"sources", "citation"}, "cited nothing"},
+		{"ask", []string{"synthesis_meta", "synthesis_failed"}, "retry"},
+		{"store", []string{"enriched"}, "ALWAYS false"},
+		{"store", []string{"enrichment_queued"}, "dedup"},
+		{"update", []string{"id"}, "NEW row"},
+		{"update", []string{"superseded"}, "copy-on-write"},
+		{"recall", []string{"memories", "score"}, "not a cosine"},
+		{"recall", []string{"memories", "confidence"}, "INPUT to score"},
+		{"recall", []string{"memories", "low_novelty"}, "redundancy"},
+		{"recall", []string{"coverage_gaps", "cause"}, "filtered or capped"},
+		{"procedural_fetch", []string{"count"}, "not the total"},
+		{"graph", []string{"relationships", "valid_until"}, "still holds"},
+	}
+
+	for _, tc := range cases {
+		name := tc.tool + "/" + strings.Join(tc.path, ".")
+		t.Run(name, func(t *testing.T) {
+			node := schemaNodeAt(t, schemas[tc.tool], tc.path...)
+			desc, _ := node["description"].(string)
+			if desc == "" {
+				t.Fatalf("%s output schema publishes %s with no description; an agent cannot read the contract off the name alone",
+					tc.tool, strings.Join(tc.path, "."))
+			}
+			if !strings.Contains(desc, tc.want) {
+				t.Errorf("%s description must carry %q\ngot: %s", name, tc.want, desc)
+			}
+		})
+	}
+}
+
+// TestRecallSchemaPublishesCoverageGapCauses pins the coverage-gap cause codes
+// into the schema itself. Cause is a closed set (CoverageCause* in
+// internal/service/recall.go); published as a bare string, a caller has to guess
+// the vocabulary, and the distinction the codes carry (the candidates existed
+// but were filtered or capped) never reaches them at all.
+func TestRecallSchemaPublishesCoverageGapCauses(t *testing.T) {
+	node := schemaNodeAt(t, schemaFor[mcpRecallResponse](), "coverage_gaps", "cause")
+
+	raw, ok := node["enum"].([]any)
+	if !ok {
+		t.Fatalf("recall output schema publishes coverage_gaps.cause with no enum; got %v", node)
+	}
+	got := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("coverage_gaps.cause enum holds non-string %v (%T)", v, v)
+		}
+		got = append(got, s)
+	}
+
+	want := []string{
+		service.CoverageCauseTagFilter,
+		service.CoverageCauseThreshold,
+		service.CoverageCauseLimit,
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("coverage_gaps.cause enum = %v; want %v", got, want)
+	}
+}
+
+// schemaNodeAt walks a derived output schema to the node at path, where each
+// element is a property name. Array hops are implicit: a node carrying "items"
+// is descended into before the next property lookup, so the caller writes
+// "sources", "score" rather than threading "items" through every path. Relies
+// on schemaFor's DoNotReference, which inlines every nested struct, so there are
+// no $refs to resolve.
+func schemaNodeAt(t *testing.T, raw json.RawMessage, path ...string) map[string]any {
+	t.Helper()
+	if raw == nil {
+		t.Fatal("schemaFor returned nil; cannot walk the schema")
+	}
+	var node map[string]any
+	if err := json.Unmarshal(raw, &node); err != nil {
+		t.Fatalf("unmarshal output schema: %v", err)
+	}
+
+	for i, name := range path {
+		if items, ok := node["items"].(map[string]any); ok {
+			node = items
+		}
+		props, ok := node["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("schema node at %v has no properties; cannot reach %q", path[:i], name)
+		}
+		next, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("schema has no property %q under %v", name, path[:i])
+		}
+		node = next
+	}
+	return node
 }
 
 // canonicalizeJSON re-marshals JSON through Unmarshal/MarshalIndent so two

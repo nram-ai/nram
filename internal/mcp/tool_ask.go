@@ -17,20 +17,25 @@ import (
 type mcpAskSource struct {
 	MemoryID    string `json:"memory_id"`
 	ProjectSlug string `json:"project_slug"`
-	// Score is the source's absolute vector cosine to the query. Omitted for
-	// sources that entered via graph/sibling expansion (no direct query match),
-	// rather than the misleading 0 the old fixed-float field reported.
-	Score *float64 `json:"score,omitempty"`
+	// Score is the source's absolute vector cosine to the query. Omitted, rather
+	// than reporting the misleading 0 the old fixed-float field did, when no
+	// cosine could be computed for the source. That is NOT the same as "entered
+	// via graph/sibling expansion": citedQueryCosines (service/ask.go) hydrates a
+	// cosine for any cited source that lacks one, so on the cited path an
+	// expanded source is scored against the original question like any other.
+	// Absence is therefore confined to the uncited fallback and to sources with
+	// no stored vector to score.
+	Score *float64 `json:"score,omitempty" jsonschema_description:"Vector cosine of this source to the query. Absent (not zero) means no cosine could be computed, not a poor match. Cited sources are scored against the original question even when they arrived via graph or sibling expansion."`
 	// Citation is the footnote number ([1], [2], …) this source carries inline
 	// in the answer. Omitted (0) on the uncited fallback.
-	Citation int `json:"citation,omitempty"`
+	Citation int `json:"citation,omitempty" jsonschema_description:"Footnote number this source carries in the answer. Absent means the answer cited nothing, so sources are what retrieval returned rather than what the answer used."`
 }
 
 // mcpAskSynthesisMeta is the minimal synthesis metadata returned with an answer.
 type mcpAskSynthesisMeta struct {
 	LatencyMs        int64 `json:"latency_ms"`
 	NeighborhoodSize int   `json:"neighborhood_size"`
-	SynthesisFailed  bool  `json:"synthesis_failed,omitempty"`
+	SynthesisFailed  bool  `json:"synthesis_failed,omitempty" jsonschema_description:"True when the model call failed, so an empty answer means retry rather than no memories matched. Absent on the normal path."`
 }
 
 // mcpAskResponse is the wire shape of the ask tool result. Kept in sync with the

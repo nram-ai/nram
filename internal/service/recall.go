@@ -242,9 +242,13 @@ type RecallResponse struct {
 
 // CoverageGap describes a prefix-group observed in the candidate pool but
 // absent from the returned memories, and why.
+//
+// The enum tag publishes the CoverageCause* vocabulary into the MCP recall
+// output schema, which otherwise ships cause as a bare string and leaves the
+// caller to guess the closed set.
 type CoverageGap struct {
 	GroupKey string `json:"group_key"`
-	Cause    string `json:"cause"` // one of CoverageCause* constants
+	Cause    string `json:"cause" jsonschema:"enum=tag_filter,enum=threshold,enum=limit" jsonschema_description:"Pipeline stage that dropped this group. A gap means matching candidates existed but were filtered or capped, not that you have no memories on the topic."`
 }
 
 // Coverage-gap cause codes attribute a missing prefix-group to the pipeline

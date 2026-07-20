@@ -11,6 +11,7 @@
       "items": {
         "properties": {
           "citation": {
+            "description": "Footnote number this source carries in the answer. Absent means the answer cited nothing, so sources are what retrieval returned rather than what the answer used.",
             "type": "integer"
           },
           "memory_id": {
@@ -20,6 +21,7 @@
             "type": "string"
           },
           "score": {
+            "description": "Vector cosine of this source to the query. Absent (not zero) means no cosine could be computed, not a poor match. Cited sources are scored against the original question even when they arrived via graph or sibling expansion.",
             "type": "number"
           }
         },
@@ -40,6 +42,7 @@
           "type": "integer"
         },
         "synthesis_failed": {
+          "description": "True when the model call failed, so an empty answer means retry rather than no memories matched. Absent on the normal path.",
           "type": "boolean"
         }
       },

@@ -101,10 +101,13 @@ type AskRequest struct {
 type AskSource struct {
 	MemoryID    uuid.UUID `json:"memory_id"`
 	ProjectSlug string    `json:"project_slug"`
-	// Score is the source's absolute vector cosine to the query, present only
-	// for recall (vector-channel) sources. Nil and omitted for sources that
-	// entered via graph or sibling expansion (structurally related, not directly
-	// query-matched) — previously those serialized a misleading 0.000.
+	// Score is the source's absolute vector cosine to the query. Nil and omitted
+	// when no cosine could be computed; previously those serialized a misleading
+	// 0.000. Entry path alone does not decide this: citedQueryCosines hydrates a
+	// cosine for any cited source missing one, so a graph- or sibling-expanded
+	// memory that the answer cited is scored against the original question just
+	// like a direct recall hit. Nil is confined to the uncited fallback and to
+	// sources with no stored vector to score.
 	Score    *float64 `json:"score,omitempty"`
 	Citation int      `json:"citation,omitempty"`
 }

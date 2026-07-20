@@ -49,7 +49,7 @@ type graphRelationship struct {
 	TargetID     uuid.UUID  `json:"target_id"`
 	Relation     string     `json:"relation"`
 	Weight       float64    `json:"weight"`
-	ValidUntil   *time.Time `json:"valid_until,omitempty"`
+	ValidUntil   *time.Time `json:"valid_until,omitempty" jsonschema_description:"When this relationship stopped holding. Absent means it still holds now; it does not mean validity is unknown."`
 	SourceMemory *uuid.UUID `json:"source_memory,omitempty"`
 }
 
