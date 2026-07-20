@@ -66,7 +66,7 @@ nram is not another memory tool bolted onto one app. It is the layer underneath 
 
 ### Dreaming, an offline consolidation cycle
 
-- A **twelve-phase** cycle that dedups entities, backfills embeddings and facets, infers transitive relationships, detects contradictions, consolidates, prunes, and recomputes weights while the server is idle.
+- A **fourteen-phase** cycle that dedups entities, backfills embeddings and facets, infers transitive relationships, detects contradictions, consolidates, prunes, and recomputes weights while the server is idle.
 - Consolidation **clusters related memories** by embedding similarity so syntheses stay coherent, and an LLM **novelty audit** demotes low-value ones.
 
 ### Ask: one cited answer, not a list (optional)
@@ -162,7 +162,7 @@ internal/
   api/             HTTP handlers (REST + admin)
   auth/            OAuth 2.0, JWT, WebAuthn, RBAC
   config/          Bootstrap configuration loading
-  dreaming/        Offline consolidation cycle (twelve phases) with rollback and retention sweeps
+  dreaming/        Offline consolidation cycle (fourteen phases) with rollback and retention sweeps
   enrichment/      Background enrichment worker pool, ingestion decision, dedup, re-embed
   events/          Event bus, SSE, webhooks
   mcp/             MCP server and tool handlers
