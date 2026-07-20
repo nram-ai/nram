@@ -194,7 +194,7 @@ If recall is noisy or misses an expected fact, walk the graph from that concept 
 	}
 
 	if askEnabled {
-		b.WriteString("ask: one synthesized, cited answer over your memories (a model call); use recall for plain lookups.\n")
+		b.WriteString("ask: one synthesized, cited answer over your memories (a model call); use recall for plain lookups. Its confidence is grounding strength, not correctness.\n")
 	}
 
 	b.WriteString(`Recall before assumptions, before storing (avoid duplicates), and whenever you lack context.
@@ -206,8 +206,21 @@ STORAGE (store / store_batch):
 - Project config, setup, environment → store
 - End of complex task → store summary of what and why
 
-Enrichment is server-managed: every new memory is auto-enqueued for entity/relationship extraction, drained once enrichment.enabled and providers are configured.
+`)
 
+	// Enrichment guidance is provider-conditional so the caveat above does not
+	// cost an unconfigured operator the one line explaining why their stored
+	// memories never reach the graph. The ask-enabled variant is the one running
+	// closest to the 2048-char cap (TestBuildInstructions_UnderSizeLimit), and it
+	// takes the short form; the long form only ships where nothing is draining
+	// the queue and the agent would otherwise be left guessing.
+	if hasEnrichment {
+		b.WriteString("Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction.\n")
+	} else {
+		b.WriteString("Enrichment is server-managed: new memories are auto-enqueued for entity/relationship extraction, and sit in the queue until an admin sets enrichment.enabled and configures providers.\n")
+	}
+
+	b.WriteString(`
 KEY RULES:
 - ALWAYS call list_projects first; reuse the existing project that fits.
 - Create a project only for a genuinely new major boundary (repo, product, domain), never per task/feature/topic or an unknown slug (auto-creates one).

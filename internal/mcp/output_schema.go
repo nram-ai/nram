@@ -33,6 +33,12 @@ import (
 //
 // Use with mcp.WithRawOutputSchema(schemaFor[T]()) instead of
 // mcp.WithOutputSchema[T]() so the Mapper takes effect.
+//
+// To publish what a field MEANS (not just its type) to the agents that read
+// tools/list, tag it `jsonschema_description:"..."`. Prefer that over a
+// description= key inside the comma-split `jsonschema` tag, whose value cannot
+// contain commas. Worth doing wherever a field's name understates its contract:
+// mcpAskResponse.Confidence is named like a correctness score and is not one.
 func schemaFor[T any]() json.RawMessage {
 	var zero T
 	// MCP spec mandates the root be an object; the force-set below assumes

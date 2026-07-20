@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -34,6 +35,31 @@ func TestAskVisible(t *testing.T) {
 				t.Errorf("askVisible = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAskToolDescriptionCarriesGroundingCaveat pins the sentence in tools/list
+// telling an agent that a high confidence is not a claim the answer is correct.
+//
+// Asserts against the registered tool, so it also catches RegisterAskTool being
+// rewired to a different description. Asserts on the two load-bearing words
+// rather than a phrasing, matching the sibling pins in
+// TestAskSchemaDescribesConfidence and
+// TestBuildInstructions_AskConfidenceIsGrounding: a meaning-preserving reword
+// should not have to be chased through three tests.
+func TestAskToolDescriptionCarriesGroundingCaveat(t *testing.T) {
+	srv := newTestServer(Dependencies{Ask: &service.AskService{}})
+	RegisterAskTool(srv)
+
+	st, ok := srv.MCPServer().ListTools()["ask"]
+	if !ok {
+		t.Fatal("ask tool is not registered; cannot check its description")
+	}
+
+	for _, want := range []string{"grounding", "correctness"} {
+		if !strings.Contains(st.Tool.Description, want) {
+			t.Errorf("ask tool description must distinguish grounding from correctness; missing %q\ngot: %s", want, st.Tool.Description)
+		}
 	}
 }
 

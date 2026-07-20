@@ -29,6 +29,7 @@ Recall scoping: omit project = global + about_me; with project = project + globa
 - When you want one synthesized, cited answer composed over your memories rather than a ranked list to read yourself
 - ask runs the retrieval for you and writes a grounded answer with footnote citations; it spends a model call, so prefer recall for plain lookups
 - Omit project for a wide synthesis across all your projects; pass a project slug to scope it (same tiers as recall). ask is opt-in and appears only when an operator has enabled it
+- The `confidence` on an answer is grounding strength (how strongly the cited sources match the question), not correctness. A high value on a wrong conclusion drawn from a strong-matching source is expected, so read the cited sources before acting on one
 
 **WHEN TO EXPLORE** (graph):
 - When investigating how concepts, people, or components relate

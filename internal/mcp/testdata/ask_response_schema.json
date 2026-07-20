@@ -1,0 +1,60 @@
+{
+  "properties": {
+    "answer": {
+      "type": "string"
+    },
+    "confidence": {
+      "description": "A grounding / evidence-strength signal in [0,1], not a correctness or faithfulness score. It reports how strongly the sources the answer cited match the query, derived from their calibrated vector cosines. It does not report whether the answer is right: an answer that draws a wrong conclusion from a strong-matching source still scores high, so read the cited sources before acting on a high value. Zero when the answer cited no source: it was ungrounded, said \"Not in neighborhood.\", or synthesis failed.",
+      "type": "number"
+    },
+    "sources": {
+      "items": {
+        "properties": {
+          "citation": {
+            "type": "integer"
+          },
+          "memory_id": {
+            "type": "string"
+          },
+          "project_slug": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "memory_id",
+          "project_slug"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "synthesis_meta": {
+      "properties": {
+        "latency_ms": {
+          "type": "integer"
+        },
+        "neighborhood_size": {
+          "type": "integer"
+        },
+        "synthesis_failed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "latency_ms",
+        "neighborhood_size"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "answer",
+    "sources",
+    "confidence",
+    "synthesis_meta"
+  ],
+  "type": "object"
+}

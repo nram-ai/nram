@@ -34,6 +34,14 @@ func TestInstructionsHandler_DefaultIsFullBody(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "you may not reason or justify") {
 		t.Fatal("full body is missing the anti-rationalization session-start clause")
 	}
+	// This body is what users paste into CLAUDE.md, so it is the copy most
+	// likely to be reflowed by a later edit. Its ask guidance must keep saying
+	// that a confidence score is grounding strength and not correctness.
+	for _, want := range []string{"grounding", "correctness"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("full body's ask guidance must distinguish grounding from correctness; missing %q", want)
+		}
+	}
 }
 
 func TestInstructionsHandler_ClaudeAndAgentsAreIdentical(t *testing.T) {

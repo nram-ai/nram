@@ -414,6 +414,25 @@ func TestBuildInstructions_AllVariants(t *testing.T) {
 	}
 }
 
+// TestBuildInstructions_AskConfidenceIsGrounding pins the confidence caveat in
+// the handshake instructions, which sit in the calling agent's system prompt for
+// the whole session. This variant runs 20 chars under the 2048 cap that
+// TestBuildInstructions_UnderSizeLimit enforces, so a later edit needing room
+// must not buy it back by deleting this clause.
+func TestBuildInstructions_AskConfidenceIsGrounding(t *testing.T) {
+	withAsk := buildInstructions(true, true, true)
+	for _, want := range []string{"grounding", "correctness"} {
+		if !strings.Contains(withAsk, want) {
+			t.Errorf("ask-enabled instructions must distinguish grounding from correctness; missing %q", want)
+		}
+	}
+
+	// The caveat rides on the ask line, so it must not leak in when ask is off.
+	if noAsk := buildInstructions(true, true, false); strings.Contains(noAsk, "grounding") {
+		t.Error("confidence caveat must not appear when the ask tool is disabled")
+	}
+}
+
 func TestBuildInstructions_RetrievalPrecedence(t *testing.T) {
 	// With enrichment: graph must come before recall, recall before list.
 	full := buildInstructions(true, true, false)

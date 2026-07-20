@@ -36,9 +36,11 @@ type mcpAskSynthesisMeta struct {
 // mcpAskResponse is the wire shape of the ask tool result. Kept in sync with the
 // registered output schema (schemaFor[mcpAskResponse]).
 type mcpAskResponse struct {
-	Answer        string              `json:"answer"`
-	Sources       []mcpAskSource      `json:"sources"`
-	Confidence    float64             `json:"confidence"`
+	Answer  string         `json:"answer"`
+	Sources []mcpAskSource `json:"sources"`
+	// The tag is jsonschema_description rather than a description= key inside
+	// the comma-split jsonschema tag, so the text may contain commas.
+	Confidence    float64             `json:"confidence" jsonschema_description:"A grounding / evidence-strength signal in [0,1], not a correctness or faithfulness score. It reports how strongly the sources the answer cited match the query, derived from their calibrated vector cosines. It does not report whether the answer is right: an answer that draws a wrong conclusion from a strong-matching source still scores high, so read the cited sources before acting on a high value. Zero when the answer cited no source: it was ungrounded, said \"Not in neighborhood.\", or synthesis failed."`
 	SynthesisMeta mcpAskSynthesisMeta `json:"synthesis_meta"`
 }
 
@@ -57,7 +59,7 @@ func RegisterAskTool(s *Server) {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithToolIcons(iconAnnotation()),
 		mcp.WithRawOutputSchema(schemaFor[mcpAskResponse]()),
-		mcp.WithDescription("Ask a question and get one synthesized answer over your stored memories, with the source memories it drew on. Unlike recall (which returns a ranked list), ask runs the retrieval for you and writes a single grounded answer with footnote citations ([1], [2], …) that map to the returned sources (each source carries its citation number). Omit project for a wide synthesis across all of your projects (plus global and about_me); pass a project slug to scope to that project plus global and about_me. Single-shot: each call is one question, not a conversation. Costs a model call, so prefer recall for simple lookups and use ask when you want the answer composed for you."),
+		mcp.WithDescription("Ask a question and get one synthesized answer over your stored memories, with the source memories it drew on. Unlike recall (which returns a ranked list), ask runs the retrieval for you and writes a single grounded answer with footnote citations ([1], [2], …) that map to the returned sources (each source carries its citation number). Omit project for a wide synthesis across all of your projects (plus global and about_me); pass a project slug to scope to that project plus global and about_me. Single-shot: each call is one question, not a conversation. Costs a model call, so prefer recall for simple lookups and use ask when you want the answer composed for you. The confidence returned with the answer is a grounding signal, not a correctness score: it reports how strongly the cited sources match the query, so a high value does not mean the answer is right."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("The question to answer from your memories.")),
 		mcp.WithString("project", mcp.Description("Optional project slug. Omit for a wide cross-project synthesis over all your projects; supply a slug to scope to that project + global + about_me.")),
 	)
