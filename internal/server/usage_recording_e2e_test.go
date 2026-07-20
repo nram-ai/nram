@@ -95,7 +95,10 @@ func TestUsageRecordingE2E_RequestIDPropagatedToTokenUsage(t *testing.T) {
 		resp: &provider.CompletionResponse{
 			Content: "ok",
 			Model:   "scripted-model",
-			Usage:   provider.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
+			Usage: provider.TokenUsage{
+				PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150,
+				CacheReadTokens: 60, CacheWriteTokens: 20,
+			},
 		},
 	}
 	wrapped := provider.NewUsageRecordingLLM(inner, rec, nil)
@@ -132,6 +135,18 @@ func TestUsageRecordingE2E_RequestIDPropagatedToTokenUsage(t *testing.T) {
 	}
 	if row.TokensInput != 100 || row.TokensOutput != 50 {
 		t.Errorf("Tokens: got in=%d out=%d", row.TokensInput, row.TokensOutput)
+	}
+	// Prompt-cache buckets must survive the provider -> middleware -> row hop.
+	// This is the only test covering that path; the adapter tests stop at
+	// provider.TokenUsage and the repo tests start at model.TokenUsage.
+	if row.TokensCacheRead != 60 || row.TokensCacheWrite != 20 {
+		t.Errorf("cache tokens: got read=%d write=%d, want read=60 write=20",
+			row.TokensCacheRead, row.TokensCacheWrite)
+	}
+	// They are a subset of the input count, never added to it.
+	if row.TokensCacheRead+row.TokensCacheWrite > row.TokensInput {
+		t.Errorf("cache tokens (%d+%d) exceed TokensInput (%d)",
+			row.TokensCacheRead, row.TokensCacheWrite, row.TokensInput)
 	}
 	if !row.Success {
 		t.Error("expected Success=true")

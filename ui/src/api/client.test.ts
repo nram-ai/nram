@@ -40,7 +40,7 @@ vi.hoisted(() => {
 });
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -77,8 +77,41 @@ import {
 // Paths & constants
 // ---------------------------------------------------------------------------
 
-// process.cwd() is the ui/ directory when vitest runs
-const SERVER_BIN = join(process.cwd(), "..", "bin", "nram");
+// process.cwd() is the ui/ directory when vitest runs.
+//
+// Defaults to the path `make build` actually writes (<repo>/nram) and honors
+// NRAM_BIN, matching scripts/ci/lib.sh. The previous default was
+// <repo>/bin/nram, which no build target produced: CI staged it with a `cp`
+// and locally it was a gitignored leftover that `make clean` never removed, so
+// this suite would happily spawn a weeks-old binary and pass.
+const SERVER_BIN = process.env.NRAM_BIN || join(process.cwd(), "..", "nram");
+
+// Semantic version of the source tree, read from the Go constant that
+// internal/version exports and /v1/health reports. Used to fail loudly when the
+// binary under test predates the working tree.
+function expectedServerVersion(): string {
+  const src = readFileSync(join(process.cwd(), "..", "internal", "version", "version.go"), "utf8");
+  const m = src.match(/const\s+Version\s*=\s*"([^"]+)"/);
+  if (!m) throw new Error("could not parse Version from internal/version/version.go");
+  return m[1];
+}
+
+// The semantic version is hand-maintained in several files that must move
+// together on every release. Nothing enforced that lockstep, so a bump that
+// missed one drifted silently. package.json is the one this suite can see; the
+// Go constant is the one /v1/health reports, so they are compared here.
+function assertVersionFilesAgree(): void {
+  const goVersion = expectedServerVersion();
+  const pkg = JSON.parse(
+    readFileSync(join(process.cwd(), "package.json"), "utf8"),
+  ) as { version?: string };
+  if (pkg.version !== goVersion) {
+    throw new Error(
+      `Version drift: ui/package.json is ${pkg.version}, ` +
+        `internal/version/version.go is ${goVersion}. Bump them together.`,
+    );
+  }
+}
 // Use a non-default port to avoid conflicting with a running dev server.
 const SERVER_PORT = 18674;
 const SERVER_URL = `http://localhost:${SERVER_PORT}`;
@@ -99,6 +132,29 @@ let adminNamespaceId: string;
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Fails when the spawned binary's reported version differs from the working
+// tree's. This suite exists to catch integration drift between the SPA client
+// and a real server, which it cannot do if it is allowed to spawn a stale
+// binary: without this check a forgotten rebuild produces a fully green run
+// against arbitrarily old code, and only a change that alters the API surface
+// would ever reveal it.
+async function assertServerMatchesTree(url: string): Promise<void> {
+  const want = expectedServerVersion();
+  const res = await fetch(`${url}/v1/health`);
+  const got = ((await res.json()) as { version?: string }).version;
+  if (got !== want) {
+    throw new Error(
+      `Server binary is stale: ${SERVER_BIN} reports version ${got}, ` +
+        `working tree is ${want}. Rebuild with \`make build\` ` +
+        `(or point NRAM_BIN at the binary you mean to test).`,
+    );
+  }
+}
+
+// Readiness only. The staleness check runs after this returns rather than
+// inside the loop: a version mismatch is a hard failure, not a not-ready-yet
+// condition, and throwing it from in here would be swallowed by the catch and
+// resurface 20 seconds later as a timeout with the wrong cause.
 async function waitForServer(
   url: string,
   timeoutMs = 20000,
@@ -143,6 +199,8 @@ async function startNramServer(
     throw new Error(`Failed to start nram server on ${port}: ${err.message}\n${stderr}`);
   });
   await waitForServer(`http://localhost:${port}`);
+  assertVersionFilesAgree();
+  await assertServerMatchesTree(`http://localhost:${port}`);
   return { proc, serverTmp };
 }
 
@@ -983,7 +1041,12 @@ describe("API Client E2E", () => {
       expect(u.totals).toBeDefined();
       expect(typeof u.totals.tokens_input).toBe("number");
       expect(typeof u.totals.tokens_output).toBe("number");
+      expect(typeof u.totals.tokens_cache_read).toBe("number");
+      expect(typeof u.totals.tokens_cache_write).toBe("number");
       expect(typeof u.totals.call_count).toBe("number");
+      // Cache counts are a subset of input, never additive to it.
+      expect(u.totals.tokens_cache_read + u.totals.tokens_cache_write)
+        .toBeLessThanOrEqual(u.totals.tokens_input);
       expect(Array.isArray(u.groups)).toBe(true);
     });
 

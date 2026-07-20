@@ -132,10 +132,35 @@ func IsTruncated(finishReason string) bool {
 }
 
 // TokenUsage tracks the token consumption for a single LLM or embedding call.
+//
+// CacheReadTokens and CacheWriteTokens are a SUBSET of PromptTokens, never an
+// addition to it, on every adapter. Providers split into two camps on the wire:
+// OpenAI-compatible servers (including SGLang, vLLM, OpenRouter, DeepSeek,
+// xAI, Groq, Mistral, Azure) and Gemini report cached counts already folded
+// inside prompt_tokens/promptTokenCount, while Anthropic reports them outside
+// input_tokens — so anthropic.go adds them in before constructing this struct.
+// Keeping the subset invariant here is what lets TotalTokens stay
+// PromptTokens+CompletionTokens and lets the dream budget and the
+// nram_tokens_used_total counter keep their existing meaning unchanged.
 type TokenUsage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	CacheReadTokens  int
+	CacheWriteTokens int
+}
+
+// Add accumulates o into u, for callers that fan one logical operation out
+// across several provider calls (the judge reranker scores one document per
+// call). Summing every field in one place means a new bucket is added here
+// rather than at each accumulation site, where a missed line silently reports
+// zero for that bucket.
+func (u *TokenUsage) Add(o TokenUsage) {
+	u.PromptTokens += o.PromptTokens
+	u.CompletionTokens += o.CompletionTokens
+	u.TotalTokens += o.TotalTokens
+	u.CacheReadTokens += o.CacheReadTokens
+	u.CacheWriteTokens += o.CacheWriteTokens
 }
 
 // EmbeddingRequest contains the parameters for an embedding call.

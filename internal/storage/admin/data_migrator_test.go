@@ -399,8 +399,12 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 
 	// ── token_usage ────────────────────────────────────────────────────────
 	// Token usage 1: all nullable FKs set
+	// Carries non-zero prompt-cache buckets so the migrator's handling of the
+	// 000063 columns is covered; row 2 below leaves them unset to confirm the
+	// NOT NULL DEFAULT 0 path also survives the copy.
 	mustExec(`INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id, operation,
-	                                   provider, model, tokens_input, tokens_output, memory_id,
+	                                   provider, model, tokens_input, tokens_output,
+	                                   tokens_cache_read, tokens_cache_write, memory_id,
 	                                   api_key_id, latency_ms, created_at)
 		VALUES ('aabbccdd-0000-0000-0000-000000000001',
 		        'bbbbbbbb-0000-0000-0000-000000000001',
@@ -409,6 +413,7 @@ func seedSQLite(t *testing.T, db *sql.DB) {
 		        'aaaaaaaa-0000-0000-0000-000000000002',
 		        'embed', 'openai', 'text-embedding-3-small',
 		        150, 0,
+		        120, 10,
 		        'ffffffff-0000-0000-0000-000000000001',
 		        'dddddddd-0000-0000-0000-000000000001',
 		        42,
@@ -1316,6 +1321,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"operation":    "embed", "provider": "openai", "model": "text-embedding-3-small",
 				"tokens_input": int(150), "tokens_output": int(0),
+				"tokens_cache_read": int(120), "tokens_cache_write": int(10),
 				"memory_id":  "ffffffff-0000-0000-0000-000000000001",
 				"api_key_id": "dddddddd-0000-0000-0000-000000000001",
 				"latency_ms": int(42),
@@ -1327,6 +1333,7 @@ func TestDataMigrator_SQLiteToPostgres(t *testing.T) {
 				"namespace_id": "aaaaaaaa-0000-0000-0000-000000000002",
 				"operation":    "recall", "provider": "anthropic", "model": "claude-3-opus",
 				"tokens_input": int(200), "tokens_output": int(500),
+				"tokens_cache_read": int(0), "tokens_cache_write": int(0),
 				"memory_id": nil, "api_key_id": nil, "latency_ms": nil,
 				"created_at": "2025-03-16T10:30:00Z",
 			},

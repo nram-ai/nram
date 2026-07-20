@@ -48,12 +48,15 @@ type TokenUsage struct {
 	Model        string     `json:"model"`
 	TokensInput  int        `json:"tokens_input"`
 	TokensOutput int        `json:"tokens_output"`
-	MemoryID     *uuid.UUID `json:"memory_id"`
-	APIKeyID     *uuid.UUID `json:"api_key_id"`
-	LatencyMs    *int       `json:"latency_ms"`
-	Success      bool       `json:"success"`
-	ErrorCode    *string    `json:"error_code"`
-	RequestID    *string    `json:"request_id"`
+	// A subset of TokensInput, never additive; see provider.TokenUsage.
+	TokensCacheRead  int        `json:"tokens_cache_read"`
+	TokensCacheWrite int        `json:"tokens_cache_write"`
+	MemoryID         *uuid.UUID `json:"memory_id"`
+	APIKeyID         *uuid.UUID `json:"api_key_id"`
+	LatencyMs        *int       `json:"latency_ms"`
+	Success          bool       `json:"success"`
+	ErrorCode        *string    `json:"error_code"`
+	RequestID        *string    `json:"request_id"`
 	// CycleID attributes a row to the dream cycle that incurred the call.
 	// Non-dream callers leave this nil; dream_cycles.tokens_used is computed
 	// live from SUM(...) WHERE cycle_id = dream_cycles.id.

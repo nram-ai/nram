@@ -13,6 +13,13 @@ import (
 type fakeEmbedder struct {
 	name string
 
+	// Per-input prompt-cache buckets, mirrored into the usage block. Zero for
+	// every caller that does not care; real embedding endpoints report no
+	// cache detail, but CachingEmbedding must carry whatever the inner
+	// provider does report through its singleflight merge.
+	cacheReadPer  int
+	cacheWritePer int
+
 	mu     sync.Mutex
 	calls  int
 	inputs [][]string
@@ -45,7 +52,11 @@ func (f *fakeEmbedder) Embed(ctx context.Context, req *EmbeddingRequest) (*Embed
 	return &EmbeddingResponse{
 		Embeddings: embs,
 		Model:      "fake-model",
-		Usage:      TokenUsage{PromptTokens: len(req.Input), TotalTokens: len(req.Input)},
+		Usage: TokenUsage{
+			PromptTokens: len(req.Input), TotalTokens: len(req.Input),
+			CacheReadTokens:  f.cacheReadPer * len(req.Input),
+			CacheWriteTokens: f.cacheWritePer * len(req.Input),
+		},
 	}, nil
 }
 

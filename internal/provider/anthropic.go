@@ -323,6 +323,17 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 
 	// Prompt tokens include cached input (reads + writes): the model processed
 	// all of it, so undercounting it would understate usage when caching is on.
+	//
+	// Anthropic is the only provider that reports cache tokens OUTSIDE
+	// input_tokens, which is why this add exists and why the OpenAI and Gemini
+	// adapters must not copy it. The add is what makes CacheReadTokens and
+	// CacheWriteTokens a subset of PromptTokens here too, matching every other
+	// adapter (see the TokenUsage doc comment in provider.go).
+	//
+	// The cache-write count is always the 5-minute ephemeral tier: the request
+	// builder sends cache_control {type: "ephemeral"} with no ttl (see the
+	// system block above), which Anthropic bills at 1.25x input. A 1-hour ttl
+	// bills at 2x and would need its own bucket to price correctly.
 	promptTokens := msgResp.Usage.InputTokens +
 		msgResp.Usage.CacheCreationInputTokens +
 		msgResp.Usage.CacheReadInputTokens
@@ -334,6 +345,8 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			PromptTokens:     promptTokens,
 			CompletionTokens: msgResp.Usage.OutputTokens,
 			TotalTokens:      promptTokens + msgResp.Usage.OutputTokens,
+			CacheReadTokens:  msgResp.Usage.CacheReadInputTokens,
+			CacheWriteTokens: msgResp.Usage.CacheCreationInputTokens,
 		},
 	}, nil
 }

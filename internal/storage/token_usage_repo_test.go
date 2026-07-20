@@ -14,13 +14,15 @@ import (
 func newTestTokenUsage(nsID uuid.UUID) *model.TokenUsage {
 	latency := 42
 	return &model.TokenUsage{
-		NamespaceID:  nsID,
-		Operation:    "memorize",
-		Provider:     "openai",
-		Model:        "gpt-4",
-		TokensInput:  150,
-		TokensOutput: 50,
-		LatencyMs:    &latency,
+		NamespaceID:      nsID,
+		Operation:        "memorize",
+		Provider:         "openai",
+		Model:            "gpt-4",
+		TokensInput:      150,
+		TokensOutput:     50,
+		TokensCacheRead:  90,
+		TokensCacheWrite: 30,
+		LatencyMs:        &latency,
 	}
 }
 
@@ -223,6 +225,20 @@ func TestTokenUsageRepo_GetByID(t *testing.T) {
 		}
 		if fetched.Provider != usage.Provider {
 			t.Fatalf("expected provider %q, got %q", usage.Provider, fetched.Provider)
+		}
+		// The cache columns are read back positionally alongside every other
+		// int column, so a transposed scan compiles fine and only shows up
+		// here. Assert the exact seeded values, not just non-zero.
+		if fetched.TokensCacheRead != 90 {
+			t.Fatalf("expected tokens_cache_read 90, got %d", fetched.TokensCacheRead)
+		}
+		if fetched.TokensCacheWrite != 30 {
+			t.Fatalf("expected tokens_cache_write 30, got %d", fetched.TokensCacheWrite)
+		}
+		// Guard against a scan that lands cache values in the wrong fields.
+		if fetched.TokensInput != 150 || fetched.TokensOutput != 50 {
+			t.Fatalf("token columns transposed: in=%d out=%d, want 150/50",
+				fetched.TokensInput, fetched.TokensOutput)
 		}
 	})
 }

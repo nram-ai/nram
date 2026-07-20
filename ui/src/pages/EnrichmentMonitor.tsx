@@ -572,6 +572,20 @@ function JobExpansion({ item }: { item: EnrichmentQueueItem }) {
                   {m.prompt_tokens.toLocaleString()} in /{" "}
                   {m.completion_tokens.toLocaleString()} out
                 </span>
+                {(m.cache_read_tokens ?? 0) > 0 && (
+                  <span
+                    className="text-muted-foreground"
+                    title="Prompt-cache read tokens, a subset of the input count"
+                  >
+                    {m.cache_read_tokens.toLocaleString()} cached
+                    {m.prompt_tokens > 0 && (
+                      <>
+                        {" "}
+                        ({((m.cache_read_tokens / m.prompt_tokens) * 100).toFixed(0)}%)
+                      </>
+                    )}
+                  </span>
+                )}
                 {m.model && (
                   <span className="font-mono text-muted-foreground/80">
                     {m.model}

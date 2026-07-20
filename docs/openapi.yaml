@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.48
+  version: 0.18.49
   license:
     name: MIT
 
@@ -6848,6 +6848,14 @@ components:
           type: integer
         completion_tokens:
           type: integer
+        cache_read_tokens:
+          type: integer
+          description: >-
+            Prompt-cache read tokens. A subset of prompt_tokens, not an
+            addition to it. Zero when the provider reports no cache detail.
+        cache_write_tokens:
+          type: integer
+          description: Prompt-cache write (creation) tokens. See cache_read_tokens.
         latency_ms:
           type: integer
           format: int64
@@ -6965,6 +6973,17 @@ components:
               tokens_output:
                 type: integer
                 format: int64
+              tokens_cache_read:
+                type: integer
+                format: int64
+                description: >-
+                  Prompt-cache read tokens. A subset of tokens_input, never an
+                  addition to it; uncached input is tokens_input minus
+                  tokens_cache_read and tokens_cache_write.
+              tokens_cache_write:
+                type: integer
+                format: int64
+                description: Prompt-cache write (creation) tokens. See tokens_cache_read.
               call_count:
                 type: integer
                 format: int64
@@ -6977,6 +6996,14 @@ components:
             tokens_output:
               type: integer
               format: int64
+            tokens_cache_read:
+              type: integer
+              format: int64
+              description: Prompt-cache read tokens. See the groups entry.
+            tokens_cache_write:
+              type: integer
+              format: int64
+              description: Prompt-cache write (creation) tokens. See the groups entry.
             call_count:
               type: integer
               format: int64

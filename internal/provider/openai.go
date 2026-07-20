@@ -171,11 +171,25 @@ type openaiChatChoice struct {
 	FinishReason string            `json:"finish_reason"`
 }
 
+// openaiPromptTokensDetails is the optional breakdown of prompt_tokens. Both
+// counts are a subset of prompt_tokens (see provider.TokenUsage).
+//
+// A value rather than a pointer: encoding/json decodes an absent key, an
+// explicit null, and a partial object all to zeroes without erroring, which is
+// exactly the required behavior. Live servers hit all three shapes (a stock
+// SGLang or vLLM launch omits the object, Azure sends cached_tokens without
+// cache_write_tokens), so no nil-guard is needed.
+type openaiPromptTokensDetails struct {
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+}
+
 // openaiUsage is the token usage block returned by the OpenAI API.
 type openaiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                       `json:"prompt_tokens"`
+	CompletionTokens    int                       `json:"completion_tokens"`
+	TotalTokens         int                       `json:"total_tokens"`
+	PromptTokensDetails openaiPromptTokensDetails `json:"prompt_tokens_details"`
 }
 
 // openaiChatResponse is the response body from POST /v1/chat/completions.
@@ -289,6 +303,8 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	choice := chatResp.Choices[0]
+	// Cache counts are already inside prompt_tokens on this wire shape, so they
+	// are recorded alongside it and never added to it.
 	return &CompletionResponse{
 		Content:      choice.Message.Content,
 		Model:        chatResp.Model,
@@ -297,6 +313,8 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			PromptTokens:     chatResp.Usage.PromptTokens,
 			CompletionTokens: chatResp.Usage.CompletionTokens,
 			TotalTokens:      chatResp.Usage.TotalTokens,
+			CacheReadTokens:  chatResp.Usage.PromptTokensDetails.CachedTokens,
+			CacheWriteTokens: chatResp.Usage.PromptTokensDetails.CacheWriteTokens,
 		},
 	}, nil
 }

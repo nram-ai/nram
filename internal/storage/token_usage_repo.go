@@ -30,13 +30,15 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 
 	query := `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
 		operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-		latency_ms, success, error_code, request_id, cycle_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		latency_ms, success, error_code, request_id, cycle_id,
+		tokens_cache_read, tokens_cache_write)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if r.db.Backend() == BackendPostgres {
 		query = `INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id,
 			operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
-			latency_ms, success, error_code, request_id, cycle_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
+			latency_ms, success, error_code, request_id, cycle_id,
+			tokens_cache_read, tokens_cache_write)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
 	}
 
 	// memoryID is the only argument that varies across the FK-tolerant retry
@@ -61,6 +63,8 @@ func (r *TokenUsageRepo) Record(ctx context.Context, usage *model.TokenUsage) er
 			usage.ErrorCode,
 			usage.RequestID,
 			nullableUUIDStr(usage.CycleID),
+			usage.TokensCacheRead,
+			usage.TokensCacheWrite,
 		}
 	}
 
@@ -244,8 +248,13 @@ func nullableUUIDStr(id *uuid.UUID) *string {
 	return &s
 }
 
+// selectTokenUsageColumns is consumed positionally by both scanTokenUsage and
+// scanTokenUsageFromRows. Every column here is an int or a string, so a
+// transposed pair compiles cleanly and fails only at runtime; keep the two
+// scan functions in lockstep with this list.
 const selectTokenUsageColumns = `SELECT id, org_id, user_id, project_id, namespace_id,
-	operation, provider, model, tokens_input, tokens_output, memory_id, api_key_id,
+	operation, provider, model, tokens_input, tokens_output,
+	tokens_cache_read, tokens_cache_write, memory_id, api_key_id,
 	latency_ms, success, error_code, request_id, cycle_id, created_at`
 
 func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error) {
@@ -263,6 +272,7 @@ func (r *TokenUsageRepo) scanTokenUsage(row *sql.Row) (*model.TokenUsage, error)
 		&idStr, &orgIDStr, &userIDStr, &projectIDStr, &namespaceIDStr,
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
+		&usage.TokensCacheRead, &usage.TokensCacheWrite,
 		&memoryIDStr, &apiKeyIDStr, &latencyMs,
 		&success, &errorCode, &requestID, &cycleIDStr, &createdAtStr,
 	)
@@ -290,6 +300,7 @@ func (r *TokenUsageRepo) scanTokenUsageFromRows(rows *sql.Rows) (*model.TokenUsa
 		&idStr, &orgIDStr, &userIDStr, &projectIDStr, &namespaceIDStr,
 		&usage.Operation, &usage.Provider, &usage.Model,
 		&usage.TokensInput, &usage.TokensOutput,
+		&usage.TokensCacheRead, &usage.TokensCacheWrite,
 		&memoryIDStr, &apiKeyIDStr, &latencyMs,
 		&success, &errorCode, &requestID, &cycleIDStr, &createdAtStr,
 	)

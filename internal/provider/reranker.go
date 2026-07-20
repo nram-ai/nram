@@ -94,10 +94,16 @@ func parseRerankResponse(raw []byte) ([]openaiRerankResult, TokenUsage, error) {
 	if err := json.Unmarshal(trimmed, &rr); err != nil {
 		return nil, TokenUsage{}, err
 	}
+	// The bare-array branch above has no cache data (per-item meta_info carries
+	// prompt_tokens only), so it leaves both buckets zero. This object shape
+	// decodes the same openaiUsage block as /v1/chat/completions, so a server
+	// that reports prompt_tokens_details on rerank is picked up here too.
 	return rr.Results, TokenUsage{
 		PromptTokens:     rr.Usage.PromptTokens,
 		CompletionTokens: rr.Usage.CompletionTokens,
 		TotalTokens:      rr.Usage.TotalTokens,
+		CacheReadTokens:  rr.Usage.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: rr.Usage.PromptTokensDetails.CacheWriteTokens,
 	}, nil
 }
 
@@ -244,9 +250,10 @@ func (j *judgeReranker) Rerank(ctx context.Context, query string, docs []string)
 			return nil, &NoJudgeScoreError{Doc: i, Content: resp.Content}
 		}
 		scores[i] = score
-		usage.PromptTokens += resp.Usage.PromptTokens
-		usage.CompletionTokens += resp.Usage.CompletionTokens
-		usage.TotalTokens += resp.Usage.TotalTokens
+		// Judge rerank reuses one system prompt across every document, so these
+		// per-document calls are the highest-cache-hit workload nram issues;
+		// dropping the cache buckets here would report a 0% hit rate for it.
+		usage.Add(resp.Usage)
 		if modelName == "" {
 			modelName = resp.Model
 		}
@@ -473,11 +480,10 @@ func (u *UsageRecordingRerank) record(ctx context.Context, query string, docs []
 	}
 	op := operationOrUnknown(ctx, u.inner.Name())
 
-	var promptTokens, completionTokens int
+	var usage TokenUsage
 	var modelName string
 	if resp != nil {
-		promptTokens = resp.Usage.PromptTokens
-		completionTokens = resp.Usage.CompletionTokens
+		usage = resp.Usage
 		modelName = resp.Model
 	}
 
@@ -487,15 +493,15 @@ func (u *UsageRecordingRerank) record(ctx context.Context, query string, docs []
 	// recorder. A cross-encoder scores (query, doc) pairs, prefilling the query
 	// once per document, so count it per pair; reranking does no generation, so
 	// completion stays 0.
-	if resp != nil && promptTokens == 0 && completionTokens == 0 {
-		promptTokens = EstimateTokens(modelName, query) * len(docs)
+	if resp != nil && usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+		usage.PromptTokens = EstimateTokens(modelName, query) * len(docs)
 		for _, d := range docs {
-			promptTokens += EstimateTokens(modelName, d)
+			usage.PromptTokens += EstimateTokens(modelName, d)
 		}
 	}
 
 	if u.counter != nil {
-		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
+		u.counter(u.inner.Name(), string(op), float64(usage.PromptTokens+usage.CompletionTokens))
 	}
 
 	// A reranker slot is not breaker-wrapped today (fail-soft read path), so
@@ -507,7 +513,7 @@ func (u *UsageRecordingRerank) record(ctx context.Context, query string, docs []
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
-		promptTokens, completionTokens, latencyMs, callErr)
+		usage, latencyMs, callErr)
 
 	if err := u.recorder.Record(recCtx, rec); err != nil {
 		slog.Warn("usage_recorder: record failed",

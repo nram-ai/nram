@@ -134,13 +134,21 @@ const handlers = [
           key: "store",
           tokens_input: 1000,
           tokens_output: 500,
+          tokens_cache_read: 400,
+          tokens_cache_write: 0,
           call_count: 10,
           success_count: 9,
           error_count: 1,
           avg_latency_ms: 145.5,
         },
       ],
-      totals: { tokens_input: 1000, tokens_output: 500, call_count: 10 },
+      totals: {
+        tokens_input: 1000,
+        tokens_output: 500,
+        tokens_cache_read: 400,
+        tokens_cache_write: 0,
+        call_count: 10,
+      },
     });
   }),
 

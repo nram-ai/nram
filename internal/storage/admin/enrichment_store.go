@@ -170,6 +170,8 @@ func (s *EnrichmentAdminStore) attachPhaseMetrics(ctx context.Context, items []a
 					Provider:         r.Provider,
 					PromptTokens:     r.TokensInput,
 					CompletionTokens: r.TokensOutput,
+					CacheReadTokens:  r.TokensCacheRead,
+					CacheWriteTokens: r.TokensCacheWrite,
 					LatencyMs:        r.LatencyMs,
 					Success:          r.Success,
 					At:               r.CreatedAt,

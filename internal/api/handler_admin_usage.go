@@ -36,22 +36,27 @@ type UsageReport struct {
 	Totals UsageTotals  `json:"totals"`
 }
 
-// UsageGroup represents a single aggregation bucket in a usage report.
+// UsageGroup represents a single aggregation bucket in a usage report. The
+// cache counts are a subset of TokensInput; see provider.TokenUsage.
 type UsageGroup struct {
-	Key          string  `json:"key"`
-	TokensInput  int64   `json:"tokens_input"`
-	TokensOutput int64   `json:"tokens_output"`
-	CallCount    int64   `json:"call_count"`
-	SuccessCount int64   `json:"success_count"`
-	ErrorCount   int64   `json:"error_count"`
-	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	Key              string  `json:"key"`
+	TokensInput      int64   `json:"tokens_input"`
+	TokensOutput     int64   `json:"tokens_output"`
+	TokensCacheRead  int64   `json:"tokens_cache_read"`
+	TokensCacheWrite int64   `json:"tokens_cache_write"`
+	CallCount        int64   `json:"call_count"`
+	SuccessCount     int64   `json:"success_count"`
+	ErrorCount       int64   `json:"error_count"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
 }
 
 // UsageTotals holds the sum totals across all groups in a usage report.
 type UsageTotals struct {
-	TokensInput  int64 `json:"tokens_input"`
-	TokensOutput int64 `json:"tokens_output"`
-	CallCount    int64 `json:"call_count"`
+	TokensInput      int64 `json:"tokens_input"`
+	TokensOutput     int64 `json:"tokens_output"`
+	TokensCacheRead  int64 `json:"tokens_cache_read"`
+	TokensCacheWrite int64 `json:"tokens_cache_write"`
+	CallCount        int64 `json:"call_count"`
 }
 
 // validGroupByValues contains the allowed values for the group_by parameter.

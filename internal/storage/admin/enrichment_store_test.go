@@ -127,9 +127,12 @@ func TestEnrichment_QueueStatus_AttachesPhaseMetrics(t *testing.T) {
 			Model:        "qwen3:8b-extract",
 			TokensInput:  in,
 			TokensOutput: out,
-			MemoryID:     &id,
-			LatencyMs:    &l,
-			Success:      true,
+			// Half the prompt served from cache, which is the realistic shape
+			// for enrichment: every phase reuses one long system prompt.
+			TokensCacheRead: in / 2,
+			MemoryID:        &id,
+			LatencyMs:       &l,
+			Success:         true,
 		}); err != nil {
 			t.Fatalf("record %s: %v", op, err)
 		}
@@ -165,6 +168,15 @@ func TestEnrichment_QueueStatus_AttachesPhaseMetrics(t *testing.T) {
 		t.Fatalf("fact_extraction tokens: got %d/%d want 600/120",
 			pm[1].PromptTokens, pm[1].CompletionTokens)
 	}
+	// EnrichmentPhaseMetric is a second projection of a token_usage row,
+	// separate from UsageGroup/UsageTotals; the cache columns have to be
+	// carried across this mapping too.
+	if pm[1].CacheReadTokens != 300 {
+		t.Fatalf("fact_extraction cache_read_tokens: got %d want 300", pm[1].CacheReadTokens)
+	}
+	if pm[1].CacheWriteTokens != 0 {
+		t.Fatalf("fact_extraction cache_write_tokens: got %d want 0", pm[1].CacheWriteTokens)
+	}
 	if pm[1].LatencyMs == nil || *pm[1].LatencyMs != lat {
 		t.Fatalf("fact_extraction latency: got %v want %d", pm[1].LatencyMs, lat)
 	}
@@ -177,7 +189,8 @@ func TestEnrichment_QueueStatus_AttachesPhaseMetrics(t *testing.T) {
 	}
 	for _, key := range []string{
 		`"phase_metrics"`, `"operation"`, `"prompt_tokens"`,
-		`"completion_tokens"`, `"latency_ms"`,
+		`"completion_tokens"`, `"cache_read_tokens"`, `"cache_write_tokens"`,
+		`"latency_ms"`,
 	} {
 		if !strings.Contains(string(raw), key) {
 			t.Fatalf("marshaled item missing JSON key %s: %s", key, raw)

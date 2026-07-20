@@ -67,9 +67,20 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 	}
 
 	// Sum totals.
-	query := "SELECT COALESCE(SUM(tokens_input), 0), COALESCE(SUM(tokens_output), 0), COUNT(*) FROM token_usage" + whereClause
+	// Cache sums are a subset of tokens_input; see provider.TokenUsage.
+	query := `SELECT COALESCE(SUM(tokens_input), 0),
+		COALESCE(SUM(tokens_output), 0),
+		COALESCE(SUM(tokens_cache_read), 0),
+		COALESCE(SUM(tokens_cache_write), 0),
+		COUNT(*) FROM token_usage` + whereClause
 	row := s.db.QueryRow(ctx, query, args...)
-	if err := row.Scan(&report.Totals.TokensInput, &report.Totals.TokensOutput, &report.Totals.CallCount); err != nil {
+	if err := row.Scan(
+		&report.Totals.TokensInput,
+		&report.Totals.TokensOutput,
+		&report.Totals.TokensCacheRead,
+		&report.Totals.TokensCacheWrite,
+		&report.Totals.CallCount,
+	); err != nil {
 		return report, nil
 	}
 
@@ -81,6 +92,8 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 		groupQuery := fmt.Sprintf(`SELECT COALESCE(%s, ''),
 			COALESCE(SUM(tokens_input), 0),
 			COALESCE(SUM(tokens_output), 0),
+			COALESCE(SUM(tokens_cache_read), 0),
+			COALESCE(SUM(tokens_cache_write), 0),
 			COUNT(*),
 			COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END), 0),
@@ -97,6 +110,8 @@ func (s *UsageStore) QueryUsage(ctx context.Context, filter api.UsageFilter) (*a
 					&g.Key,
 					&g.TokensInput,
 					&g.TokensOutput,
+					&g.TokensCacheRead,
+					&g.TokensCacheWrite,
 					&g.CallCount,
 					&g.SuccessCount,
 					&g.ErrorCount,

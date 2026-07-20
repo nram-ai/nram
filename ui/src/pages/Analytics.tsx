@@ -45,6 +45,46 @@ try {
 // invalidate while the cost-rates query is in flight.
 const EMPTY_COST_RATES: CostRate[] = [];
 
+// groupCost prices one usage bucket. Cache reads and writes are a SUBSET of
+// tokens_input, so the input rate applies only to the uncached remainder and
+// each cache bucket is priced at its own rate.
+//
+// When a cache rate is unset (every blob saved before those fields existed),
+// it falls back to inputCostPer1k and the three terms collapse back to
+// tokens_input * inputCostPer1k — byte-identical to the previous formula. A
+// displayed cost must not move until an operator actually sets a cache rate.
+//
+// The clamp guards against a provider reporting cache counts that exceed the
+// prompt count; without it the uncached term would go negative and understate.
+export function groupCost(
+  g: Pick<
+    UsageGroup,
+    "tokens_input" | "tokens_output" | "tokens_cache_read" | "tokens_cache_write"
+  >,
+  rate: CostRate,
+): number {
+  const cacheRead = g.tokens_cache_read ?? 0;
+  const cacheWrite = g.tokens_cache_write ?? 0;
+  const uncachedInput = Math.max(0, g.tokens_input - cacheRead - cacheWrite);
+  const readRate = rate.cacheReadCostPer1k ?? rate.inputCostPer1k;
+  const writeRate = rate.cacheWriteCostPer1k ?? rate.inputCostPer1k;
+  return (
+    (uncachedInput / 1000) * rate.inputCostPer1k +
+    (cacheRead / 1000) * readRate +
+    (cacheWrite / 1000) * writeRate +
+    (g.tokens_output / 1000) * rate.outputCostPer1k
+  );
+}
+
+// cacheHitPct is the share of prompt tokens served from cache, the figure that
+// makes prefix reuse legible. Returns null when there is nothing to divide by
+// or nothing was measured, so the caller renders a dash rather than "0%".
+export function cacheHitPct(g: Pick<UsageGroup, "tokens_input" | "tokens_cache_read">): number | null {
+  const cacheRead = g.tokens_cache_read ?? 0;
+  if (g.tokens_input <= 0 || cacheRead <= 0) return null;
+  return (cacheRead / g.tokens_input) * 100;
+}
+
 import {
   BarChart,
   Bar,
@@ -322,16 +362,20 @@ function TokenUsageSummaryCards({
   isLoading: boolean;
 }) {
   const summary = useMemo(() => {
-    const totals = data?.totals ?? { tokens_input: 0, tokens_output: 0, call_count: 0 };
+    const totals = data?.totals ?? {
+      tokens_input: 0,
+      tokens_output: 0,
+      tokens_cache_read: 0,
+      tokens_cache_write: 0,
+      call_count: 0,
+    };
     const groups = data?.groups ?? [];
 
     let totalCost = 0;
     for (const g of groups) {
       const rate = costRates.find((r) => r.key === g.key);
       if (rate) {
-        totalCost +=
-          (g.tokens_input / 1000) * rate.inputCostPer1k +
-          (g.tokens_output / 1000) * rate.outputCostPer1k;
+        totalCost += groupCost(g, rate);
       }
     }
 
@@ -447,6 +491,12 @@ function UsageBreakdownTable({
             <tr className="border-b text-left text-muted-foreground">
               <th className="pb-2 font-medium">Key</th>
               <th className="pb-2 text-right font-medium">Input Tokens</th>
+              <th
+                className="pb-2 text-right font-medium"
+                title="Prompt-cache read tokens and their share of input tokens. A subset of input, not additional to it."
+              >
+                Cached
+              </th>
               <th className="pb-2 text-right font-medium">Output Tokens</th>
               <th className="pb-2 text-right font-medium">Calls</th>
               <th className="pb-2 text-right font-medium">Success</th>
@@ -458,15 +508,35 @@ function UsageBreakdownTable({
           <tbody className="divide-y divide-border">
             {groups.map((g) => {
               const rate = costRates.find((r) => r.key === g.key);
-              const cost = rate
-                ? (g.tokens_input / 1000) * rate.inputCostPer1k +
-                  (g.tokens_output / 1000) * rate.outputCostPer1k
-                : 0;
+              const cost = rate ? groupCost(g, rate) : 0;
+              const hitPct = cacheHitPct(g);
+              const cacheRead = g.tokens_cache_read ?? 0;
+              const cacheWrite = g.tokens_cache_write ?? 0;
               return (
                 <tr key={g.key}>
                   <td className="py-2">{renderGroupKey(groupBy, g.key)}</td>
                   <td className="py-2 text-right font-mono">
                     {g.tokens_input.toLocaleString()}
+                  </td>
+                  <td className="py-2 text-right font-mono">
+                    {hitPct === null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <>
+                        {cacheRead.toLocaleString()}
+                        <span className="ml-1 text-muted-foreground">
+                          ({hitPct.toFixed(0)}%)
+                        </span>
+                        {cacheWrite > 0 && (
+                          <span
+                            className="ml-1 text-muted-foreground"
+                            title="Prompt-cache write (creation) tokens"
+                          >
+                            +{cacheWrite.toLocaleString()}w
+                          </span>
+                        )}
+                      </>
+                    )}
                   </td>
                   <td className={`py-2 text-right font-mono ${isOutputNA(g) ? "text-muted-foreground" : ""}`}>
                     {formatOutputTokens(g)}
@@ -885,11 +955,24 @@ function CostRateEditor({
 
   function handleRateChange(
     key: string,
-    field: "inputCostPer1k" | "outputCostPer1k",
+    field:
+      | "inputCostPer1k"
+      | "outputCostPer1k"
+      | "cacheReadCostPer1k"
+      | "cacheWriteCostPer1k",
     value: string,
   ) {
     const updated = costRates.map((r) => {
       if (r.key !== key) return r;
+      // An emptied cache-rate field is removed rather than coerced to 0, so it
+      // returns to inheriting inputCostPer1k. Coercing to 0 would silently
+      // price all cached tokens free, which is a very different claim.
+      const isCacheRate =
+        field === "cacheReadCostPer1k" || field === "cacheWriteCostPer1k";
+      if (isCacheRate && value.trim() === "") {
+        const { [field]: _removed, ...rest } = r;
+        return rest as CostRate;
+      }
       return { ...r, [field]: parseFloat(value) || 0 };
     });
     onUpdate(updated);
@@ -921,6 +1004,18 @@ function CostRateEditor({
                   <th className="pb-2 font-medium">Key</th>
                   <th className="pb-2 font-medium">Input $/1K tokens</th>
                   <th className="pb-2 font-medium">Output $/1K tokens</th>
+                  <th
+                    className="pb-2 font-medium"
+                    title="Cache-read rate. Leave blank to inherit the input rate. Providers discount cache reads from ~0.02x to ~0.5x of input."
+                  >
+                    Cache read $/1K
+                  </th>
+                  <th
+                    className="pb-2 font-medium"
+                    title="Cache-write rate. Leave blank to inherit the input rate. Typically ~1.25x input where charged."
+                  >
+                    Cache write $/1K
+                  </th>
                   <th className="pb-2 font-medium" />
                 </tr>
               </thead>
@@ -949,6 +1044,32 @@ function CostRateEditor({
                         value={rate.outputCostPer1k}
                         onChange={(e) =>
                           handleRateChange(rate.key, "outputCostPer1k", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td className="py-2">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        placeholder="inherit"
+                        className="w-28 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+                        value={rate.cacheReadCostPer1k ?? ""}
+                        onChange={(e) =>
+                          handleRateChange(rate.key, "cacheReadCostPer1k", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td className="py-2">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        placeholder="inherit"
+                        className="w-28 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm"
+                        value={rate.cacheWriteCostPer1k ?? ""}
+                        onChange={(e) =>
+                          handleRateChange(rate.key, "cacheWriteCostPer1k", e.target.value)
                         }
                       />
                     </td>

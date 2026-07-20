@@ -301,10 +301,6 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Build (UI + server)
         run: make build
-      - name: Stage binary
-        run: |
-          mkdir -p bin
-          cp nram bin/nram
       - name: Prepare destination databases (pgvector + a fresh admin db)
         run: |
           psql "$PG_DSN" -c 'CREATE EXTENSION IF NOT EXISTS vector'
@@ -319,7 +315,7 @@ jobs:
       - name: CLI migrate-to-postgres
         run: |
           cd "$GITHUB_WORKSPACE/seed"
-          "$GITHUB_WORKSPACE/bin/nram" migrate-to-postgres --database-url "$PG_DSN"
+          "${NRAM_BIN:-$GITHUB_WORKSPACE/nram}" migrate-to-postgres --database-url "$PG_DSN"
       - name: Verify CLI-migrated rows
         run: |
           count="$(psql "$PG_DSN" -tAc "SELECT count(*) FROM memories")"
@@ -366,10 +362,6 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Build (UI + server)
         run: make build
-      - name: Stage binary
-        run: |
-          mkdir -p bin
-          cp nram bin/nram
       - name: Enable pgvector extension
         run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - name: HTTP smoke against Postgres
@@ -391,10 +383,6 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Build UI and embedded server binary
         run: make build
-      - name: Stage binary for vitest e2e
-        run: |
-          mkdir -p bin
-          cp nram bin/nram
       # test:coverage runs the same vitest e2e suite but enforces the 100%
       # statements/branches/functions/lines threshold on src/api/client.ts
       # (ui/vitest.config.ts). A coverage regression fails the build.

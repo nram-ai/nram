@@ -325,12 +325,17 @@ type EnrichmentQueueItem struct {
 // EnrichmentPhaseMetric is one enrichment phase's measured LLM cost, mapped
 // from a token_usage row. Operation is the canonical provider operation name
 // (see internal/provider/operation.go).
+// CacheReadTokens and CacheWriteTokens are a subset of PromptTokens. Enrichment
+// phases reuse one system prompt across every job, so on a prefix-caching
+// server this is where the highest hit rates show up.
 type EnrichmentPhaseMetric struct {
 	Operation        string    `json:"operation"`
 	Model            string    `json:"model,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
+	CacheReadTokens  int       `json:"cache_read_tokens"`
+	CacheWriteTokens int       `json:"cache_write_tokens"`
 	LatencyMs        *int      `json:"latency_ms,omitempty"`
 	Success          bool      `json:"success"`
 	At               time.Time `json:"at"`

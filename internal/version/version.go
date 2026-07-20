@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the semantic version of nram. Bump it by hand on release.
-const Version = "0.18.48"
+const Version = "0.18.49"
 
 // Static product identity. These are the single source of truth for the
 // human-facing name, license, and ownership of the binary, kept verbatim in

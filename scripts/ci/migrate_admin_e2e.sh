@@ -14,7 +14,7 @@
 # Environment:
 #   MIGRATE_TARGET_URL  (required) destination Postgres DSN, must be empty + have
 #                       the pgvector extension enabled.
-#   NRAM_BIN            path to the server binary (default: <repo>/bin/nram)
+#   NRAM_BIN            path to the server binary (default: <repo>/nram, what make build writes)
 #   SMOKE_PORT          listen port (default: 18686)
 
 set -euo pipefail

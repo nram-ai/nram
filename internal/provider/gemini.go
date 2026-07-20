@@ -146,10 +146,17 @@ type geminiCandidate struct {
 }
 
 // geminiUsageMetadata is the token usage block returned by the Gemini API.
+//
+// CachedContentTokenCount is a subset of PromptTokenCount, not an addition to
+// it: the REST reference states promptTokenCount is "the total effective
+// prompt size meaning this includes the number of tokens in the cached
+// content." Gemini has no cache-write bucket (explicit caching bills storage
+// per token-hour instead, which is not a per-call token count).
 type geminiUsageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount"`
 }
 
 // geminiGenerateResponse is the response body from generateContent.
@@ -296,6 +303,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			PromptTokens:     genResp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: genResp.UsageMetadata.CandidatesTokenCount,
 			TotalTokens:      genResp.UsageMetadata.TotalTokenCount,
+			// Already inside PromptTokenCount; recorded, never added.
+			CacheReadTokens: genResp.UsageMetadata.CachedContentTokenCount,
 		},
 	}, nil
 }

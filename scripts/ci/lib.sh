@@ -16,8 +16,15 @@
 # Requirements on PATH: bash, curl, jq.
 
 # Resolve the repo root from this file's own location (scripts/ci/lib.sh).
+#
+# The default is the path `make build` actually writes (`<repo>/nram`). It used
+# to be `<repo>/bin/nram`, which nothing in the build produced, so every CI job
+# needing a binary had to stage one with `mkdir -p bin && cp nram bin/nram`.
+# That copy was easy to omit: `bin/` is gitignored and `make clean` never
+# removed it, so locally a stale binary lingered indefinitely and a forgotten
+# copy silently tested weeks-old code instead of failing.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="${NRAM_BIN:-$REPO_ROOT/bin/nram}"
+BIN="${NRAM_BIN:-$REPO_ROOT/nram}"
 CI_PREFIX="${CI_PREFIX:-ci}"
 
 fail() { echo "$CI_PREFIX: FAIL: $*" >&2; exit 1; }

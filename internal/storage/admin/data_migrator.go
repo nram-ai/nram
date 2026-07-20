@@ -1759,11 +1759,30 @@ func (m *DataMigrator) migrateWebhooks(ctx context.Context) error {
 }
 
 func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
-	rows, err := m.src.QueryContext(ctx, `
+	// tokens_cache_read/write were added by migration 000063 on both backends.
+	// A source DB that predates it lacks the columns, and selecting a missing
+	// column errors outright, so fall back to literal zeroes — the same shape
+	// used for dream_logs.sub_phase below. Zero is the correct value there: a
+	// source that predates the columns also predates the capture code.
+	hasCacheTokens, err := m.sourceColumnExists(ctx, "token_usage", "tokens_cache_read")
+	if err != nil {
+		return err
+	}
+	selectSQL := `
 		SELECT id, org_id, user_id, project_id, namespace_id, operation, provider, model,
-		       tokens_input, tokens_output, memory_id, api_key_id, latency_ms, created_at
+		       tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
+		       memory_id, api_key_id, latency_ms, created_at
 		FROM token_usage
-	`)
+	`
+	if !hasCacheTokens {
+		selectSQL = `
+			SELECT id, org_id, user_id, project_id, namespace_id, operation, provider, model,
+			       tokens_input, tokens_output, 0 AS tokens_cache_read, 0 AS tokens_cache_write,
+			       memory_id, api_key_id, latency_ms, created_at
+			FROM token_usage
+		`
+	}
+	rows, err := m.src.QueryContext(ctx, selectSQL)
 	if err != nil {
 		return err
 	}
@@ -1777,9 +1796,10 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO token_usage (id, org_id, user_id, project_id, namespace_id, operation, provider,
-		                         model, tokens_input, tokens_output, memory_id, api_key_id,
+		                         model, tokens_input, tokens_output, tokens_cache_read,
+		                         tokens_cache_write, memory_id, api_key_id,
 		                         latency_ms, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT DO NOTHING
 	`)
 	if err != nil {
@@ -1792,12 +1812,14 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 			id, nsID, operation, provider, model string
 			orgID, userID, projectID             sql.NullString
 			tokensInput, tokensOutput            int
+			tokensCacheRead, tokensCacheWrite    int
 			memoryID, apiKeyID                   sql.NullString
 			latencyMs                            sql.NullInt64
 			createdAt                            string
 		)
 		if err := rows.Scan(&id, &orgID, &userID, &projectID, &nsID, &operation, &provider,
-			&model, &tokensInput, &tokensOutput, &memoryID, &apiKeyID, &latencyMs, &createdAt); err != nil {
+			&model, &tokensInput, &tokensOutput, &tokensCacheRead, &tokensCacheWrite,
+			&memoryID, &apiKeyID, &latencyMs, &createdAt); err != nil {
 			return err
 		}
 		if !m.hasInserted("namespaces", nsID) {
@@ -1831,6 +1853,7 @@ func (m *DataMigrator) migrateTokenUsage(ctx context.Context) error {
 			nullStringToInterface(projectID),
 			nsID, operation, provider, model,
 			tokensInput, tokensOutput,
+			tokensCacheRead, tokensCacheWrite,
 			nullStringToInterface(memoryID),
 			nullStringToInterface(apiKeyID),
 			nullInt64ToInterface(latencyMs),

@@ -232,3 +232,68 @@ func TestUsageStoreFromToFilter(t *testing.T) {
 		t.Errorf("unfiltered totals.call_count = %d, want 3", unfiltered.Totals.CallCount)
 	}
 }
+
+// TestUsageStoreAggregation_CacheTokens covers the two prompt-cache sums in
+// both the totals query and the grouped query.
+//
+// The seeded values are deliberately asymmetric across groups and different
+// from tokens_input/tokens_output, so a SUM wired to the wrong column or a
+// scan destination in the wrong position produces a visibly wrong number
+// rather than a coincidentally-correct one.
+func TestUsageStoreAggregation_CacheTokens(t *testing.T) {
+	db := setupAdminTestDB(t)
+	ctx := context.Background()
+	nsID := insertTestNamespace(t, db, ctx)
+
+	repo := storage.NewTokenUsageRepo(db)
+	store := NewUsageStore(db)
+
+	rows := []model.TokenUsage{
+		{NamespaceID: nsID, Operation: "extract", Provider: "openai", Model: "m",
+			TokensInput: 1000, TokensOutput: 100,
+			TokensCacheRead: 700, TokensCacheWrite: 40, LatencyMs: ptr(10), Success: true},
+		{NamespaceID: nsID, Operation: "extract", Provider: "openai", Model: "m",
+			TokensInput: 1000, TokensOutput: 100,
+			TokensCacheRead: 900, TokensCacheWrite: 0, LatencyMs: ptr(10), Success: true},
+		// A row from before the capture code: no cache detail reported.
+		{NamespaceID: nsID, Operation: "recall", Provider: "openai", Model: "m",
+			TokensInput: 500, TokensOutput: 20,
+			TokensCacheRead: 0, TokensCacheWrite: 0, LatencyMs: ptr(10), Success: true},
+	}
+	for i := range rows {
+		if err := repo.Record(ctx, &rows[i]); err != nil {
+			t.Fatalf("record row %d: %v", i, err)
+		}
+	}
+
+	report, err := store.QueryUsage(ctx, api.UsageFilter{GroupBy: "operation"})
+	if err != nil {
+		t.Fatalf("QueryUsage: %v", err)
+	}
+
+	if report.Totals.TokensCacheRead != 1600 {
+		t.Errorf("totals.tokens_cache_read = %d, want 1600", report.Totals.TokensCacheRead)
+	}
+	if report.Totals.TokensCacheWrite != 40 {
+		t.Errorf("totals.tokens_cache_write = %d, want 40", report.Totals.TokensCacheWrite)
+	}
+	// Unchanged by the new columns: cache counts are a subset of input and
+	// must never be added into it.
+	if report.Totals.TokensInput != 2500 {
+		t.Errorf("totals.tokens_input = %d, want 2500 (cache tokens must not be added in)",
+			report.Totals.TokensInput)
+	}
+
+	byKey := map[string]api.UsageGroup{}
+	for _, g := range report.Groups {
+		byKey[g.Key] = g
+	}
+	if g := byKey["extract"]; g.TokensCacheRead != 1600 || g.TokensCacheWrite != 40 {
+		t.Errorf("extract group cache = (read %d, write %d), want (1600, 40)",
+			g.TokensCacheRead, g.TokensCacheWrite)
+	}
+	if g := byKey["recall"]; g.TokensCacheRead != 0 || g.TokensCacheWrite != 0 {
+		t.Errorf("recall group cache = (read %d, write %d), want (0, 0)",
+			g.TokensCacheRead, g.TokensCacheWrite)
+	}
+}

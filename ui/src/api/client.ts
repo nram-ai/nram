@@ -1244,10 +1244,16 @@ export type UsageGroupBy =
   | "error_code"
   | "request_id";
 
+// tokens_cache_read and tokens_cache_write are a SUBSET of tokens_input, not
+// an addition to it. Uncached input is tokens_input minus both; never sum the
+// three. Rows recorded before the capture code shipped report 0, which means
+// "not measured" rather than "no cache activity."
 export interface UsageGroup {
   key: string;
   tokens_input: number;
   tokens_output: number;
+  tokens_cache_read: number;
+  tokens_cache_write: number;
   call_count: number;
   success_count: number;
   error_count: number;
@@ -1259,16 +1265,26 @@ export interface UsageReport {
   totals: {
     tokens_input: number;
     tokens_output: number;
+    tokens_cache_read: number;
+    tokens_cache_write: number;
     call_count: number;
   };
 }
 
 // Persisted server-side under the `usage.cost_rates` settings key.
 // Applied client-side to UsageGroup token counts for breakdown columns.
+//
+// The cache rates are optional: blobs saved before they existed omit them, and
+// an unset rate falls back to inputCostPer1k so an operator who has not set one
+// sees exactly the cost they saw before. Rates vary far too much by provider to
+// hardcode a default multiplier (cache reads run ~0.02x on DeepSeek, ~0.1x on
+// OpenAI/Anthropic/Gemini/Mistral, ~0.5x on Groq; writes ~1.25x).
 export interface CostRate {
   key: string;
   inputCostPer1k: number;
   outputCostPer1k: number;
+  cacheReadCostPer1k?: number;
+  cacheWriteCostPer1k?: number;
 }
 
 export interface SQLiteInfo {
@@ -1582,6 +1598,9 @@ export interface EnrichmentPhaseMetric {
   provider?: string;
   prompt_tokens: number;
   completion_tokens: number;
+  // Subset of prompt_tokens, not additive.
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   latency_ms?: number;
   success: boolean;
   at: string;

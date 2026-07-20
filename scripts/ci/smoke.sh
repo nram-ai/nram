@@ -20,7 +20,7 @@
 # Requirements on PATH: bash, curl, jq. The binary must already be built.
 #
 # Environment overrides:
-#   NRAM_BIN       path to the server binary   (default: <repo>/bin/nram)
+#   NRAM_BIN       path to the server binary   (default: <repo>/nram, what make build writes)
 #   SMOKE_PORT     listen port                 (default: 18675)
 #   SMOKE_WORKDIR  server working directory     (default: a fresh mktemp dir)
 #   DATABASE_URL   Postgres DSN; empty => SQLite

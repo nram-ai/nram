@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,13 +33,16 @@ func (m *mockUsageStore) QueryUsage(_ context.Context, filter UsageFilter) (*Usa
 func defaultUsageReport() *UsageReport {
 	return &UsageReport{
 		Groups: []UsageGroup{
-			{Key: "enrich", TokensInput: 1000, TokensOutput: 500, CallCount: 10},
+			{Key: "enrich", TokensInput: 1000, TokensOutput: 500,
+				TokensCacheRead: 800, TokensCacheWrite: 25, CallCount: 10},
 			{Key: "search", TokensInput: 200, TokensOutput: 100, CallCount: 5},
 		},
 		Totals: UsageTotals{
-			TokensInput:  1200,
-			TokensOutput: 600,
-			CallCount:    15,
+			TokensInput:      1200,
+			TokensOutput:     600,
+			TokensCacheRead:  800,
+			TokensCacheWrite: 25,
+			CallCount:        15,
 		},
 	}
 }
@@ -57,8 +61,12 @@ func TestAdminUsageDefaultParams(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Capture the raw body before decoding: json.Decoder drains the buffer, so
+	// a later w.Body.String() would read empty.
+	body := w.Body.String()
+
 	var resp UsageReport
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
@@ -73,6 +81,22 @@ func TestAdminUsageDefaultParams(t *testing.T) {
 	}
 	if resp.Totals.CallCount != 15 {
 		t.Errorf("expected call_count 15, got %d", resp.Totals.CallCount)
+	}
+	// The cache buckets must survive JSON round-trip under their snake_case
+	// tags; the SPA and the OpenAPI schema both key off these names.
+	if resp.Totals.TokensCacheRead != 800 {
+		t.Errorf("expected tokens_cache_read 800, got %d", resp.Totals.TokensCacheRead)
+	}
+	if resp.Totals.TokensCacheWrite != 25 {
+		t.Errorf("expected tokens_cache_write 25, got %d", resp.Totals.TokensCacheWrite)
+	}
+	if resp.Groups[0].TokensCacheRead != 800 {
+		t.Errorf("expected group tokens_cache_read 800, got %d", resp.Groups[0].TokensCacheRead)
+	}
+	for _, key := range []string{`"tokens_cache_read"`, `"tokens_cache_write"`} {
+		if !strings.Contains(body, key) {
+			t.Errorf("response missing JSON key %s: %s", key, body)
+		}
 	}
 
 	// Default group_by should be "operation".

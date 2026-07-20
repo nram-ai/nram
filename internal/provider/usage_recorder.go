@@ -116,11 +116,10 @@ func (u *UsageRecordingLLM) record(
 
 	op := operationOrUnknown(ctx, u.inner.Name())
 
-	var promptTokens, completionTokens int
+	var usage TokenUsage
 	var modelName string
 	if resp != nil {
-		promptTokens = resp.Usage.PromptTokens
-		completionTokens = resp.Usage.CompletionTokens
+		usage = resp.Usage
 		modelName = resp.Model
 	}
 	if modelName == "" {
@@ -132,9 +131,9 @@ func (u *UsageRecordingLLM) record(
 	// N-1 tiktoken.Encode dispatches per multi-turn prompt. EstimateMessages
 	// is the shared join-and-estimate, so a dreaming caller estimating the
 	// same zero-usage request against its TokenBudget lands on the same number.
-	if promptTokens == 0 && completionTokens == 0 && resp != nil {
-		promptTokens = EstimateMessages(modelName, req.Messages)
-		completionTokens = EstimateTokens(modelName, resp.Content)
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 && resp != nil {
+		usage.PromptTokens = EstimateMessages(modelName, req.Messages)
+		usage.CompletionTokens = EstimateTokens(modelName, resp.Content)
 	}
 
 	// Fire the Prometheus counter BEFORE the synchronous DB write. A
@@ -142,7 +141,7 @@ func (u *UsageRecordingLLM) record(
 	// metric; the counter is the always-on observability signal; the DB
 	// row is the durable best-effort audit.
 	if u.counter != nil {
-		u.counter(u.inner.Name(), string(op), float64(promptTokens+completionTokens))
+		u.counter(u.inner.Name(), string(op), float64(usage.PromptTokens+usage.CompletionTokens))
 	}
 
 	if skipUsageRecordErr(callErr) {
@@ -152,7 +151,7 @@ func (u *UsageRecordingLLM) record(
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
-		promptTokens, completionTokens, latencyMs, callErr)
+		usage, latencyMs, callErr)
 
 	if err := u.recorder.Record(recCtx, rec); err != nil {
 		slog.Warn("usage_recorder: record failed",
@@ -244,8 +243,10 @@ func (u *UsageRecordingEmbedding) record(
 
 	recCtx, cancel := recordingContext(ctx)
 	defer cancel()
+	// Embedding endpoints carry no prompt-cache buckets on any provider, so the
+	// cache counts stay zero here rather than being threaded from resp.Usage.
 	rec := buildUsageRow(recCtx, u.resolver, u.inner.Name(), modelName, op,
-		promptTokens, 0, latencyMs, callErr)
+		TokenUsage{PromptTokens: promptTokens}, latencyMs, callErr)
 
 	if err := u.recorder.Record(recCtx, rec); err != nil {
 		slog.Warn("usage_recorder: record failed",
@@ -298,22 +299,39 @@ func buildUsageRow(
 	resolver UsageContextResolver,
 	providerName, modelName string,
 	op Operation,
-	tokensIn, tokensOut, latencyMs int,
+	usage TokenUsage,
+	latencyMs int,
 	callErr error,
 ) *model.TokenUsage {
+	// Every recorded row from all three recorders funnels through here, which
+	// makes this the only place the subset invariant can be checked against
+	// real provider data rather than asserted in a comment. Warn rather than
+	// clamp or reject: Record is best-effort by design, so a rejecting
+	// constraint would discard the row and hide the evidence. A provider
+	// reporting more cached tokens than prompt tokens is the provider lying,
+	// and the operator needs to see that.
+	if usage.CacheReadTokens+usage.CacheWriteTokens > usage.PromptTokens {
+		slog.Warn("usage_recorder: cache tokens exceed prompt tokens; provider reported an inconsistent usage block",
+			"provider", providerName, "model", modelName, "operation", string(op),
+			"prompt_tokens", usage.PromptTokens,
+			"cache_read_tokens", usage.CacheReadTokens,
+			"cache_write_tokens", usage.CacheWriteTokens)
+	}
 	rec := &model.TokenUsage{
-		ID:           uuid.New(),
-		Operation:    string(op),
-		Provider:     providerName,
-		Model:        modelName,
-		TokensInput:  tokensIn,
-		TokensOutput: tokensOut,
-		LatencyMs:    &latencyMs,
-		Success:      callErr == nil,
-		MemoryID:     MemoryIDFromContext(ctx),
-		APIKeyID:     APIKeyIDFromContext(ctx),
-		CycleID:      CycleIDFromContext(ctx),
-		CreatedAt:    time.Now().UTC(),
+		ID:               uuid.New(),
+		Operation:        string(op),
+		Provider:         providerName,
+		Model:            modelName,
+		TokensInput:      usage.PromptTokens,
+		TokensOutput:     usage.CompletionTokens,
+		TokensCacheRead:  usage.CacheReadTokens,
+		TokensCacheWrite: usage.CacheWriteTokens,
+		LatencyMs:        &latencyMs,
+		Success:          callErr == nil,
+		MemoryID:         MemoryIDFromContext(ctx),
+		APIKeyID:         APIKeyIDFromContext(ctx),
+		CycleID:          CycleIDFromContext(ctx),
+		CreatedAt:        time.Now().UTC(),
 	}
 	if reqID := RequestIDFromContext(ctx); reqID != "" {
 		v := reqID
