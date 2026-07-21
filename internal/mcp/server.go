@@ -306,6 +306,10 @@ func NewServer(deps Dependencies) *Server {
 
 	httpSrv := server.NewStreamableHTTPServer(
 		mcpSrv,
+		// The SDK's check is construction-time and unconditional. nram enforces
+		// the equivalent once for the whole authenticated surface, and makes it
+		// switchable, in server.HostGuardMiddleware.
+		server.WithDisableLocalhostProtection(true),
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			ctx = context.WithValue(ctx, httpRequestKey, r)
 			// Thread the request-id from the inbound HTTP request (set by
@@ -371,6 +375,14 @@ func (s *Server) Handler() http.Handler {
 
 // isAllowedOrigin checks whether the Origin header matches the server's Host.
 // This prevents DNS rebinding attacks per the MCP spec security requirements.
+//
+// Note before relocating or deleting this: through the mounted router its
+// rejecting branch is unreachable. The caller only consults it when the request
+// carries no Authorization header, and /mcp sits below AuthMiddleware, which
+// rejects exactly those first. It is also deliberately NOT hoisted to router
+// middleware: it demands Origin == Host, while CORSMiddleware answers
+// Access-Control-Allow-Origin: * on the public /token, /register and /authorize
+// routes, so running it there would 403 browser-based OAuth clients.
 func isAllowedOrigin(origin, host string) bool {
 	// Strip scheme from origin to compare against Host header.
 	// Origin is like "http://localhost:8674" or "https://nram.example.com".

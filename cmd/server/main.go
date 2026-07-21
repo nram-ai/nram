@@ -1564,9 +1564,8 @@ func main() {
 		JWKS:           api.NewJWKSHandler(instanceIdentity),
 	}
 
-	// Build router config with auth middleware and rate limiter. Cleanup
-	// and stale-after windows are read once from settings; runtime changes
-	// require server restart.
+	// Cleanup and stale-after windows are read once from settings; runtime
+	// changes require server restart.
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings).
 		WithShareTokens(shareTokenSvc, shareTokenRepo).
 		WithClientUsage(oauthRepo)
@@ -1577,21 +1576,15 @@ func main() {
 			service.SettingAPIRateLimitStaleSeconds, "global"))
 	defer rateLimiter.Stop()
 
-	// Project access middleware enforces org-membership checks on all
-	// /v1/projects/{project_id}/memories/* routes.
-	routerCfg := server.RouterConfig{
-		Metrics:        promMetrics,
-		AuthMiddleware: authMiddleware,
-		RateLimiter:    rateLimiter,
-		SetupGuard:     api.SetupGuardMiddleware(setupChecker.IsComplete),
-		ProjectAccess:  api.ProjectAccessMiddleware(projectAccessCfg),
-		EnrichmentGate: api.EnrichmentGateMiddleware(enrichmentAvailable),
-		// Resolved live per request so toggling ask.enabled in the admin UI
-		// surfaces or hides the ask endpoints without a restart.
-		AskGate: api.AskGateMiddleware(func(ctx context.Context) bool {
-			return settingsSvc.ResolveBoolWithDefault(ctx, service.SettingAskEnabled, "global")
-		}),
-	}
+	routerCfg := buildRouterConfig(routerDeps{
+		Metrics:             promMetrics,
+		AuthMiddleware:      authMiddleware,
+		RateLimiter:         rateLimiter,
+		SetupComplete:       setupChecker.IsComplete,
+		ProjectAccess:       projectAccessCfg,
+		EnrichmentAvailable: enrichmentAvailable,
+		Settings:            settingsSvc,
+	})
 
 	r := server.NewRouter(routerCfg, handlers)
 

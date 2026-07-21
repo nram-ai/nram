@@ -10,6 +10,10 @@ func TestIsLoopbackRedirectURI(t *testing.T) {
 	}{
 		{"localhost with port", "http://localhost:8765/callback", true},
 		{"localhost no port", "http://localhost/cb", true},
+		// Case-insensitive since this moved onto the shared
+		// netutil.IsLoopbackHost; hosts are case-insensitive per RFC 3986, and
+		// the previous body compared against "localhost" exactly.
+		{"uppercase localhost", "http://LOCALHOST:8765/cb", true},
 		{"ipv4 loopback", "http://127.0.0.1:9999/callback", true},
 		{"ipv4 loopback other octet", "http://127.0.0.5:40342/cb", true},
 		{"ipv6 loopback", "http://[::1]:1234/callback", true},

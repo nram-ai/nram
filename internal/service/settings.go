@@ -758,6 +758,12 @@ const (
 	// the truncation sentinel suffix (~108 bytes) cannot fit, which would
 	// silently strip the wire signal for clients detecting Tier-3 truncation.
 	SettingMCPMaxResultTokens = "mcp.max_result_tokens"
+
+	// Host-header DNS rebinding protection, off by default. Namespaced
+	// server.* rather than mcp.* because it describes the connection, not any
+	// one protocol or route. Hot-reloadable. See server.HostGuardMiddleware
+	// for the policy and the reason for the default.
+	SettingServerHostRebindingProtection = "server.host_rebinding_protection"
 )
 
 // Reconsolidation mode values. Default is shadow so the first real deployment
@@ -1441,7 +1447,8 @@ var settingDefaults = map[string]string{
 	// hardcoded default (44000 bytes at ~2 chars/token) and leaves headroom
 	// against typical 200k-context clients without burning the whole window
 	// on a single tool call. Operators tune via /admin/settings.
-	SettingMCPMaxResultTokens: "22000",
+	SettingMCPMaxResultTokens:            "22000",
+	SettingServerHostRebindingProtection: "false",
 
 	// Display-only keys: registered in the admin schema for UI completeness
 	// but not yet wired to any consumer. Listed here so the init-time

@@ -170,6 +170,11 @@ var settingsGroups = []api.SettingGroup{
 				Description: "Rate-limiter cleanup cadence, batch-store item cap, and the default minimum edge weight for the graph endpoint. Advanced.",
 			},
 			{
+				Category:    "transport",
+				Label:       "Transport",
+				Description: "HTTP listener security applied across the authenticated API and MCP surface, independent of any one protocol.",
+			},
+			{
 				Category:    "mcp",
 				Label:       "MCP",
 				Description: "Caps for responses served over the Model Context Protocol (MCP) server surface.",

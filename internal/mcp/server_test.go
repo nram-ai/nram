@@ -172,6 +172,30 @@ func TestOriginValidation_MatchingOrigin_Allowed(t *testing.T) {
 	}
 }
 
+// TestOriginValidation_Authenticated_Exempt pins the exemption the other cases
+// leave uncovered: a bearer token vouches for the caller, so an Origin/Host
+// mismatch is tolerated. Paired with the mismatch case below, which is the same
+// request without the header.
+//
+// Note this is why the rejecting branch is unreachable through the mounted
+// router: /mcp sits below AuthMiddleware, which 401s a request with no
+// Authorization header before it ever reaches this handler.
+func TestOriginValidation_Authenticated_Exempt(t *testing.T) {
+	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
+	h := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Host = "nram.ai"
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Authorization", "Bearer token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("authenticated cross-origin request should be exempt; got 403: %s", rec.Body.String())
+	}
+}
+
 func TestOriginValidation_MismatchedOrigin_Rejected(t *testing.T) {
 	srv := newTestServer(Dependencies{Backend: storage.BackendSQLite})
 	h := srv.Handler()

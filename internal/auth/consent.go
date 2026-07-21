@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 // authorizeRequestParams captures the OAuth authorize request after each
@@ -68,12 +68,9 @@ func isLoopbackRedirectURI(redirectURI string) bool {
 	if err != nil {
 		return false
 	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	// u.Host, not u.Hostname(): IsLoopbackHost strips the port and IPv6
+	// brackets itself, and is shared with the HTTP Host-rebinding guard.
+	return netutil.IsLoopbackHost(u.Host)
 }
 
 // authorizeContextResponse is the JSON payload served at

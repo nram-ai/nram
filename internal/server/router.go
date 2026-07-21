@@ -31,6 +31,11 @@ type RouterConfig struct {
 	// feature is enabled. Wraps the user- and project-scoped ask routes.
 	// If nil, no gate is applied (useful in tests that don't exercise it).
 	AskGate func(http.Handler) http.Handler
+	// HostGuard is middleware that rejects requests arriving over loopback
+	// with a non-loopback Host header (DNS rebinding), gated on
+	// server.host_rebinding_protection. See HostGuardMiddleware.
+	// If nil, no guard is applied (useful in tests that don't exercise it).
+	HostGuard func(http.Handler) http.Handler
 }
 
 // Handlers holds all handler instances. Nil handlers are replaced with a
@@ -391,6 +396,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
+		// First in the chain, ahead of setup and auth: a DNS rebinding request
+		// is anonymous, so the guard has to run before AuthMiddleware turns it
+		// into a 401 or it would never fire at all.
+		if config.HostGuard != nil {
+			r.Use(config.HostGuard)
+		}
 		if config.SetupGuard != nil {
 			r.Use(config.SetupGuard)
 		}
