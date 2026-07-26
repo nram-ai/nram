@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import { usePasskeyLogin } from "../hooks/useApi";
 import { isWebAuthnAvailable } from "../api/webauthn";
 import { AuthBrand } from "../components/AuthBrand";
+import { sameOriginPath } from "../lib/safeRedirect";
 
 type Step = "email" | "password" | "idp-redirect" | "passkey-or-password";
 
@@ -13,6 +14,11 @@ function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const auth = useAuth();
+
+  // The post-login ?redirect= target, validated same-origin in one place so an
+  // unvalidated value can never become an open redirect. Null when absent or
+  // off-origin; each consumer below supplies its own fallback.
+  const redirectTarget = sameOriginPath(searchParams.get("redirect"));
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
@@ -25,7 +31,7 @@ function Login() {
   const passkeyLoginMut = usePasskeyLogin();
 
   function redirectToIdP(idp: string) {
-    const redirect = searchParams.get("redirect") ?? "/";
+    const redirect = redirectTarget ?? "/";
     window.location.href = `/auth/idp/login?idp_id=${encodeURIComponent(idp)}&redirect=${encodeURIComponent(redirect)}`;
   }
 
@@ -74,9 +80,8 @@ function Login() {
 
   function completeLogin(token: string, user: { id: string; email: string; display_name: string; role: string; org_id: string }) {
     auth.login(token, user);
-    const redirect = searchParams.get("redirect");
-    if (redirect) {
-      window.location.href = redirect;
+    if (redirectTarget) {
+      window.location.href = redirectTarget;
     } else {
       navigate("/", { replace: true });
     }
