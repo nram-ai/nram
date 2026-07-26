@@ -262,15 +262,23 @@ func TestE2E_EnrichmentEmbedAndStore(t *testing.T) {
 	}
 	memID := mems[0].ID
 
-	// --- Wait for the worker to embed and persist the vector --------------
+	// --- Wait for the worker->embed->store->finalize chain to complete ----
+	// The worker persists the vector before MarkEnriched stamps embedding_dim
+	// on the memory row (the final step of the job). Wait on embedding_dim, the
+	// terminal state asserted below, rather than on the vector alone; otherwise
+	// the assertions can race a job whose vector already exists but whose
+	// finalize has not run yet, reading embedding_dim = nil.
 	var vec []float32
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		got, gerr := vectorStore.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{memID}, embedDim)
-		if gerr == nil {
-			if v, ok := got[memID]; ok && len(v) > 0 {
-				vec = v
-				break
+		m, merr := memoryRepo.GetByID(ctx, memID, projectNSID)
+		if merr == nil && m.EmbeddingDim != nil {
+			got, gerr := vectorStore.GetByIDs(ctx, storage.VectorKindMemory, []uuid.UUID{memID}, embedDim)
+			if gerr == nil {
+				if v, ok := got[memID]; ok && len(v) > 0 {
+					vec = v
+					break
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -283,7 +291,7 @@ func TestE2E_EnrichmentEmbedAndStore(t *testing.T) {
 				t.Logf("enrichment job %s: status=%s attempts=%d", j.ID, j.Status, j.Attempts)
 			}
 		}
-		t.Fatalf("no persisted vector for memory %s within deadline; the worker->embed->store chain did not complete", memID)
+		t.Fatalf("memory %s not finalized within deadline; the worker->embed->store->finalize chain did not complete", memID)
 	}
 
 	// --- Assert the persisted vector row ----------------------------------
