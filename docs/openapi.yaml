@@ -10,7 +10,7 @@ info:
     stream at `/v1/events`, Prometheus metrics at `/metrics`, and the HTML
     consent/landing shells served by `GET /authorize` and `GET /share/accept`.
     See docs/api.md for those.
-  version: 0.18.53
+  version: 0.18.54
   license:
     name: MIT
 
@@ -6485,6 +6485,8 @@ components:
         - "ask.rerank.enabled"
         - "ask.siblings.per_candidate"
         - "ask.synthesis.max_tokens"
+        - "ask.synthesis.structured.enabled"
+        - "ask.synthesis.structured.system_prompt"
         - "ask.synthesis.system_prompt"
         - "ask.synthesis.temperature"
         - "auth.session_refresh_threshold_seconds"

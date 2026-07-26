@@ -824,7 +824,6 @@ func (s *AskService) synthesize(
 	req *AskRequest,
 	neighborhood []neighborMemory,
 ) (string, bool) {
-	system := s.settings.ResolveStringWithDefault(ctx, SettingAskSynthesisSystemPrompt, "global")
 	temperature := s.settings.ResolveFloatWithDefault(ctx, SettingAskSynthesisTemperature, "global")
 	maxTokens := s.settings.ResolveIntWithDefault(ctx, SettingAskSynthesisMaxTokens, "global")
 
@@ -832,7 +831,8 @@ func (s *AskService) synthesize(
 	// neither stored memory content nor the caller's query can break out of its
 	// span and be read as instructions. GuardedSystem carries the matching
 	// data-not-instructions directive. Each line keeps its [shortID] citation
-	// anchor inside the fence so the synthesizer can still cite by id.
+	// anchor inside the fence so the synthesizer can still cite by id. Both the
+	// prose and the structured path use this same fenced user message.
 	var nb strings.Builder
 	for _, n := range neighborhood {
 		fmt.Fprintf(&nb, "[%s] %s\n", n.shortID, collapseWhitespace(n.content))
@@ -845,6 +845,18 @@ func (s *AskService) synthesize(
 	// token_usage row attributes correctly.
 	usageCtx := provider.WithOperation(ctx, provider.OperationAskSynthesis)
 
+	// Structured per-part synthesis: the model splits a multi-part question into
+	// parts and answers each in one JSON call, so an absent part asked first no
+	// longer makes it decline the whole answer. Strictly fail-soft: any provider,
+	// parse, or emptiness failure falls through to the prose path below, which is
+	// also the path for providers that ignore JSONMode.
+	if s.settings.ResolveBoolWithDefault(ctx, SettingAskSynthesisStructuredEnabled, "global") {
+		if ans, ok := s.synthesizeStructured(usageCtx, llm, user, temperature, maxTokens); ok {
+			return ans, true
+		}
+	}
+
+	system := s.settings.ResolveStringWithDefault(ctx, SettingAskSynthesisSystemPrompt, "global")
 	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
 		Messages:    provider.BuildGuardedMessages(system, user),
 		MaxTokens:   maxTokens,
@@ -854,6 +866,65 @@ func (s *AskService) synthesize(
 		return "", false
 	}
 	return resp.Content, true
+}
+
+// askSynthesisParts is the JSON contract the structured synthesis prompt emits:
+// one entry per distinct part of the question, each flagged supported and
+// answered (or marked not-specified) using only the neighborhood.
+type askSynthesisParts struct {
+	Parts []struct {
+		Part      string `json:"part"`
+		Supported bool   `json:"supported"`
+		Answer    string `json:"answer"`
+	} `json:"parts"`
+}
+
+// synthesizeStructured runs the JSON-mode per-part synthesis over the already
+// fenced user message and assembles the answer deterministically: each part's
+// answer text (a grounded answer with inline [id] citations, or a natural
+// "not specified in the memories" sentence) is concatenated in order, and the
+// exact Not-in-neighborhood sentinel is returned only when no part is supported.
+// It returns ("", false) on any provider error, JSON parse failure, or empty
+// parts list so synthesize falls back to the prose path.
+func (s *AskService) synthesizeStructured(usageCtx context.Context, llm provider.LLMProvider, user string, temperature float64, maxTokens int) (string, bool) {
+	system := s.settings.ResolveStringWithDefault(usageCtx, SettingAskSynthesisStructuredSystemPrompt, "global")
+	resp, err := llm.Complete(usageCtx, &provider.CompletionRequest{
+		Messages:    provider.BuildGuardedMessages(system, user),
+		MaxTokens:   maxTokens,
+		Temperature: provider.Float64(temperature),
+		JSONMode:    true,
+	})
+	if err != nil || resp == nil {
+		return "", false
+	}
+	// Tolerant extract of the outer JSON object; small models sometimes wrap it.
+	raw := resp.Content
+	if i, j := strings.Index(raw, "{"), strings.LastIndex(raw, "}"); i >= 0 && j > i {
+		raw = raw[i : j+1]
+	}
+	// Decode through the shared lenient decoder the other JSON-mode paths
+	// (enrichment, dreaming) use, rather than a bare json.Unmarshal, so ask
+	// stays on one decode path.
+	var parsed askSynthesisParts
+	if UnmarshalJSONLenient(raw, &parsed) != nil || len(parsed.Parts) == 0 {
+		return "", false
+	}
+	answers := make([]string, 0, len(parsed.Parts))
+	anySupported := false
+	for _, p := range parsed.Parts {
+		a := strings.TrimSpace(p.Answer)
+		if a == "" {
+			continue
+		}
+		if p.Supported && !strings.EqualFold(a, askNotInNeighborhood) {
+			anySupported = true
+		}
+		answers = append(answers, a)
+	}
+	if !anySupported {
+		return askNotInNeighborhood, true
+	}
+	return strings.Join(answers, " "), true
 }
 
 // graphBackingMemoryIDs traverses depth hops out from each activated entity and

@@ -63,6 +63,7 @@ const DREAMING_PROMPTS: SimplePromptSpec[] = [
 
 const ASK_PROMPTS: SimplePromptSpec[] = [
   { systemKey: "ask.synthesis.system_prompt", title: "Answer Synthesis" },
+  { systemKey: "ask.synthesis.structured.system_prompt", title: "Per-Part Answer Synthesis" },
   { systemKey: "ask.decomposition.system_prompt", title: "Query Decomposition" },
 ];
 

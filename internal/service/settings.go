@@ -782,17 +782,18 @@ const (
 // user message via provider.BuildMessages; that wrapper is not a setting. The
 // system prompt is the only tunable LLM template.
 const (
-	SettingFactSystemPrompt               = "enrichment.fact_system_prompt"
-	SettingEntitySystemPrompt             = "enrichment.entity_system_prompt"
-	SettingRelationshipSystemPrompt       = "enrichment.relationship_system_prompt"
-	SettingIngestionDecisionSystemPrompt  = "enrichment.ingestion_decision.system_prompt"
-	SettingQueryAugmentSystemPrompt       = "enrichment.query_augment.system_prompt"
-	SettingDreamContradictionSystemPrompt = "dreaming.contradiction_system_prompt"
-	SettingDreamSynthesisSystemPrompt     = "dreaming.synthesis_system_prompt"
-	SettingDreamAlignmentSystemPrompt     = "dreaming.alignment_system_prompt"
-	SettingDreamNoveltyJudgeSystemPrompt  = "dreaming.novelty.judge_system_prompt"
-	SettingAskSynthesisSystemPrompt       = "ask.synthesis.system_prompt"
-	SettingAskDecompositionSystemPrompt   = "ask.decomposition.system_prompt"
+	SettingFactSystemPrompt                   = "enrichment.fact_system_prompt"
+	SettingEntitySystemPrompt                 = "enrichment.entity_system_prompt"
+	SettingRelationshipSystemPrompt           = "enrichment.relationship_system_prompt"
+	SettingIngestionDecisionSystemPrompt      = "enrichment.ingestion_decision.system_prompt"
+	SettingQueryAugmentSystemPrompt           = "enrichment.query_augment.system_prompt"
+	SettingDreamContradictionSystemPrompt     = "dreaming.contradiction_system_prompt"
+	SettingDreamSynthesisSystemPrompt         = "dreaming.synthesis_system_prompt"
+	SettingDreamAlignmentSystemPrompt         = "dreaming.alignment_system_prompt"
+	SettingDreamNoveltyJudgeSystemPrompt      = "dreaming.novelty.judge_system_prompt"
+	SettingAskSynthesisSystemPrompt           = "ask.synthesis.system_prompt"
+	SettingAskSynthesisStructuredSystemPrompt = "ask.synthesis.structured.system_prompt"
+	SettingAskDecompositionSystemPrompt       = "ask.decomposition.system_prompt"
 )
 
 // Ask synthesis tool settings. The ask tool runs recall over a wide aperture,
@@ -800,13 +801,14 @@ const (
 // Gated OFF by default (SettingAskEnabled) so it never spends model tokens
 // until an operator opts in and configures the dedicated ask provider slot.
 const (
-	SettingAskEnabled                 = "ask.enabled"
-	SettingAskSynthesisTemperature    = "ask.synthesis.temperature"
-	SettingAskSynthesisMaxTokens      = "ask.synthesis.max_tokens"
-	SettingAskRecallCandidates        = "ask.recall.candidates"
-	SettingAskGraphDepth              = "ask.graph.depth"
-	SettingAskSiblingsPerCandidate    = "ask.siblings.per_candidate"
-	SettingAskNeighborhoodMaxMemories = "ask.neighborhood.max_memories"
+	SettingAskEnabled                    = "ask.enabled"
+	SettingAskSynthesisStructuredEnabled = "ask.synthesis.structured.enabled"
+	SettingAskSynthesisTemperature       = "ask.synthesis.temperature"
+	SettingAskSynthesisMaxTokens         = "ask.synthesis.max_tokens"
+	SettingAskRecallCandidates           = "ask.recall.candidates"
+	SettingAskGraphDepth                 = "ask.graph.depth"
+	SettingAskSiblingsPerCandidate       = "ask.siblings.per_candidate"
+	SettingAskNeighborhoodMaxMemories    = "ask.neighborhood.max_memories"
 	// Confidence calibration maps a cited source's absolute vector cosine onto
 	// [0, 1]: a cosine at or below the floor reads as no confidence, at or above
 	// the ceiling as full confidence, linear between. Defaults are tuned to the
@@ -1054,6 +1056,14 @@ If the neighborhood genuinely does not contain the answer, reply exactly: Not in
 
 Answer directly, with no preamble.`
 
+	askSynthesisStructuredSystemPromptText = `You answer using only the memory neighborhood in the user message; no outside knowledge.
+
+Break the question into its distinct parts. Output ONLY JSON of the form {"parts":[{"part":"<short label of this part>","supported":true|false,"answer":"<text>"}]}.
+
+If the neighborhood supports a part, set supported true and put the grounded answer in answer, with the supporting memory id in square brackets right after the fact, e.g. [a1b2c3d4]. If it does not, set supported false and make answer a short natural sentence stating that that part is not specified in the memories.
+
+Lead with the parts you can answer. Use only facts explicitly stated in a memory; never infer or guess. Give names and numbers exactly. Output only the JSON object, no preamble.`
+
 	rerankJudgeSystemPromptText = `You are a relevance judge. Given a query and a document, output only a single number between 0 and 1 indicating how well the document answers the query (1 = perfectly answers it, 0 = irrelevant). Output the number and nothing else.`
 
 	askDecompositionSystemPromptText = `You rewrite a user's question into focused retrieval sub-queries for a memory search. You do NOT answer the question. You output JSON only.
@@ -1197,24 +1207,26 @@ var settingDefaults = map[string]string{
 	SettingEntitySystemPrompt:       entitySystemPromptText,
 	SettingRelationshipSystemPrompt: relationshipSystemPromptText,
 
-	SettingAskEnabled:                    "false",
-	SettingAskRerankEnabled:              "false",
-	SettingAskSynthesisSystemPrompt:      askSynthesisSystemPromptText,
-	SettingAskSynthesisTemperature:       "0.1",
-	SettingAskSynthesisMaxTokens:         "4096",
-	SettingAskRecallCandidates:           "12",
-	SettingAskGraphDepth:                 "1",
-	SettingAskSiblingsPerCandidate:       "3",
-	SettingAskNeighborhoodMaxMemories:    "20",
-	SettingAskConfidenceCosineFloor:      "0.35",
-	SettingAskConfidenceCosineCeiling:    "0.75",
-	SettingAskNeighborhoodMinScoreRatio:  "0.5",
-	SettingAskExpansionCosineFloor:       "0.5",
-	SettingAskDecompositionEnabled:       "true",
-	SettingAskDecompositionMaxSubqueries: "4",
-	SettingAskDecompositionMaxTokens:     "256",
-	SettingAskDecompositionTemperature:   "0",
-	SettingAskDecompositionSystemPrompt:  askDecompositionSystemPromptText,
+	SettingAskEnabled:                         "false",
+	SettingAskRerankEnabled:                   "false",
+	SettingAskSynthesisSystemPrompt:           askSynthesisSystemPromptText,
+	SettingAskSynthesisStructuredEnabled:      "true",
+	SettingAskSynthesisStructuredSystemPrompt: askSynthesisStructuredSystemPromptText,
+	SettingAskSynthesisTemperature:            "0.1",
+	SettingAskSynthesisMaxTokens:              "4096",
+	SettingAskRecallCandidates:                "12",
+	SettingAskGraphDepth:                      "1",
+	SettingAskSiblingsPerCandidate:            "3",
+	SettingAskNeighborhoodMaxMemories:         "20",
+	SettingAskConfidenceCosineFloor:           "0.35",
+	SettingAskConfidenceCosineCeiling:         "0.75",
+	SettingAskNeighborhoodMinScoreRatio:       "0.5",
+	SettingAskExpansionCosineFloor:            "0.5",
+	SettingAskDecompositionEnabled:            "true",
+	SettingAskDecompositionMaxSubqueries:      "4",
+	SettingAskDecompositionMaxTokens:          "256",
+	SettingAskDecompositionTemperature:        "0",
+	SettingAskDecompositionSystemPrompt:       askDecompositionSystemPromptText,
 
 	SettingIngestionDecisionEnabled:      "true",
 	SettingIngestionDecisionShadow:       "false",
