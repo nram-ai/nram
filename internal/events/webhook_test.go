@@ -153,6 +153,11 @@ func TestWebhookDelivery_Success(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return received.Load() == 1 }, 3*time.Second)
+	// received is incremented at the server handler's entry; the deliverer
+	// records success only after it reads the 200 response. Wait on the
+	// recorded success (the terminal state asserted below) so a slow runner
+	// can't observe the gap.
+	waitFor(t, func() bool { return store.successCount(whID) == 1 }, 3*time.Second)
 
 	if store.successCount(whID) != 1 {
 		t.Errorf("expected 1 success, got %d", store.successCount(whID))
@@ -245,6 +250,12 @@ func TestWebhookDelivery_RetryThenSuccess(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return attempts.Load() >= 3 }, 15*time.Second)
+	// attempts is incremented at the server handler's entry; the deliverer
+	// records success only after it reads the third response's 200. Wait on the
+	// recorded success (the terminal state asserted below), mirroring
+	// TestWebhookDelivery_MaxRetriesExceeded's failureCount wait, so a slow
+	// runner can't observe the gap.
+	waitFor(t, func() bool { return store.successCount(whID) == 1 }, 5*time.Second)
 
 	if store.successCount(whID) != 1 {
 		t.Errorf("expected 1 success, got %d", store.successCount(whID))
