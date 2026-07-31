@@ -399,7 +399,7 @@ func (s *rbacUserAdminStore) GenerateAPIKey(_ context.Context, _ uuid.UUID, _ st
 	return nil, "", fmt.Errorf("not implemented in test")
 }
 
-func (s *rbacUserAdminStore) RevokeAPIKey(_ context.Context, _ uuid.UUID) error {
+func (s *rbacUserAdminStore) RevokeAPIKey(_ context.Context, _, _ uuid.UUID) error {
 	return fmt.Errorf("not implemented in test")
 }
 

@@ -26,7 +26,7 @@ type OrgUserStore interface {
 	CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error)
 	ListAPIKeys(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	GenerateAPIKey(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
-	RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error
+	RevokeAPIKey(ctx context.Context, keyID, userID uuid.UUID) error
 }
 
 // OrgUserConfig holds the dependencies for org-scoped user management.
@@ -462,7 +462,7 @@ func handleOrgRevokeAPIKey(w http.ResponseWriter, r *http.Request, store OrgUser
 		return
 	}
 
-	if err := store.RevokeAPIKey(r.Context(), keyID); err != nil {
+	if err := store.RevokeAPIKey(r.Context(), keyID, userID); err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("api key not found"))
 			return

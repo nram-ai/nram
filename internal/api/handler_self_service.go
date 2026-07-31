@@ -22,7 +22,7 @@ import (
 type APIKeyManager interface {
 	Create(ctx context.Context, key *model.APIKey) (string, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error)
-	Revoke(ctx context.Context, id uuid.UUID) error
+	Revoke(ctx context.Context, id, userID uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.APIKey, error)
 }
 
@@ -193,7 +193,7 @@ func NewMeAPIKeyRevokeHandler(keys APIKeyManager, audit ...AuditStore) http.Hand
 			return
 		}
 
-		if err := keys.Revoke(r.Context(), id); err != nil {
+		if err := keys.Revoke(r.Context(), id, ac.UserID); err != nil {
 			WriteError(w, ErrInternal("failed to revoke api key"))
 			return
 		}

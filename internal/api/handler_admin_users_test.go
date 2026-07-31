@@ -27,7 +27,7 @@ type mockUserAdminStore struct {
 	countAPIKeysFn   func(ctx context.Context, userID uuid.UUID) (int, error)
 	listAPIKeysFn    func(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	generateAPIKeyFn func(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
-	revokeAPIKeyFn   func(ctx context.Context, keyID uuid.UUID) error
+	revokeAPIKeyFn   func(ctx context.Context, keyID, userID uuid.UUID) error
 }
 
 func (m *mockUserAdminStore) CountUsers(ctx context.Context) (int, error) {
@@ -76,8 +76,8 @@ func (m *mockUserAdminStore) GenerateAPIKey(ctx context.Context, userID uuid.UUI
 	return m.generateAPIKeyFn(ctx, userID, name, scopes, expiresAt)
 }
 
-func (m *mockUserAdminStore) RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error {
-	return m.revokeAPIKeyFn(ctx, keyID)
+func (m *mockUserAdminStore) RevokeAPIKey(ctx context.Context, keyID, userID uuid.UUID) error {
+	return m.revokeAPIKeyFn(ctx, keyID, userID)
 }
 
 // --- helpers ---
@@ -498,9 +498,12 @@ func TestAdminUsers_RevokeAPIKey_Success(t *testing.T) {
 	revoked := false
 
 	store := &mockUserAdminStore{
-		revokeAPIKeyFn: func(_ context.Context, kid uuid.UUID) error {
+		revokeAPIKeyFn: func(_ context.Context, kid, uid uuid.UUID) error {
 			if kid != keyID {
 				t.Errorf("expected keyID %s, got %s", keyID, kid)
+			}
+			if uid != userID {
+				t.Errorf("expected userID %s, got %s", userID, uid)
 			}
 			revoked = true
 			return nil
@@ -524,7 +527,7 @@ func TestAdminUsers_RevokeAPIKey_NotFound(t *testing.T) {
 	keyID := uuid.New()
 
 	store := &mockUserAdminStore{
-		revokeAPIKeyFn: func(_ context.Context, _ uuid.UUID) error {
+		revokeAPIKeyFn: func(_ context.Context, _, _ uuid.UUID) error {
 			return sql.ErrNoRows
 		},
 	}

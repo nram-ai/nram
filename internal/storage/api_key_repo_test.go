@@ -272,7 +272,7 @@ func TestAPIKeyRepo_Revoke(t *testing.T) {
 			t.Fatalf("failed to create: %v", err)
 		}
 
-		if err := repo.Revoke(ctx, key.ID); err != nil {
+		if err := repo.Revoke(ctx, key.ID, user.ID); err != nil {
 			t.Fatalf("failed to revoke: %v", err)
 		}
 
@@ -295,9 +295,46 @@ func TestAPIKeyRepo_Revoke_NotFound(t *testing.T) {
 		ctx := context.Background()
 		repo := NewAPIKeyRepo(db)
 
-		err := repo.Revoke(ctx, uuid.New())
+		err := repo.Revoke(ctx, uuid.New(), uuid.New())
 		if !errors.Is(err, ErrAPIKeyNotFound) {
 			t.Fatalf("expected ErrAPIKeyNotFound, got %v", err)
+		}
+	})
+}
+
+// TestAPIKeyRepo_Revoke_WrongUser verifies that Revoke is scoped to the key's
+// owner: attempting to revoke a key while supplying a different user's id must
+// not delete the key and must report it as not found.
+func TestAPIKeyRepo_Revoke_WrongUser(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		owner := createTestUser(t, ctx, db)
+		other := createTestUser(t, ctx, db)
+		repo := NewAPIKeyRepo(db)
+
+		key := &model.APIKey{UserID: owner.ID, Name: "owned", Scopes: []uuid.UUID{}}
+		if _, err := repo.Create(ctx, key); err != nil {
+			t.Fatalf("failed to create: %v", err)
+		}
+
+		// Revoking with the wrong user id must not affect the row.
+		err := repo.Revoke(ctx, key.ID, other.ID)
+		if !errors.Is(err, ErrAPIKeyNotFound) {
+			t.Fatalf("expected ErrAPIKeyNotFound for cross-user revoke, got %v", err)
+		}
+
+		// The key must still exist and belong to the owner.
+		got, err := repo.GetByID(ctx, key.ID)
+		if err != nil {
+			t.Fatalf("expected key to survive cross-user revoke, got %v", err)
+		}
+		if got.UserID != owner.ID {
+			t.Fatalf("expected owner %s, got %s", owner.ID, got.UserID)
+		}
+
+		// The rightful owner can still revoke it.
+		if err := repo.Revoke(ctx, key.ID, owner.ID); err != nil {
+			t.Fatalf("owner revoke failed: %v", err)
 		}
 	})
 }

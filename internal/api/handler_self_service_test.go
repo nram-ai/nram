@@ -21,7 +21,7 @@ import (
 type mockAPIKeyManager struct {
 	createFn     func(ctx context.Context, key *model.APIKey) (string, error)
 	listByUserFn func(ctx context.Context, userID uuid.UUID) ([]model.APIKey, error)
-	revokeFn     func(ctx context.Context, id uuid.UUID) error
+	revokeFn     func(ctx context.Context, id, userID uuid.UUID) error
 	getByIDFn    func(ctx context.Context, id uuid.UUID) (*model.APIKey, error)
 }
 
@@ -42,9 +42,9 @@ func (m *mockAPIKeyManager) ListByUser(ctx context.Context, userID uuid.UUID) ([
 	return nil, nil
 }
 
-func (m *mockAPIKeyManager) Revoke(ctx context.Context, id uuid.UUID) error {
+func (m *mockAPIKeyManager) Revoke(ctx context.Context, id, userID uuid.UUID) error {
 	if m.revokeFn != nil {
-		return m.revokeFn(ctx, id)
+		return m.revokeFn(ctx, id, userID)
 	}
 	return nil
 }
@@ -274,9 +274,12 @@ func TestMeAPIKeys_RevokeSuccess(t *testing.T) {
 				Name:   "Key to revoke",
 			}, nil
 		},
-		revokeFn: func(ctx context.Context, id uuid.UUID) error {
+		revokeFn: func(ctx context.Context, id, uid uuid.UUID) error {
 			if id != keyID {
 				t.Errorf("expected keyID %s, got %s", keyID, id)
+			}
+			if uid != userID {
+				t.Errorf("expected userID %s, got %s", userID, uid)
 			}
 			revoked = true
 			return nil

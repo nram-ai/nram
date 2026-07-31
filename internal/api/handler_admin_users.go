@@ -27,7 +27,7 @@ type UserAdminStore interface {
 	CountAPIKeys(ctx context.Context, userID uuid.UUID) (int, error)
 	ListAPIKeys(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	GenerateAPIKey(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
-	RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error
+	RevokeAPIKey(ctx context.Context, keyID, userID uuid.UUID) error
 }
 
 // UserAdminConfig holds the dependencies for the admin users handler.
@@ -161,7 +161,7 @@ func NewAdminUsersHandler(cfg UserAdminConfig) http.HandlerFunc {
 			}
 
 			if r.Method == http.MethodDelete {
-				handleAdminRevokeAPIKey(w, r, cfg, keyID)
+				handleAdminRevokeAPIKey(w, r, cfg, userID, keyID)
 				return
 			}
 			WriteError(w, ErrBadRequest("method not allowed"))
@@ -497,8 +497,8 @@ func handleAdminGenerateAPIKey(w http.ResponseWriter, r *http.Request, cfg UserA
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, keyID uuid.UUID) {
-	err := cfg.Store.RevokeAPIKey(r.Context(), keyID)
+func handleAdminRevokeAPIKey(w http.ResponseWriter, r *http.Request, cfg UserAdminConfig, userID, keyID uuid.UUID) {
+	err := cfg.Store.RevokeAPIKey(r.Context(), keyID, userID)
 	if err != nil {
 		if isUserNotFound(err) {
 			WriteError(w, ErrNotFound("api key not found"))

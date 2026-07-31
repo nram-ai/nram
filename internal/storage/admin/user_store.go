@@ -146,6 +146,6 @@ func (s *UserAdminStore) GenerateAPIKey(ctx context.Context, userID uuid.UUID, n
 	return key, rawKey, nil
 }
 
-func (s *UserAdminStore) RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error {
-	return s.apiKeyRepo.Revoke(ctx, keyID)
+func (s *UserAdminStore) RevokeAPIKey(ctx context.Context, keyID, userID uuid.UUID) error {
+	return s.apiKeyRepo.Revoke(ctx, keyID, userID)
 }

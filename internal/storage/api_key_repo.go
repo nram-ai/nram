@@ -186,14 +186,16 @@ func (r *APIKeyRepo) ListByUserPaged(ctx context.Context, userID uuid.UUID, limi
 	return result, nil
 }
 
-// Revoke deletes an API key by ID.
-func (r *APIKeyRepo) Revoke(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM api_keys WHERE id = ?`
+// Revoke deletes an API key by ID, scoped to its owner. The delete only
+// affects a row whose user_id matches, so a caller cannot revoke a key that
+// belongs to a different user (a mismatch yields ErrAPIKeyNotFound).
+func (r *APIKeyRepo) Revoke(ctx context.Context, id, userID uuid.UUID) error {
+	query := `DELETE FROM api_keys WHERE id = ? AND user_id = ?`
 	if r.db.Backend() == BackendPostgres {
-		query = `DELETE FROM api_keys WHERE id = $1`
+		query = `DELETE FROM api_keys WHERE id = $1 AND user_id = $2`
 	}
 
-	result, err := r.db.Exec(ctx, query, id.String())
+	result, err := r.db.Exec(ctx, query, id.String(), userID.String())
 	if err != nil {
 		return fmt.Errorf("api key revoke: %w", err)
 	}
