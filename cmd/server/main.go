@@ -1569,17 +1569,31 @@ func main() {
 	authMiddleware := auth.NewAuthMiddleware(apiKeyRepo, userRepo, jwtSecret, sessionTimings).
 		WithShareTokens(shareTokenSvc, shareTokenRepo).
 		WithClientUsage(oauthRepo)
-	rateLimiter := auth.NewRateLimiter(10, 20,
-		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
-			service.SettingAPIRateLimitCleanupSeconds, "global"),
-		settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
-			service.SettingAPIRateLimitStaleSeconds, "global"))
+	// Both limiters share the same cleanup/stale windows; resolve them once.
+	rlCleanup := settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
+		service.SettingAPIRateLimitCleanupSeconds, "global")
+	rlStale := settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
+		service.SettingAPIRateLimitStaleSeconds, "global")
+	rateLimiter := auth.NewRateLimiter(
+		settingsSvc.ResolveFloatWithDefault(context.Background(), service.SettingAPIRateLimitRPS, "global"),
+		settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingAPIRateLimitBurst, "global"),
+		rlCleanup, rlStale)
 	defer rateLimiter.Stop()
+
+	// Per-IP throttle on the unauthenticated auth + public OAuth surface.
+	// Keyed on client IP rather than user, since these callers have no
+	// identity yet.
+	authRateLimiter := auth.NewIPRateLimiter(
+		settingsSvc.ResolveFloatWithDefault(context.Background(), service.SettingAPIAuthRateLimitRPS, "global"),
+		settingsSvc.ResolveIntWithDefault(context.Background(), service.SettingAPIAuthRateLimitBurst, "global"),
+		rlCleanup, rlStale)
+	defer authRateLimiter.Stop()
 
 	routerCfg := buildRouterConfig(routerDeps{
 		Metrics:             promMetrics,
 		AuthMiddleware:      authMiddleware,
 		RateLimiter:         rateLimiter,
+		AuthRateLimiter:     authRateLimiter,
 		SetupComplete:       setupChecker.IsComplete,
 		ProjectAccess:       projectAccessCfg,
 		EnrichmentAvailable: enrichmentAvailable,

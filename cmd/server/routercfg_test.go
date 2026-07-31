@@ -35,6 +35,10 @@ func TestBuildRouterConfigWiresEverything(t *testing.T) {
 	rl := auth.NewRateLimiter(1, 1, 0, 0)
 	t.Cleanup(rl.Stop)
 
+	// IPRateLimiter likewise starts a cleanup goroutine that must be stopped.
+	arl := auth.NewIPRateLimiter(1, 1, 0, 0)
+	t.Cleanup(arl.Stop)
+
 	// Dependencies are otherwise deliberately inert. buildRouterConfig only
 	// closes over them, so nothing is dereferenced here, and the test stays
 	// honest about the one thing it checks: that every field gets populated.
@@ -42,6 +46,7 @@ func TestBuildRouterConfigWiresEverything(t *testing.T) {
 		Metrics:             metrics.New(),
 		AuthMiddleware:      auth.NewAuthMiddleware(nil, nil, []byte("test"), nil),
 		RateLimiter:         rl,
+		AuthRateLimiter:     arl,
 		SetupComplete:       func(context.Context) bool { return true },
 		ProjectAccess:       api.ProjectAccessConfig{},
 		EnrichmentAvailable: func() bool { return true },

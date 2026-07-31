@@ -518,6 +518,12 @@ const (
 	// require server restart.
 	SettingAPIRateLimitCleanupSeconds = "api.rate_limit.cleanup_interval_seconds"
 	SettingAPIRateLimitStaleSeconds   = "api.rate_limit.stale_after_seconds"
+	// Per-user API limiter and pre-auth per-IP limiter rps/burst. Read once at
+	// startup (cmd/server/main.go); changes require server restart.
+	SettingAPIRateLimitRPS       = "api.rate_limit_rps"
+	SettingAPIRateLimitBurst     = "api.rate_limit_burst"
+	SettingAPIAuthRateLimitRPS   = "api.auth_rate_limit_rps"
+	SettingAPIAuthRateLimitBurst = "api.auth_rate_limit_burst"
 
 	// Dashboard session JWT timings. token_ttl is the lifetime applied to
 	// every session JWT issued by the SPA login flows (password, IdP,
@@ -1466,9 +1472,15 @@ var settingDefaults = map[string]string{
 	// but not yet wired to any consumer. Listed here so the init-time
 	// consistency check passes; remove once a consumer is added (and either
 	// promote to a Setting* constant or delete the schema entry).
-	"enrichment.batch_size": "10",
-	"api.rate_limit_rps":    "10",
-	"api.rate_limit_burst":  "20",
+	"enrichment.batch_size":  "10",
+	SettingAPIRateLimitRPS:   "10",
+	SettingAPIRateLimitBurst: "20",
+	// Pre-auth (per-IP) throttle on the unauthenticated login / OAuth surface.
+	// Deliberately tighter than the per-user API limits above: a handful of
+	// login attempts per second per IP is generous for a human but caps
+	// brute-force and challenge-store exhaustion at source.
+	SettingAPIAuthRateLimitRPS:   "5",
+	SettingAPIAuthRateLimitBurst: "10",
 }
 
 // GetDefault returns the built-in default for the given setting key. The

@@ -16,6 +16,9 @@ type routerDeps struct {
 	Metrics        *metrics.Metrics
 	AuthMiddleware *auth.AuthMiddleware
 	RateLimiter    *auth.RateLimiter
+	// AuthRateLimiter is the per-IP throttle on the unauthenticated auth and
+	// public OAuth /token + /register endpoints.
+	AuthRateLimiter *auth.IPRateLimiter
 	// SetupComplete reports whether initial setup has finished; routes behind
 	// the setup guard serve 503 until it does.
 	SetupComplete func(context.Context) bool
@@ -41,12 +44,13 @@ func buildRouterConfig(d routerDeps) server.RouterConfig {
 	settings := d.Settings
 
 	return server.RouterConfig{
-		Metrics:        d.Metrics,
-		AuthMiddleware: d.AuthMiddleware,
-		RateLimiter:    d.RateLimiter,
-		SetupGuard:     api.SetupGuardMiddleware(d.SetupComplete),
-		ProjectAccess:  api.ProjectAccessMiddleware(d.ProjectAccess),
-		EnrichmentGate: api.EnrichmentGateMiddleware(d.EnrichmentAvailable),
+		Metrics:         d.Metrics,
+		AuthMiddleware:  d.AuthMiddleware,
+		RateLimiter:     d.RateLimiter,
+		AuthRateLimiter: d.AuthRateLimiter,
+		SetupGuard:      api.SetupGuardMiddleware(d.SetupComplete),
+		ProjectAccess:   api.ProjectAccessMiddleware(d.ProjectAccess),
+		EnrichmentGate:  api.EnrichmentGateMiddleware(d.EnrichmentAvailable),
 		// Resolved live per request so toggling ask.enabled in the admin UI
 		// surfaces or hides the ask endpoints without a restart.
 		AskGate: api.AskGateMiddleware(func(ctx context.Context) bool {

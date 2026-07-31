@@ -3,13 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 // authContextFromRequest is split out so handler files can call tryAudit
@@ -18,23 +17,12 @@ func authContextFromRequest(r *http.Request) *auth.AuthContext {
 	return auth.FromContext(r.Context())
 }
 
-// clientIPFromRequest returns the best-effort client IP for the audit
-// row. Honors X-Forwarded-For (first hop) when present; falls back to
-// RemoteAddr's host portion.
+// clientIPFromRequest returns the best-effort client IP for the audit row. It
+// delegates to netutil.ClientIP so audit logging and the pre-auth throttle key
+// on one shared implementation (X-Forwarded-For first hop, RemoteAddr host
+// fallback).
 func clientIPFromRequest(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if before, _, ok := strings.Cut(xff, ","); ok {
-			return strings.TrimSpace(before)
-		}
-		return strings.TrimSpace(xff)
-	}
-	if r.RemoteAddr == "" {
-		return ""
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return netutil.ClientIP(r)
 }
 
 // Audit action constants. Each privileged operation that mutates tenancy,

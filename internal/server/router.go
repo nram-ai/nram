@@ -14,7 +14,13 @@ import (
 type RouterConfig struct {
 	AuthMiddleware *auth.AuthMiddleware
 	RateLimiter    *auth.RateLimiter
-	Metrics        *metrics.Metrics
+	// AuthRateLimiter is the per-client-IP throttle fronting the
+	// pre-authentication surface (login/lookup/passkey/idp and the public
+	// OAuth /token + /register). It always applies, unlike RateLimiter which
+	// keys on the authenticated user. If nil, no pre-auth throttle is applied
+	// (useful in tests that don't exercise it).
+	AuthRateLimiter *auth.IPRateLimiter
+	Metrics         *metrics.Metrics
 	// SetupGuard is middleware that returns 503 until initial setup is complete.
 	// If nil, no setup guard is applied.
 	SetupGuard func(http.Handler) http.Handler
@@ -373,14 +379,31 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 		// address, then probes the callback server for reachability.
 		r.Post("/v1/oauth/authorize/complete", handler(handlers.OAuthAuthorizeComplete))
 		r.Get("/v1/share/accept", handler(handlers.ShareAccept))
-		r.HandleFunc("/token", handler(handlers.OAuthToken))
-		r.HandleFunc("/register", handler(handlers.OAuthRegister))
+		// /token and /register are unauthenticated and mutate state (mint
+		// tokens, write a client row per call), so throttle them per IP. The
+		// discovery/consent routes above stay unthrottled so legitimate
+		// clients can poll metadata freely. Nested so the parent CORS
+		// middleware still applies.
+		r.Group(func(r chi.Router) {
+			if config.AuthRateLimiter != nil {
+				r.Use(config.AuthRateLimiter.Handler)
+			}
+			r.HandleFunc("/token", handler(handlers.OAuthToken))
+			r.HandleFunc("/register", handler(handlers.OAuthRegister))
+		})
 	})
 
 	// Semi-public routes: setup guard required but no auth (login flow).
 	r.Group(func(r chi.Router) {
 		if config.SetupGuard != nil {
 			r.Use(config.SetupGuard)
+		}
+		// Per-IP throttle: these endpoints are unauthenticated, so the
+		// user-keyed RateLimiter (mounted only in the authenticated group)
+		// never reaches them. Without this, password login, lookup, and the
+		// passkey/IdP challenge stores are open to brute-force and exhaustion.
+		if config.AuthRateLimiter != nil {
+			r.Use(config.AuthRateLimiter.Handler)
 		}
 		r.Post("/v1/auth/login", handler(handlers.AuthLogin))
 		r.Post("/v1/auth/lookup", handler(handlers.AuthLookup))
