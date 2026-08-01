@@ -203,7 +203,7 @@ func (h *IdPHandler) LoginHandler() http.HandlerFunc {
 
 		if !h.stateStore.Set(stateKey, &idpState{
 			IdPID:       idpID,
-			RedirectURL: r.URL.Query().Get("redirect"),
+			RedirectURL: safeInternalRedirect(r.URL.Query().Get("redirect")),
 			Nonce:       nonce,
 			ExpiresAt:   time.Now().Add(idpStateExpiry),
 		}) {
@@ -339,10 +339,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 
 		_ = h.userRepo.UpdateLastLogin(r.Context(), user.ID)
 
-		redirectTarget := "/"
-		if state.RedirectURL != "" {
-			redirectTarget = state.RedirectURL
-		}
+		redirectTarget := safeInternalRedirect(state.RedirectURL)
 		http.Redirect(w, r, redirectTarget, http.StatusFound)
 	}
 }

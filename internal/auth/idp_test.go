@@ -338,6 +338,57 @@ func TestCallbackIDTokenPath(t *testing.T) {
 	}
 }
 
+// TestCallbackRedirectTarget verifies the post-login 302 target is constrained
+// to a same-origin root-relative path: an off-origin ?redirect= is dropped to
+// "/", while a legitimate relative path is preserved. The successful login must
+// still emit the 302 and the session cookie so the guard cannot regress the
+// happy path. The evil cases fail against the pre-fix code, which passed the
+// stored value straight to http.Redirect.
+func TestCallbackRedirectTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		redirect string
+		want     string
+	}{
+		{"absolute off-origin dropped", "https://evil.example", "/"},
+		{"protocol-relative dropped", "//evil.example", "/"},
+		{"empty defaults to root", "", "/"},
+		{"relative path preserved", "/dashboard", "/dashboard"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := jwt.MapClaims{
+				"aud": "client-abc", "exp": time.Now().Add(time.Hour).Unix(),
+				"nonce": "the-expected-nonce", "email": "user@idp.example.com", "email_verified": true,
+			}
+			h, cfg, stateKey := callbackFixture(t, makeIDToken(t, claims), &fakeUserRepo{user: existingUser()})
+
+			// Re-seed the consumed-once state with the redirect under test.
+			if ok := h.stateStore.Set(stateKey, &idpState{
+				IdPID:       cfg.ID,
+				RedirectURL: tc.redirect,
+				Nonce:       "the-expected-nonce",
+				ExpiresAt:   time.Now().Add(idpStateExpiry),
+			}); !ok {
+				t.Fatal("failed to seed state")
+			}
+
+			resp := driveCallback(t, h, stateKey)
+
+			if resp.StatusCode != http.StatusFound {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+			}
+			if got := resp.Header.Get("Location"); got != tc.want {
+				t.Fatalf("Location = %q, want %q", got, tc.want)
+			}
+			if sessionCookie(resp) == nil {
+				t.Fatal("expected session cookie on successful login")
+			}
+		})
+	}
+}
+
 // callbackFixtureUserinfo wires an IdPHandler for the OAuth/userinfo flow (no
 // id_token): the token endpoint returns only an access token, and the userinfo
 // and /emails endpoints return the supplied bodies. Auto-provisioning is on so a
