@@ -380,7 +380,7 @@ func ProbeRerankMethod(ctx context.Context, cfg SlotConfig) (string, error) {
 	}
 	applyCustomHeaders(req, cfg.CustomHeaders, "Content-Type")
 
-	client := &http.Client{Timeout: probeTimeout}
+	client := newHTTPClient(probeTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("rerank probe: request failed: %w", err)

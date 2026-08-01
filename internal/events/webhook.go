@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 // WebhookStore abstracts the webhook persistence operations needed by the
@@ -66,9 +67,14 @@ func WithTimeout(t time.Duration) DelivererOption {
 // dispatches events to matching webhooks.
 func NewWebhookDeliverer(bus EventBus, store WebhookStore, opts ...DelivererOption) *WebhookDeliverer {
 	d := &WebhookDeliverer{
-		bus:        bus,
-		store:      store,
-		client:     &http.Client{},
+		bus:   bus,
+		store: store,
+		// Webhook receivers are third parties by nature: no internal address is
+		// a legitimate target, so the deliverer refuses loopback/private/
+		// link-local/metadata destinations at dial time and does not follow
+		// redirects. Timeout 0 defers to the per-request context deadline set in
+		// sendRequest. WithHTTPClient still overrides this (e.g. in tests).
+		client:     netutil.SafeHTTPClient(0, netutil.IsPrivateOrReserved),
 		maxRetries: 3,
 		timeout:    10 * time.Second,
 	}

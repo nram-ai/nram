@@ -85,9 +85,7 @@ func NewGeminiProvider(config GeminiConfig) *GeminiProvider {
 
 	return &GeminiProvider{
 		config: config,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newHTTPClient(timeout),
 	}
 }
 

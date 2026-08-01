@@ -77,9 +77,7 @@ func NewAnthropicProvider(config AnthropicConfig) *AnthropicProvider {
 
 	return &AnthropicProvider{
 		config: config,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newHTTPClient(timeout),
 	}
 }
 

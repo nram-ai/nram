@@ -272,6 +272,24 @@ func TestAdminWebhooksCreateWebhookEmptyEvents(t *testing.T) {
 	}
 }
 
+func TestAdminWebhooksCreateWebhookNonHTTPScheme(t *testing.T) {
+	store := &mockWebhookAdminStore{}
+
+	h := NewAdminWebhooksHandler(WebhookAdminConfig{Store: store})
+	body := `{"url":"ftp://internal.example/hook","events":["memory.stored"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/webhooks", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-http webhook URL, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.createdURL != "" {
+		t.Errorf("store must not be called for an invalid URL, got created URL %q", store.createdURL)
+	}
+}
+
 func TestAdminWebhooksGetWebhookFound(t *testing.T) {
 	id := uuid.New()
 	now := time.Now().UTC().Truncate(time.Second)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 // WebhookAdminStore abstracts storage operations for the webhook admin API.
@@ -192,6 +193,10 @@ func handleCreateWebhook(w http.ResponseWriter, r *http.Request, cfg WebhookAdmi
 		WriteError(w, ErrBadRequest("url is required"))
 		return
 	}
+	if !netutil.IsHTTPURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be an absolute http(s) URL"))
+		return
+	}
 
 	if len(body.Events) == 0 {
 		WriteError(w, ErrBadRequest("events must be a non-empty array"))
@@ -238,6 +243,10 @@ func handleUpdateWebhook(w http.ResponseWriter, r *http.Request, cfg WebhookAdmi
 	body.URL = strings.TrimSpace(body.URL)
 	if body.URL == "" {
 		WriteError(w, ErrBadRequest("url is required"))
+		return
+	}
+	if !netutil.IsHTTPURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be an absolute http(s) URL"))
 		return
 	}
 

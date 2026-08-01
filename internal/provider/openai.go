@@ -95,9 +95,7 @@ func NewOpenAIProvider(config OpenAIConfig) *OpenAIProvider {
 
 	return &OpenAIProvider{
 		config: config,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newHTTPClient(timeout),
 	}
 }
 
@@ -444,7 +442,7 @@ func ListOpenAIModels(ctx context.Context, baseURL, apiKey string, headers map[s
 	}
 	applyCustomHeaders(req, headers)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: models request failed: %w", err)

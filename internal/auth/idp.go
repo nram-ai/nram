@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 const (
@@ -145,9 +146,21 @@ type IdPHandlerConfig struct {
 	UserCreate IdPUserCreator
 	JWTSecret  []byte
 	Timings    SessionTimings
+	// HTTPClient overrides the client used to reach the external IdP. Leave nil
+	// in production to get the SSRF-guarded default; tests inject a permissive
+	// client so they can point the IdP endpoints at a loopback mock server.
+	HTTPClient *http.Client
 }
 
 func NewIdPHandler(cfg IdPHandlerConfig) *IdPHandler {
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		// External OIDC identity providers are third parties: the discovery,
+		// token, and userinfo URLs must never resolve to an internal host, so the
+		// client refuses loopback/private/link-local/metadata destinations at dial
+		// time and does not follow redirects.
+		httpClient = netutil.SafeHTTPClient(15*time.Second, netutil.IsPrivateOrReserved)
+	}
 	return &IdPHandler{
 		idpRepo:    cfg.IdPRepo,
 		userRepo:   cfg.UserRepo,
@@ -155,7 +168,7 @@ func NewIdPHandler(cfg IdPHandlerConfig) *IdPHandler {
 		jwtSecret:  cfg.JWTSecret,
 		timings:    cfg.Timings,
 		stateStore: newIdPStateStore(),
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: httpClient,
 		discoCache: make(map[string]*cachedDiscovery),
 	}
 }

@@ -227,6 +227,37 @@ func TestAdminDatabaseGetInfoStoreError(t *testing.T) {
 	}
 }
 
+func TestAdminDatabaseRejectsNonPostgresURL(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		body string
+		got  func(*mockDatabaseAdminStore) string
+	}{
+		{"test", "/v1/admin/database/test", `{"url":"http://internal.example/db"}`, func(m *mockDatabaseAdminStore) string { return m.testURL }},
+		{"migrate", "/v1/admin/database/migrate", `{"url":"http://internal.example/db"}`, func(m *mockDatabaseAdminStore) string { return m.migrateURL }},
+		{"preflight", "/v1/admin/database/preflight", `{"url":"http://internal.example/db"}`, func(m *mockDatabaseAdminStore) string { return m.preflightURL }},
+		{"reset", "/v1/admin/database/reset", `{"url":"http://internal.example/db","mode":"truncate"}`, func(m *mockDatabaseAdminStore) string { return m.resetURL }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockDatabaseAdminStore{}
+			h := NewAdminDatabaseHandler(DatabaseAdminConfig{Store: store})
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: expected 400 for non-postgres URL, got %d; body: %s", tc.name, w.Code, w.Body.String())
+			}
+			if got := tc.got(store); got != "" {
+				t.Errorf("%s: store must not be reached for an invalid URL, got %q", tc.name, got)
+			}
+		})
+	}
+}
+
 func TestAdminDatabaseTestConnectionSuccess(t *testing.T) {
 	store := &mockDatabaseAdminStore{
 		testRes: &ConnectionTestResult{

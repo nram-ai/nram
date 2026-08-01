@@ -9,8 +9,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/api"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 	"github.com/nram-ai/nram/internal/storage"
 )
+
+// testWebhookClient is the strict-egress client used by TestWebhook. It mirrors
+// the live webhook deliverer's guard (refuse loopback/private/link-local/
+// metadata, do not follow redirects) with a bounded timeout for the on-demand
+// test probe.
+var testWebhookClient = netutil.SafeHTTPClient(10*time.Second, netutil.IsPrivateOrReserved)
 
 // WebhookAdminStore implements api.WebhookAdminStore by wrapping WebhookRepo.
 type WebhookAdminStore struct {
@@ -78,9 +85,20 @@ func (s *WebhookAdminStore) TestWebhook(ctx context.Context, id uuid.UUID) (*api
 		return nil, err
 	}
 
-	// Fire a test POST to the webhook URL.
+	// Fire a test POST to the webhook URL. Uses the same strict egress guard as
+	// live delivery: the destination is a third-party receiver, so loopback/
+	// private/link-local/metadata targets are refused at dial time and redirects
+	// are not followed.
 	start := time.Now()
-	resp, err := http.Post(webhook.URL, "application/json", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook.URL, nil)
+	if err != nil {
+		return &api.WebhookTestResult{
+			Success: false,
+			Message: fmt.Sprintf("invalid webhook URL: %v", err),
+		}, nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := testWebhookClient.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		return &api.WebhookTestResult{

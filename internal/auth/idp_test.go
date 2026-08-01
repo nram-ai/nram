@@ -253,6 +253,7 @@ func callbackFixture(t *testing.T, idToken string, userRepo *fakeUserRepo) (*IdP
 		UserRepo:   userRepo,
 		UserCreate: &fakeUserCreator{},
 		JWTSecret:  []byte("0123456789abcdef0123456789abcdef"),
+		HTTPClient: srv.Client(),
 	})
 	t.Cleanup(h.Close)
 
@@ -430,6 +431,7 @@ func callbackFixtureUserinfo(t *testing.T, userinfo map[string]any, emails []map
 		UserRepo:   &fakeUserRepo{getErr: sql.ErrNoRows},
 		UserCreate: &fakeUserCreator{},
 		JWTSecret:  []byte("0123456789abcdef0123456789abcdef"),
+		HTTPClient: srv.Client(),
 	})
 	t.Cleanup(h.Close)
 

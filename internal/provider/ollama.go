@@ -119,9 +119,7 @@ func NewOllamaClient(config OllamaConfig) *OllamaClient {
 
 	return &OllamaClient{
 		config: config,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client: newHTTPClient(timeout),
 	}
 }
 
@@ -191,9 +189,7 @@ func (c *OllamaClient) PullModel(ctx context.Context, name string, progress func
 	c.setHeaders(req)
 
 	// Use a separate client with PullTimeout for long-running pull operations.
-	pullClient := &http.Client{
-		Timeout: c.config.PullTimeout,
-	}
+	pullClient := newHTTPClient(c.config.PullTimeout)
 
 	resp, err := pullClient.Do(req)
 	if err != nil {

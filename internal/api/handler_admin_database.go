@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/nram-ai/nram/internal/netutil"
 )
 
 // DatabaseAdminStore abstracts storage operations for the database admin API.
@@ -235,6 +237,10 @@ func handleTestConnection(w http.ResponseWriter, r *http.Request, cfg DatabaseAd
 		WriteError(w, ErrBadRequest("url is required"))
 		return
 	}
+	if !netutil.IsPostgresURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be a postgres:// connection URL"))
+		return
+	}
 
 	result, err := cfg.Store.TestConnection(r.Context(), body.URL)
 	if err != nil {
@@ -256,6 +262,10 @@ func handleTriggerMigration(w http.ResponseWriter, r *http.Request, cfg Database
 	body.URL = strings.TrimSpace(body.URL)
 	if body.URL == "" {
 		WriteError(w, ErrBadRequest("url is required"))
+		return
+	}
+	if !netutil.IsPostgresURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be a postgres:// connection URL"))
 		return
 	}
 
@@ -286,6 +296,10 @@ func handlePreflight(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminCo
 		WriteError(w, ErrBadRequest("url is required"))
 		return
 	}
+	if !netutil.IsPostgresURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be a postgres:// connection URL"))
+		return
+	}
 
 	report, err := cfg.Store.Preflight(r.Context(), body.URL)
 	if err != nil {
@@ -309,6 +323,10 @@ func handleReset(w http.ResponseWriter, r *http.Request, cfg DatabaseAdminConfig
 	body.Mode = strings.TrimSpace(body.Mode)
 	if body.URL == "" {
 		WriteError(w, ErrBadRequest("url is required"))
+		return
+	}
+	if !netutil.IsPostgresURL(body.URL) {
+		WriteError(w, ErrBadRequest("url must be a postgres:// connection URL"))
 		return
 	}
 	if body.Mode != ResetModeTruncate && body.Mode != ResetModeDropSchema {

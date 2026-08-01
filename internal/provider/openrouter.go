@@ -55,7 +55,7 @@ func OpenRouterContextLength(ctx context.Context, baseURL, apiKey, modelID strin
 	}
 	applyCustomHeaders(req, headers)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("openrouter: models request failed: %w", err)

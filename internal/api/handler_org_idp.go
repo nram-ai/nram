@@ -10,7 +10,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/model"
+	"github.com/nram-ai/nram/internal/netutil"
 )
+
+// hasInvalidIdPURL reports whether any provided IdP endpoint URL is present but
+// not an absolute http(s) URL. A nil or empty field passes: an empty string is a
+// legitimate way to clear an explicit endpoint (falling back to discovery), and
+// the required-field / discovery rules are enforced elsewhere. This is the
+// write-time first gate; the IdP client also refuses internal destinations at
+// dial time.
+func hasInvalidIdPURL(urls ...*string) bool {
+	for _, u := range urls {
+		if u != nil && strings.TrimSpace(*u) != "" && !netutil.IsHTTPURL(*u) {
+			return true
+		}
+	}
+	return false
+}
 
 // OrgIdPStore defines the storage operations needed by the org-scoped IdP handler.
 type OrgIdPStore interface {
@@ -107,6 +123,10 @@ func orgIdPCreate(w http.ResponseWriter, r *http.Request, store OrgIdPStore, org
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "client_secret is required"})
 		return
 	}
+	if hasInvalidIdPURL(req.IssuerURL, req.AuthorizeURL, req.TokenURL, req.UserinfoURL) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer_url, authorize_url, token_url, and userinfo_url must be absolute http(s) URLs"})
+		return
+	}
 
 	defaultRole := req.DefaultRole
 	if defaultRole == "" {
@@ -145,6 +165,11 @@ func orgIdPUpdate(w http.ResponseWriter, r *http.Request, store OrgIdPStore, org
 	var body UpdateIdPRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if hasInvalidIdPURL(body.IssuerURL, body.AuthorizeURL, body.TokenURL, body.UserinfoURL) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer_url, authorize_url, token_url, and userinfo_url must be absolute http(s) URLs"})
 		return
 	}
 

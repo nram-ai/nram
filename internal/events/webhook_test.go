@@ -93,6 +93,66 @@ func TestComputeHMACSHA256(t *testing.T) {
 	}
 }
 
+// TestWebhookDelivery_BlocksInternalTarget proves the deliverer's default client
+// (the strict egress guard, not the permissive srv.Client() the other tests
+// inject) refuses to deliver to an internal destination. The httptest server
+// listens on loopback, so the dial is rejected before any request reaches it:
+// the delivery is recorded as a failure and the server is never hit.
+func TestWebhookDelivery_BlocksInternalTarget(t *testing.T) {
+	var received atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	nsID := uuid.New()
+	whID := uuid.New()
+	store := newMockWebhookStore(model.Webhook{
+		ID:     whID,
+		URL:    srv.URL, // 127.0.0.1: an internal target
+		Events: []string{MemoryCreated},
+		Scope:  "ns:" + nsID.String(),
+		Active: true,
+	})
+
+	bus := NewMemoryBus(0, 0)
+	defer func() { _ = bus.Close() }()
+
+	// No WithHTTPClient: exercise the guarded default client. Single attempt so
+	// the test does not wait on retry backoff (the dial fails immediately).
+	deliverer := NewWebhookDeliverer(bus, store,
+		WithMaxRetries(1),
+		WithTimeout(5*time.Second),
+	)
+
+	ctx := t.Context()
+	if err := deliverer.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = deliverer.Stop() }()
+
+	event := Event{
+		ID:        uuid.New().String(),
+		Type:      MemoryCreated,
+		Scope:     "project:" + nsID.String(),
+		Data:      json.RawMessage(`{"key":"value"}`),
+		Timestamp: time.Now().UTC(),
+	}
+	if err := bus.Publish(ctx, event); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	waitFor(t, func() bool { return store.failureCount(whID) == 1 }, 3*time.Second)
+
+	if store.successCount(whID) != 0 {
+		t.Errorf("expected 0 successes for a blocked internal target, got %d", store.successCount(whID))
+	}
+	if got := received.Load(); got != 0 {
+		t.Errorf("server received %d requests, want 0 (dial must be blocked)", got)
+	}
+}
+
 func TestWebhookDelivery_Success(t *testing.T) {
 	var received atomic.Int32
 	var receivedBody []byte
