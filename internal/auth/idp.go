@@ -283,7 +283,7 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 			return
 		}
 
-		userInfo, err := h.getUserInfo(r.Context(), tokenResp, disco.UserinfoEndpoint)
+		userInfo, err := h.getUserInfo(r.Context(), tokenResp, disco.UserinfoEndpoint, idpCfg, state.Nonce)
 		if err != nil {
 			http.Error(w, "failed to get user info", http.StatusBadGateway)
 			return
@@ -291,6 +291,15 @@ func (h *IdPHandler) CallbackHandler() http.HandlerFunc {
 
 		if userInfo.Email == "" {
 			http.Error(w, "IdP did not return an email address", http.StatusBadRequest)
+			return
+		}
+
+		// Refuse to log into, link, or provision an account from an email the
+		// identity provider has not asserted as verified. Without this an IdP that
+		// returns an unverified or user-settable email could take over a
+		// pre-existing local account with the same address.
+		if !userInfo.EmailVerified {
+			http.Error(w, "identity provider did not assert a verified email address", http.StatusForbidden)
 			return
 		}
 
@@ -467,21 +476,30 @@ func (h *IdPHandler) exchangeCode(ctx context.Context, tokenEndpoint, code, redi
 }
 
 type idpUserInfo struct {
-	Email string
-	Name  string
+	Email         string
+	Name          string
+	EmailVerified bool
 }
 
-func (h *IdPHandler) getUserInfo(ctx context.Context, tokenResp *idpTokenResponse, userinfoEndpoint string) (*idpUserInfo, error) {
-	// Try the ID token first (safe: received directly from IdP token endpoint over TLS).
+func (h *IdPHandler) getUserInfo(ctx context.Context, tokenResp *idpTokenResponse, userinfoEndpoint string, cfg *model.OAuthIdPConfig, expectedNonce string) (*idpUserInfo, error) {
+	// Prefer the id_token when present. It is received directly from the token
+	// endpoint over TLS, and its claims (iss/aud/exp/nonce) are validated. A
+	// validation failure is fatal: we must not silently fall back to the userinfo
+	// endpoint, which would bypass the checks.
 	if tokenResp.IDToken != "" {
-		info, err := h.parseIDTokenClaims(tokenResp.IDToken)
-		if err == nil && info.Email != "" {
+		info, err := h.parseIDTokenClaims(tokenResp.IDToken, cfg, expectedNonce)
+		if err != nil {
+			return nil, err
+		}
+		if info.Email != "" {
 			return info, nil
 		}
+		// A valid id_token without an email: OIDC permits email to be delivered
+		// only at the userinfo endpoint, so continue to it below.
 	}
 
 	if userinfoEndpoint == "" {
-		return nil, fmt.Errorf("no id_token and no userinfo endpoint available")
+		return nil, fmt.Errorf("no id_token email and no userinfo endpoint available")
 	}
 
 	info, err := h.fetchUserInfo(ctx, userinfoEndpoint, tokenResp.AccessToken)
@@ -489,19 +507,70 @@ func (h *IdPHandler) getUserInfo(ctx context.Context, tokenResp *idpTokenRespons
 		return nil, err
 	}
 
-	// Some providers (e.g. GitHub) return a null email when the user's email
-	// is private. Try fetching from a /emails endpoint as a fallback.
-	if info.Email == "" {
-		if email, err := h.fetchPrimaryEmail(ctx, userinfoEndpoint, tokenResp.AccessToken); err == nil && email != "" {
+	// When userinfo did not assert a verified email (e.g. GitHub's /user carries
+	// no email_verified claim, or the email is private and returned empty),
+	// consult the provider's /emails endpoint. It reports each address's verified
+	// status, which we propagate so the caller's verified-email gate stays
+	// authoritative rather than blindly trusting a fallback address.
+	if info.Email == "" || !info.EmailVerified {
+		if email, verified, err := h.fetchPrimaryEmail(ctx, userinfoEndpoint, tokenResp.AccessToken); err == nil && email != "" {
 			info.Email = email
+			info.EmailVerified = verified
 		}
 	}
 
 	return info, nil
 }
 
-func (h *IdPHandler) parseIDTokenClaims(idToken string) (*idpUserInfo, error) {
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+// validateIDTokenClaims enforces the OIDC Core 3.1.3.7 claim checks that remain
+// mandatory even when the id_token signature is not verified: aud, exp/nbf, iss
+// (when discovery is in use), and the nonce echoed back from the auth request.
+func validateIDTokenClaims(claims jwt.MapClaims, cfg *model.OAuthIdPConfig, expectedNonce string) error {
+	// exp (required + unexpired), nbf, and aud (must contain the client_id) are
+	// the standard registered-claim checks; delegate them to the jwt validator
+	// with a small clock-skew leeway per OIDC Core 3.1.3.7. Supplying an audience
+	// makes the aud claim required, and WithExpirationRequired makes exp required.
+	validator := jwt.NewValidator(
+		jwt.WithLeeway(60*time.Second),
+		jwt.WithExpirationRequired(),
+		jwt.WithAudience(cfg.ClientID),
+	)
+	if err := validator.Validate(claims); err != nil {
+		return fmt.Errorf("id_token claims: %w", err)
+	}
+
+	// iss MUST exactly match the configured issuer when discovery is used
+	// (jwt.WithIssuer is exact-match only; we tolerate a trailing slash to match
+	// discoverOIDC's normalization). Explicit-endpoint mode has no issuer
+	// identifier to compare against.
+	if cfg.IssuerURL != nil && *cfg.IssuerURL != "" {
+		iss, err := claims.GetIssuer()
+		if err != nil {
+			return fmt.Errorf("id_token iss: %w", err)
+		}
+		if strings.TrimRight(iss, "/") != strings.TrimRight(*cfg.IssuerURL, "/") {
+			return fmt.Errorf("id_token iss %q does not match the configured issuer", iss)
+		}
+	}
+
+	// nonce MUST equal the value sent in the auth request (replay protection).
+	if expectedNonce != "" {
+		if nonce, _ := claims["nonce"].(string); nonce != expectedNonce {
+			return fmt.Errorf("id_token nonce mismatch")
+		}
+	}
+
+	return nil
+}
+
+func (h *IdPHandler) parseIDTokenClaims(idToken string, cfg *model.OAuthIdPConfig, expectedNonce string) (*idpUserInfo, error) {
+	// The id_token signature is intentionally not verified: per OIDC Core
+	// 3.1.3.7, signature validation MAY be skipped when the token is received
+	// directly from the token endpoint over TLS, which is the case here
+	// (server-to-server authorization-code exchange with client_secret, default
+	// TLS verification). The remaining claim checks are still mandatory and are
+	// enforced by validateIDTokenClaims below.
+	parser := jwt.NewParser()
 	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
 	if err != nil {
 		return nil, fmt.Errorf("parse id_token: %w", err)
@@ -510,6 +579,10 @@ func (h *IdPHandler) parseIDTokenClaims(idToken string) (*idpUserInfo, error) {
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return nil, fmt.Errorf("unexpected claims type")
+	}
+
+	if err := validateIDTokenClaims(claims, cfg, expectedNonce); err != nil {
+		return nil, err
 	}
 
 	return extractUserInfoFromClaims(claims), nil
@@ -544,32 +617,33 @@ func (h *IdPHandler) fetchUserInfo(ctx context.Context, userinfoEndpoint, access
 
 // fetchPrimaryEmail tries to get the user's primary email from a provider's
 // email list endpoint. Derives the URL by appending "/emails" to the userinfo
-// endpoint path (e.g. https://api.github.com/user -> /user/emails). Returns
-// the first primary+verified email, or the first verified email, or the first
-// email in the list.
-func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, accessToken string) (string, error) {
+// endpoint path (e.g. https://api.github.com/user -> /user/emails). It returns
+// the best available address (primary+verified, then any verified, then any
+// email as a last resort) together with whether that address is verified, so
+// the caller's verified-email gate can act on a real signal.
+func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, accessToken string) (email string, verified bool, err error) {
 	u, err := url.Parse(userinfoEndpoint)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/emails"
 	emailsURL := u.String()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("emails endpoint returned %d", resp.StatusCode)
+		return "", false, fmt.Errorf("emails endpoint returned %d", resp.StatusCode)
 	}
 
 	var emails []struct {
@@ -578,11 +652,11 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 		Verified bool   `json:"verified"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&emails); err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	// Prefer primary+verified, then verified, then any.
-	var verified, fallback string
+	// Prefer primary+verified, then any verified, then any email (unverified).
+	var verifiedEmail, fallback string
 	for _, e := range emails {
 		if e.Email == "" {
 			continue
@@ -590,17 +664,17 @@ func (h *IdPHandler) fetchPrimaryEmail(ctx context.Context, userinfoEndpoint, ac
 		if fallback == "" {
 			fallback = e.Email
 		}
-		if e.Verified && verified == "" {
-			verified = e.Email
+		if e.Verified && verifiedEmail == "" {
+			verifiedEmail = e.Email
 		}
 		if e.Primary && e.Verified {
-			return e.Email, nil
+			return e.Email, true, nil
 		}
 	}
-	if verified != "" {
-		return verified, nil
+	if verifiedEmail != "" {
+		return verifiedEmail, true, nil
 	}
-	return fallback, nil
+	return fallback, false, nil
 }
 
 // extractUserInfoFromClaims extracts email and display name from OIDC claims.
@@ -618,6 +692,15 @@ func extractUserInfoFromClaims(claims map[string]any) *idpUserInfo {
 		if familyName, ok := claims["family_name"].(string); ok {
 			info.Name += " " + familyName
 		}
+	}
+
+	// email_verified is a JSON boolean per OIDC, but some providers emit it as
+	// the string "true"/"false". Accept both; absence means unverified.
+	switch v := claims["email_verified"].(type) {
+	case bool:
+		info.EmailVerified = v
+	case string:
+		info.EmailVerified = strings.EqualFold(v, "true")
 	}
 
 	return info
