@@ -377,7 +377,11 @@ func executeCB[T any](cb *CircuitBreaker, fn func() (T, error)) (T, error) {
 		out, e = fn()
 		return e
 	})
-	return out, err
+	// Redact any secret embedded in a URL before the error propagates to the
+	// enrichment/usage log and DB sinks. Every provider slot funnels through
+	// this decorator, so this is the single chokepoint that covers all adapters
+	// (and the CircuitOpenError message, which quotes the last underlying error).
+	return out, redactError(err)
 }
 
 // ---------------------------------------------------------------------------

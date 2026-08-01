@@ -422,12 +422,13 @@ func TestGeminiPingFailure(t *testing.T) {
 	}
 }
 
-func TestGeminiAPIKeyAsQueryParam(t *testing.T) {
-	var receivedKey string
+func TestGeminiAPIKeyAsHeader(t *testing.T) {
+	var receivedHeaderKey, receivedQueryKey string
 
 	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{
 		":generateContent": func(w http.ResponseWriter, r *http.Request) {
-			receivedKey = r.URL.Query().Get("key")
+			receivedHeaderKey = r.Header.Get("x-goog-api-key")
+			receivedQueryKey = r.URL.Query().Get("key")
 
 			// Verify no Authorization header is set.
 			if auth := r.Header.Get("Authorization"); auth != "" {
@@ -464,8 +465,43 @@ func TestGeminiAPIKeyAsQueryParam(t *testing.T) {
 		t.Fatalf("Complete() error: %v", err)
 	}
 
-	if receivedKey != "my-secret-api-key" {
-		t.Errorf("API key = %q, want %q", receivedKey, "my-secret-api-key")
+	// The key must travel in the header, never the URL: a ?key= query parameter
+	// leaks into any *url.Error on a transport failure (SEC-06).
+	if receivedHeaderKey != "my-secret-api-key" {
+		t.Errorf("x-goog-api-key header = %q, want %q", receivedHeaderKey, "my-secret-api-key")
+	}
+	if receivedQueryKey != "" {
+		t.Errorf("key query param = %q, want empty (key must not appear in the URL)", receivedQueryKey)
+	}
+}
+
+// TestGeminiTransportErrorDoesNotLeakKey drives a Gemini request against a closed
+// server so client.Do returns a *url.Error, and asserts the configured key never
+// appears in the error string. Before the header fix the URL carried ?key=<key>
+// and net/http embedded it in the *url.Error (SEC-06).
+func TestGeminiTransportErrorDoesNotLeakKey(t *testing.T) {
+	const key = "my-secret-api-key"
+
+	// Stand a server up only to obtain a routable-then-dead address, then close
+	// it so the dial is refused.
+	srv := newGeminiTestServer(t, map[string]http.HandlerFunc{})
+	baseURL := srv.URL
+	srv.Close()
+
+	p := NewGeminiProvider(GeminiConfig{
+		BaseURL:      baseURL,
+		APIKey:       key,
+		DefaultModel: "gemini-2.0-flash",
+	})
+
+	_, err := p.Complete(context.Background(), &CompletionRequest{
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err == nil {
+		t.Fatal("expected a transport error against the closed server, got nil")
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Errorf("error string leaked the API key: %q", err.Error())
 	}
 }
 

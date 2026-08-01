@@ -13,7 +13,9 @@ import (
 
 // GeminiConfig holds the configuration for a Google Gemini provider.
 type GeminiConfig struct {
-	// APIKey is the API key for authentication (passed as ?key= query parameter).
+	// APIKey is the API key for authentication (sent in the x-goog-api-key
+	// request header, never in the URL, so a transport error's *url.Error cannot
+	// leak it into logs).
 	APIKey string
 
 	// DefaultModel is the default model to use for completions when none is specified.
@@ -29,9 +31,8 @@ type GeminiConfig struct {
 	Timeout time.Duration
 
 	// CustomHeaders are user-configured headers applied to every outbound
-	// request (overriding built-ins except Content-Type). Gemini carries auth
-	// in a query parameter, so these are typically proxy headers. Intended for
-	// proxies/gateways between nram and the provider.
+	// request (overriding built-ins except Content-Type and x-goog-api-key).
+	// Intended for proxies/gateways between nram and the provider.
 	CustomHeaders map[string]string
 
 	// DisableThinking, when true, sends thinkingConfig.thinkingBudget:0 to turn
@@ -43,10 +44,16 @@ type GeminiConfig struct {
 }
 
 // setHeaders sets the standard headers on an outbound request, then applies any
-// user-configured custom headers (Content-Type is reserved).
+// user-configured custom headers (Content-Type and x-goog-api-key are reserved).
+// The API key travels in the x-goog-api-key header (the current Gemini standard;
+// see https://ai.google.dev/gemini-api/docs/api-key) rather than a ?key= query
+// parameter, so a transport-layer *url.Error never embeds the secret.
 func (p *GeminiProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type")
+	if p.config.APIKey != "" {
+		req.Header.Set("x-goog-api-key", p.config.APIKey)
+	}
+	applyCustomHeaders(req, p.config.CustomHeaders, "Content-Type", "x-goog-api-key")
 }
 
 // GeminiProvider implements both LLMProvider and EmbeddingProvider using the
@@ -414,9 +421,6 @@ func (p *GeminiProvider) Dimensions() []int {
 // Ping verifies connectivity by listing models via GET /v1beta/models.
 func (p *GeminiProvider) Ping(ctx context.Context) error {
 	url := p.config.BaseURL + "/v1beta/models"
-	if p.config.APIKey != "" {
-		url += "?key=" + p.config.APIKey
-	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -440,8 +444,9 @@ func (p *GeminiProvider) Ping(ctx context.Context) error {
 
 // ---------- Internal helpers ----------
 
-// doRequest marshals the request body, sends it to the given path with the API
-// key as a query parameter, and unmarshals the response into dest.
+// doRequest marshals the request body, sends it to the given path (the API key
+// is attached by setHeaders as the x-goog-api-key header, not the URL), and
+// unmarshals the response into dest.
 func (p *GeminiProvider) doRequest(ctx context.Context, method, path string, body any, dest any) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -449,9 +454,6 @@ func (p *GeminiProvider) doRequest(ctx context.Context, method, path string, bod
 	}
 
 	url := p.config.BaseURL + path
-	if p.config.APIKey != "" {
-		url += "?key=" + p.config.APIKey
-	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(jsonBody))
 	if err != nil {
