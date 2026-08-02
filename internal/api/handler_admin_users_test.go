@@ -28,6 +28,7 @@ type mockUserAdminStore struct {
 	listAPIKeysFn    func(ctx context.Context, userID uuid.UUID, limit, offset int) ([]model.APIKey, error)
 	generateAPIKeyFn func(ctx context.Context, userID uuid.UUID, name string, scopes []uuid.UUID, expiresAt *time.Time) (*model.APIKey, string, error)
 	revokeAPIKeyFn   func(ctx context.Context, keyID, userID uuid.UUID) error
+	createCalled     bool
 }
 
 func (m *mockUserAdminStore) CountUsers(ctx context.Context) (int, error) {
@@ -42,6 +43,7 @@ func (m *mockUserAdminStore) ListUsers(ctx context.Context, limit, offset int) (
 }
 
 func (m *mockUserAdminStore) CreateUser(ctx context.Context, email, displayName, password, role string, orgID uuid.UUID) (*model.User, error) {
+	m.createCalled = true
 	return m.createUserFn(ctx, email, displayName, password, role, orgID)
 }
 
@@ -213,6 +215,34 @@ func TestAdminUsers_CreateUser_InvalidRole(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var envelope errorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "bad_request" {
+		t.Errorf("expected bad_request, got %+v", envelope.Error)
+	}
+}
+
+func TestAdminUsers_CreateUser_MissingOrg(t *testing.T) {
+	store := &mockUserAdminStore{}
+
+	// No organization_id: every user must belong to an org (the storage layer
+	// resolves the org namespace), so this must 400 up front, not 500 deep in
+	// the store.
+	body := `{"email":"new@example.com","display_name":"New User","password":"securepassword123","role":"member"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/users", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	adminUsersHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.createCalled {
+		t.Error("CreateUser must not be called when organization_id is missing")
 	}
 
 	var envelope errorEnvelope

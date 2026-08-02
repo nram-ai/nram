@@ -18,10 +18,12 @@ import (
 type mockNamespaceStore struct {
 	tree      []NamespaceNode
 	err       error
+	called    bool
 	lastOrgID *uuid.UUID
 }
 
 func (m *mockNamespaceStore) GetNamespaceTree(_ context.Context, orgID *uuid.UUID) ([]NamespaceNode, error) {
+	m.called = true
 	m.lastOrgID = orgID
 	return m.tree, m.err
 }
@@ -88,7 +90,7 @@ func TestAdminNamespacesTreeSuccess(t *testing.T) {
 
 	h := NewAdminNamespacesHandler(NamespaceAdminConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/namespaces/tree", nil)
+	req := tierAReq("/v1/admin/namespaces/tree")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -174,7 +176,7 @@ func TestAdminNamespacesTreeEmpty(t *testing.T) {
 	store := &mockNamespaceStore{tree: nil}
 	h := NewAdminNamespacesHandler(NamespaceAdminConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/namespaces/tree", nil)
+	req := tierAReq("/v1/admin/namespaces/tree")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -199,7 +201,7 @@ func TestAdminNamespacesTreeStoreError(t *testing.T) {
 	store := &mockNamespaceStore{err: errors.New("database unavailable")}
 	h := NewAdminNamespacesHandler(NamespaceAdminConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/namespaces/tree", nil)
+	req := tierAReq("/v1/admin/namespaces/tree")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -282,6 +284,28 @@ func TestAdminNamespacesTreeSelfScope(t *testing.T) {
 			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
 				t.Errorf("expected OrgID = caller's own org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
+		})
+	}
+}
+
+// TestAdminNamespacesTreeNilOrgFailsClosed verifies /v1/namespaces/tree rejects
+// an org-less principal with 403 and never queries the store. Before the fix,
+// SelfScope returned a nil orgID and GetNamespaceTree(nil) returned the entire
+// system's namespace tree.
+func TestAdminNamespacesTreeNilOrgFailsClosed(t *testing.T) {
+	for _, tc := range nilOrgFailsClosedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockNamespaceStore{tree: []NamespaceNode{{Path: "leak"}}}
+			h := NewAdminNamespacesHandler(NamespaceAdminConfig{Store: store})
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/namespaces/tree", nil)
+			if tc.auth != nil {
+				req = req.WithContext(auth.WithContext(req.Context(), tc.auth))
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			assertNilOrgForbidden(t, w, store.called)
 		})
 	}
 }

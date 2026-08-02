@@ -48,7 +48,13 @@ func NewAdminNamespacesHandler(cfg NamespaceAdminConfig) http.HandlerFunc {
 		// Self-tier: caller's own namespace subtree. Admin viewing
 		// /v1/namespaces/tree sees admin's own org subtree, not the entire
 		// system. (Cross-tenant namespace listings live under /v1/admin/orgs.)
-		orgID, _ := SelfScope(auth.FromContext(r.Context()))
+		//
+		// Fail closed for an org-less principal: a nil orgID would return the
+		// entire system's namespace tree.
+		orgID, _, ok := selfScopeOr403(w, auth.FromContext(r.Context()))
+		if !ok {
+			return
+		}
 
 		nodes, err := cfg.Store.GetNamespaceTree(r.Context(), orgID)
 		if err != nil {

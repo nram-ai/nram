@@ -19,11 +19,13 @@ import (
 type mockAnalyticsStore struct {
 	data       *AnalyticsData
 	err        error
+	called     bool
 	lastOrgID  *uuid.UUID
 	lastUserID *uuid.UUID
 }
 
 func (m *mockAnalyticsStore) GetAnalytics(_ context.Context, orgID *uuid.UUID, userID *uuid.UUID) (*AnalyticsData, error) {
+	m.called = true
 	m.lastOrgID = orgID
 	m.lastUserID = userID
 	return m.data, m.err
@@ -79,7 +81,7 @@ func TestAdminAnalytics_Success(t *testing.T) {
 
 	h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/analytics", nil)
+	req := tierAReq("/v1/admin/analytics")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -156,7 +158,7 @@ func TestAdminAnalytics_StoreError(t *testing.T) {
 
 	h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/analytics", nil)
+	req := tierAReq("/v1/admin/analytics")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -190,7 +192,7 @@ func TestAdminAnalytics_EmptyData(t *testing.T) {
 
 	h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/analytics", nil)
+	req := tierAReq("/v1/admin/analytics")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -318,6 +320,30 @@ func TestAdminAnalytics_SelfScope(t *testing.T) {
 			if store.lastUserID == nil || *store.lastUserID != tc.auth.UserID {
 				t.Errorf("expected UserID = caller's user %v, got %v", tc.auth.UserID, store.lastUserID)
 			}
+		})
+	}
+}
+
+// TestAdminAnalytics_NilOrgFailsClosed verifies that an org-less principal
+// (OrgID == uuid.Nil, or a nil AuthContext) is rejected with 403 and never
+// reaches the store. Before the fix, SelfScope returned (nil, nil) for such a
+// caller and the store read that as "global", leaking system-wide, cross-tenant
+// aggregates on the tier-A /v1/analytics route.
+func TestAdminAnalytics_NilOrgFailsClosed(t *testing.T) {
+	for _, tc := range nilOrgFailsClosedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Sentinel data proves nothing leaks even if the store were reached.
+			store := &mockAnalyticsStore{data: &AnalyticsData{MemoryCounts: MemoryCountsData{Total: 999}}}
+			h := NewAdminAnalyticsHandler(AnalyticsConfig{Store: store})
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/analytics", nil)
+			if tc.auth != nil {
+				req = req.WithContext(auth.WithContext(req.Context(), tc.auth))
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			assertNilOrgForbidden(t, w, store.called)
 		})
 	}
 }

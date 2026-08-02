@@ -75,7 +75,12 @@ func NewAdminAnalyticsHandler(cfg AnalyticsConfig) http.HandlerFunc {
 
 		// Self-tier: caller's own data. The widening helper (?org=/?user=)
 		// was removed; admin viewing /v1/analytics gets admin's own analytics.
-		orgID, userID := SelfScope(auth.FromContext(r.Context()))
+		// Fail closed for an org-less principal: (nil, nil) would read as
+		// system-wide in the store.
+		orgID, userID, ok := selfScopeOr403(w, auth.FromContext(r.Context()))
+		if !ok {
+			return
+		}
 		data, err := cfg.Store.GetAnalytics(r.Context(), orgID, userID)
 		if err != nil {
 			slog.Error("api: AdminAnalytics failed", "err", err)

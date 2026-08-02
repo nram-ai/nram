@@ -90,7 +90,14 @@ func NewAdminUsageHandler(cfg UsageConfig) http.HandlerFunc {
 		// own usage (not system-wide). Cross-org usage drill-down moves to
 		// /v1/admin/system/usage and /v1/orgs/{org_id}/usage with their own
 		// handlers.
-		filter.OrgID, filter.UserID = SelfScope(auth.FromContext(r.Context()))
+		//
+		// Fail closed for an org-less principal: a (nil, nil) filter would read
+		// as system-wide usage across every tenant.
+		orgID, userID, ok := selfScopeOr403(w, auth.FromContext(r.Context()))
+		if !ok {
+			return
+		}
+		filter.OrgID, filter.UserID = orgID, userID
 
 		// Project filter allowed for all roles within their resolved scope.
 		if raw := q.Get("project"); raw != "" {

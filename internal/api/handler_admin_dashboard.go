@@ -90,7 +90,13 @@ func NewAdminDashboardHandler(cfg DashboardConfig) http.HandlerFunc {
 		// emit every project name in the org (including other users'), which
 		// is the cross-tenant name leak the org-tier dreaming/enrichment fix
 		// closed at the same time.
-		orgID, userID := SelfScope(auth.FromContext(r.Context()))
+		//
+		// Fail closed for an org-less principal: (nil, nil) would read as
+		// system-wide in the store.
+		orgID, userID, ok := selfScopeOr403(w, auth.FromContext(r.Context()))
+		if !ok {
+			return
+		}
 
 		stats, err := cfg.Store.DashboardStats(r.Context(), orgID, userID)
 		if err != nil {
@@ -133,7 +139,13 @@ func NewAdminActivityHandler(cfg DashboardConfig) http.HandlerFunc {
 		// Self-tier: caller's own activity feed. Admin viewing /v1/activity
 		// sees admin's own activity. Both org and user scope are passed so
 		// the store can attach a content preview for the caller's own memories.
-		orgID, userID := SelfScope(auth.FromContext(r.Context()))
+		//
+		// Fail closed for an org-less principal: (nil, nil) would read as
+		// system-wide in the store.
+		orgID, userID, ok := selfScopeOr403(w, auth.FromContext(r.Context()))
+		if !ok {
+			return
+		}
 
 		events, err := cfg.Store.RecentActivity(r.Context(), limit, orgID, userID)
 		if err != nil {

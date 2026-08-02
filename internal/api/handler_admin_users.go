@@ -255,14 +255,18 @@ func handleAdminCreateUser(w http.ResponseWriter, r *http.Request, cfg UserAdmin
 		return
 	}
 
-	orgID := uuid.Nil
-	if body.OrgID != "" {
-		var err error
-		orgID, err = uuid.Parse(body.OrgID)
-		if err != nil {
-			WriteError(w, ErrBadRequest("invalid org_id"))
-			return
-		}
+	// An organization is required: every user lives under an org namespace, and
+	// the storage layer cannot create a user without one (UserRepo.Create
+	// resolves the org's namespace path). Reject a blank org up front with a 400
+	// instead of letting it fail deep in the store as an opaque 500.
+	if body.OrgID == "" {
+		WriteError(w, ErrBadRequest("organization_id is required"))
+		return
+	}
+	orgID, err := uuid.Parse(body.OrgID)
+	if err != nil {
+		WriteError(w, ErrBadRequest("invalid org_id"))
+		return
 	}
 
 	user, err := cfg.Store.CreateUser(r.Context(), body.Email, body.DisplayName, body.Password, body.Role, orgID)

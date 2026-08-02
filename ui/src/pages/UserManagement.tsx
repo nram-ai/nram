@@ -185,18 +185,22 @@ function CreateUserDialog({
   const [role, setRole] = useState<string>("member");
   const [orgId, setOrgId] = useState<string>(orgs.length > 0 ? orgs[0].id : "");
 
+  const canCreate =
+    email.trim() !== "" &&
+    password.trim() !== "" &&
+    password.length >= 8 &&
+    orgId !== "";
+
   function handleCreate() {
-    if (!email.trim() || !password.trim() || password.length < 8) return;
+    if (!canCreate) return;
     const data: CreateUserRequest = {
       email: email.trim(),
       password: password,
       role,
+      organization_id: orgId,
     };
     if (displayName.trim()) {
       data.display_name = displayName.trim();
-    }
-    if (orgId) {
-      data.organization_id = orgId;
     }
     createMut.mutate(data, { onSuccess: () => onClose() });
   }
@@ -267,20 +271,27 @@ function CreateUserDialog({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-muted-foreground">
-              Organization
+              Organization <span className="text-destructive">*</span>
             </label>
             <select
               className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               value={orgId}
               onChange={(e) => setOrgId(e.target.value)}
             >
-              <option value="">None</option>
+              <option value="" disabled>
+                Select an organization…
+              </option>
               {orgs.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.name}
                 </option>
               ))}
             </select>
+            {orgs.length === 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Create an organization first; every user must belong to one.
+              </p>
+            )}
           </div>
 
           {createMut.isError && (
@@ -301,12 +312,7 @@ function CreateUserDialog({
               type="button"
               className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               onClick={handleCreate}
-              disabled={
-                !email.trim() ||
-                !password.trim() ||
-                password.length < 8 ||
-                createMut.isPending
-              }
+              disabled={!canCreate || createMut.isPending}
             >
               {createMut.isPending ? "Creating..." : "Create"}
             </button>

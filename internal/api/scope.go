@@ -42,13 +42,34 @@ func extractSubPath(path, marker string) string {
 // (tier A). Always pins to (caller's org, caller's user) regardless of role.
 // An administrator viewing /v1/dashboard sees their own data, not their
 // whole org's and certainly not the system's.
-func SelfScope(ac *auth.AuthContext) (orgID, userID *uuid.UUID) {
+//
+// ok reports whether the caller has a resolvable self-scope. A nil
+// AuthContext or a caller whose OrgID is the zero UUID (an org-less principal)
+// returns ok=false with (nil, nil). Callers MUST fail closed on !ok and never
+// pass the (nil, nil) pair to a store: the tier-A stores read (nil, nil) as
+// "global", so treating an org-less caller as self-scoped would fail open to
+// system-wide, cross-tenant data. Genuine system-wide views are the
+// router-gated tier-C /v1/admin/system/* handlers, which do not call SelfScope.
+func SelfScope(ac *auth.AuthContext) (orgID, userID *uuid.UUID, ok bool) {
 	if ac == nil || ac.OrgID == uuid.Nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	o := ac.OrgID
 	u := ac.UserID
-	return &o, &u
+	return &o, &u, true
+}
+
+// selfScopeOr403 is the tier-A fail-closed guard: it resolves the caller's
+// self-scope and, if the caller is org-less (SelfScope ok=false), writes the
+// canonical 403 and returns ok=false so the handler can `return` immediately.
+// Centralizing it keeps one message and one response shape across every tier-A
+// handler instead of re-authoring the guard (and drifting) per call site.
+func selfScopeOr403(w http.ResponseWriter, ac *auth.AuthContext) (orgID, userID *uuid.UUID, ok bool) {
+	orgID, userID, ok = SelfScope(ac)
+	if !ok {
+		WriteError(w, ErrForbidden("user does not have an organization assigned"))
+	}
+	return orgID, userID, ok
 }
 
 // OrgScope reads the {org_id} URL param for tier-B handlers. Returns

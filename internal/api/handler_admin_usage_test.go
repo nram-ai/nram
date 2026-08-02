@@ -20,10 +20,12 @@ import (
 type mockUsageStore struct {
 	report     *UsageReport
 	err        error
+	called     bool
 	lastFilter UsageFilter
 }
 
 func (m *mockUsageStore) QueryUsage(_ context.Context, filter UsageFilter) (*UsageReport, error) {
+	m.called = true
 	m.lastFilter = filter
 	return m.report, m.err
 }
@@ -53,7 +55,7 @@ func TestAdminUsageDefaultParams(t *testing.T) {
 	store := &mockUsageStore{report: defaultUsageReport()}
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage", nil)
+	req := tierAReq("/v1/admin/usage")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -103,11 +105,12 @@ func TestAdminUsageDefaultParams(t *testing.T) {
 	if store.lastFilter.GroupBy != "operation" {
 		t.Errorf("expected group_by operation, got %q", store.lastFilter.GroupBy)
 	}
-	if store.lastFilter.OrgID != nil {
-		t.Error("expected OrgID to be nil")
+	// Self-tier: the filter is pinned to the caller's own org and user.
+	if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != tierATestOrgID {
+		t.Errorf("expected OrgID = caller's org %v, got %v", tierATestOrgID, store.lastFilter.OrgID)
 	}
-	if store.lastFilter.UserID != nil {
-		t.Error("expected UserID to be nil")
+	if store.lastFilter.UserID == nil || *store.lastFilter.UserID != tierATestUserID {
+		t.Errorf("expected UserID = caller's user %v, got %v", tierATestUserID, store.lastFilter.UserID)
 	}
 	if store.lastFilter.ProjectID != nil {
 		t.Error("expected ProjectID to be nil")
@@ -178,7 +181,7 @@ func TestAdminUsageGroupByModel(t *testing.T) {
 	}
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage?group_by=model", nil)
+	req := tierAReq("/v1/admin/usage?group_by=model")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -206,7 +209,7 @@ func TestAdminUsageInvalidGroupBy(t *testing.T) {
 	store := &mockUsageStore{report: defaultUsageReport()}
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage?group_by=invalid", nil)
+	req := tierAReq("/v1/admin/usage?group_by=invalid")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -230,7 +233,7 @@ func TestAdminUsageStoreError(t *testing.T) {
 	store := &mockUsageStore{err: errors.New("database timeout")}
 	h := NewAdminUsageHandler(UsageConfig{Store: store})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usage", nil)
+	req := tierAReq("/v1/admin/usage")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -282,7 +285,7 @@ func TestAdminUsageFromToDates(t *testing.T) {
 	to := time.Date(2026, 2, 28, 23, 59, 59, 0, time.UTC)
 
 	url := "/v1/admin/usage?from=" + from.Format(time.RFC3339) + "&to=" + to.Format(time.RFC3339)
-	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req := tierAReq(url)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -296,12 +299,13 @@ func TestAdminUsageFromToDates(t *testing.T) {
 	if store.lastFilter.To == nil || !store.lastFilter.To.Equal(to) {
 		t.Errorf("expected To %v, got %v", to, store.lastFilter.To)
 	}
-	// No UUID filters should be set.
-	if store.lastFilter.OrgID != nil {
-		t.Error("expected OrgID to be nil")
+	// Self-tier: the caller's own org and user are always pinned; no project
+	// filter is set by this request.
+	if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != tierATestOrgID {
+		t.Errorf("expected OrgID = caller's org %v, got %v", tierATestOrgID, store.lastFilter.OrgID)
 	}
-	if store.lastFilter.UserID != nil {
-		t.Error("expected UserID to be nil")
+	if store.lastFilter.UserID == nil || *store.lastFilter.UserID != tierATestUserID {
+		t.Errorf("expected UserID = caller's user %v, got %v", tierATestUserID, store.lastFilter.UserID)
 	}
 	if store.lastFilter.ProjectID != nil {
 		t.Error("expected ProjectID to be nil")
@@ -397,5 +401,27 @@ func TestAdminUsageQueryParamsIgnoredOnSelfTier(t *testing.T) {
 		if store.lastFilter.OrgID == nil || *store.lastFilter.OrgID != someOrg {
 			t.Errorf("query %q: expected OrgID = caller's org, got %v", q, store.lastFilter.OrgID)
 		}
+	}
+}
+
+// TestAdminUsageNilOrgFailsClosed verifies /v1/usage rejects an org-less
+// principal with 403 and never queries the store. Before the fix, SelfScope
+// returned (nil, nil), producing a filter that read as system-wide usage across
+// every tenant.
+func TestAdminUsageNilOrgFailsClosed(t *testing.T) {
+	for _, tc := range nilOrgFailsClosedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockUsageStore{report: defaultUsageReport()}
+			h := NewAdminUsageHandler(UsageConfig{Store: store})
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/usage", nil)
+			if tc.auth != nil {
+				req = req.WithContext(auth.WithContext(req.Context(), tc.auth))
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			assertNilOrgForbidden(t, w, store.called)
+		})
 	}
 }

@@ -21,22 +21,43 @@ type mockDashboardStore struct {
 	statsErr    error
 	events      []ActivityEvent
 	activityErr error
+	called      bool
 	lastLimit   int
 	lastOrgID   *uuid.UUID
 	lastUserID  *uuid.UUID
 }
 
 func (m *mockDashboardStore) DashboardStats(_ context.Context, orgID, userID *uuid.UUID) (*DashboardStatsData, error) {
+	m.called = true
 	m.lastOrgID = orgID
 	m.lastUserID = userID
 	return m.stats, m.statsErr
 }
 
 func (m *mockDashboardStore) RecentActivity(_ context.Context, limit int, orgID, userID *uuid.UUID) ([]ActivityEvent, error) {
+	m.called = true
 	m.lastLimit = limit
 	m.lastOrgID = orgID
 	m.lastUserID = userID
 	return m.events, m.activityErr
+}
+
+// tierATestOrgID / tierATestUserID are the fixed identity that tierAReq
+// presents, so scope-sensitive assertions can reference the caller's own
+// org/user. Shared across the tier-A handler test files (same package).
+var (
+	tierATestOrgID  = uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	tierATestUserID = uuid.MustParse("22222222-2222-2222-2222-222222222222")
+)
+
+// tierAReq builds a GET request carrying an authenticated, org-bearing
+// administrator context, matching what the RequireAuth middleware guarantees in
+// production. The tier-A handlers reject an org-less / unauthenticated caller
+// with 403, so store-wiring tests must present a real principal.
+func tierAReq(url string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	ac := &auth.AuthContext{UserID: tierATestUserID, OrgID: tierATestOrgID, Role: auth.RoleAdministrator}
+	return req.WithContext(auth.WithContext(req.Context(), ac))
 }
 
 // --- dashboard tests ---
@@ -56,7 +77,7 @@ func TestDashboardReturnsStats(t *testing.T) {
 	}
 
 	h := NewAdminDashboardHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard", nil)
+	req := tierAReq("/v1/admin/dashboard")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -115,7 +136,7 @@ func TestDashboardWithEnrichmentQueue(t *testing.T) {
 	}
 
 	h := NewAdminDashboardHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard", nil)
+	req := tierAReq("/v1/admin/dashboard")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -148,7 +169,7 @@ func TestDashboardStoreError(t *testing.T) {
 	}
 
 	h := NewAdminDashboardHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard", nil)
+	req := tierAReq("/v1/admin/dashboard")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -192,7 +213,7 @@ func TestActivityReturnsEvents(t *testing.T) {
 	}
 
 	h := NewAdminActivityHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/activity", nil)
+	req := tierAReq("/v1/admin/activity")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -235,7 +256,7 @@ func TestActivityCustomLimit(t *testing.T) {
 	}
 
 	h := NewAdminActivityHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/activity?limit=5", nil)
+	req := tierAReq("/v1/admin/activity?limit=5")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -254,7 +275,7 @@ func TestActivityInvalidLimitFallsBackToDefault(t *testing.T) {
 	}
 
 	h := NewAdminActivityHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/activity?limit=abc", nil)
+	req := tierAReq("/v1/admin/activity?limit=abc")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -273,7 +294,7 @@ func TestActivityStoreError(t *testing.T) {
 	}
 
 	h := NewAdminActivityHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/activity", nil)
+	req := tierAReq("/v1/admin/activity")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -296,7 +317,7 @@ func TestActivityLimitCappedAt100(t *testing.T) {
 	}
 
 	h := NewAdminActivityHandler(DashboardConfig{Store: store})
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/activity?limit=500", nil)
+	req := tierAReq("/v1/admin/activity?limit=500")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -389,6 +410,81 @@ func TestDashboardSelfScope(t *testing.T) {
 			if store.lastOrgID == nil || *store.lastOrgID != tc.auth.OrgID {
 				t.Errorf("expected OrgID = caller's own org %v, got %v", tc.auth.OrgID, store.lastOrgID)
 			}
+		})
+	}
+}
+
+// nilOrgFailsClosedCases are the org-less principals that the tier-A handlers
+// must reject with 403 before touching a store.
+var nilOrgFailsClosedCases = []struct {
+	name string
+	auth *auth.AuthContext
+}{
+	{name: "nil-org member", auth: &auth.AuthContext{UserID: uuid.New(), OrgID: uuid.Nil, Role: auth.RoleMember}},
+	{name: "nil-org administrator", auth: &auth.AuthContext{UserID: uuid.New(), OrgID: uuid.Nil, Role: auth.RoleAdministrator}},
+	{name: "no auth context", auth: nil},
+}
+
+func assertNilOrgForbidden(t *testing.T, w *httptest.ResponseRecorder, called bool) {
+	t.Helper()
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	if called {
+		t.Error("store must not be called for an org-less principal")
+	}
+	var resp errorEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error envelope")
+	}
+	if resp.Error.Code != "forbidden" {
+		t.Errorf("expected code forbidden, got %q", resp.Error.Code)
+	}
+	if resp.Error.Message != "user does not have an organization assigned" {
+		t.Errorf("unexpected message: %q", resp.Error.Message)
+	}
+}
+
+// TestDashboardNilOrgFailsClosed verifies /v1/dashboard rejects an org-less
+// principal with 403 and never reaches the store (before the fix, SelfScope
+// returned (nil, nil) and DashboardStats read that as system-wide).
+func TestDashboardNilOrgFailsClosed(t *testing.T) {
+	for _, tc := range nilOrgFailsClosedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockDashboardStore{stats: &DashboardStatsData{TotalMemories: 999}}
+			h := NewAdminDashboardHandler(DashboardConfig{Store: store})
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/dashboard", nil)
+			if tc.auth != nil {
+				req = req.WithContext(auth.WithContext(req.Context(), tc.auth))
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			assertNilOrgForbidden(t, w, store.called)
+		})
+	}
+}
+
+// TestActivityNilOrgFailsClosed verifies /v1/activity rejects an org-less
+// principal with 403 and never reaches the store.
+func TestActivityNilOrgFailsClosed(t *testing.T) {
+	for _, tc := range nilOrgFailsClosedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockDashboardStore{events: []ActivityEvent{{}}}
+			h := NewAdminActivityHandler(DashboardConfig{Store: store})
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/activity", nil)
+			if tc.auth != nil {
+				req = req.WithContext(auth.WithContext(req.Context(), tc.auth))
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			assertNilOrgForbidden(t, w, store.called)
 		})
 	}
 }
