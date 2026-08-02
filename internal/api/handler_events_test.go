@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 	"github.com/nram-ai/nram/internal/observability/metrics"
 )
@@ -32,9 +33,9 @@ func TestEventsHandler_SSEDelivery(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer func() { _ = bus.Close() }()
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
@@ -81,9 +82,9 @@ func TestEventsHandler_ScopeFiltering(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer func() { _ = bus.Close() }()
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events?scope=org/proj", nil).WithContext(ctx)
@@ -124,9 +125,9 @@ func TestEventsHandler_LastEventIDReplay(t *testing.T) {
 	publishTestEvent(t, bus, "evt-b", events.MemoryUpdated, "org/proj")
 	publishTestEvent(t, bus, "evt-c", events.MemoryDeleted, "org/proj")
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
@@ -244,9 +245,9 @@ func TestEventsHandler_FlushesThroughMetricsMiddleware(t *testing.T) {
 	defer func() { _ = bus.Close() }()
 
 	m := metrics.New()
-	handler := metrics.Middleware(m)(NewEventsHandler(bus, 0))
+	handler := metrics.Middleware(m)(NewEventsHandler(bus, 0, emptyAccessCfg()))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
@@ -288,9 +289,9 @@ func TestEventsHandler_ReplayWithScopeFilter(t *testing.T) {
 	publishTestEvent(t, bus, "evt-2", events.MemoryCreated, "other/proj")
 	publishTestEvent(t, bus, "evt-3", events.MemoryUpdated, "org/proj/ns")
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events?scope=org/", nil).WithContext(ctx)

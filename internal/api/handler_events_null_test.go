@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nram-ai/nram/internal/auth"
 	"github.com/nram-ai/nram/internal/events"
 )
 
@@ -19,9 +20,9 @@ func TestEventsHandler_SSE_SanitizedDataLine(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer func() { _ = bus.Close() }()
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
@@ -87,9 +88,9 @@ func TestEventsHandler_SSE_NilDataFieldSanitized(t *testing.T) {
 	bus := events.NewMemoryBus(0, 0)
 	defer func() { _ = bus.Close() }()
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil).WithContext(ctx)
@@ -175,9 +176,9 @@ func TestEventsHandler_SSE_ReplayedEventSanitized(t *testing.T) {
 	// Wait for events to be buffered.
 	time.Sleep(50 * time.Millisecond)
 
-	handler := NewEventsHandler(bus, 0)
+	handler := NewEventsHandler(bus, 0, emptyAccessCfg())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(auth.WithContext(context.Background(), adminCtx()))
 	defer cancel()
 
 	// Connect with Last-Event-ID to trigger replay.

@@ -1312,7 +1312,8 @@ func main() {
 		// SSE events
 		Events: api.NewEventsHandler(eventBus,
 			settingsSvc.ResolveDurationSecondsWithDefault(context.Background(),
-				service.SettingEventsSSEKeepaliveSeconds, "global")),
+				service.SettingEventsSSEKeepaliveSeconds, "global"),
+			projectAccessCfg),
 
 		// MCP server
 		MCP: mcpServer.Handler(),

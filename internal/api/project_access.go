@@ -66,22 +66,10 @@ func CheckProjectOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *aut
 		return ErrNotFound("project not found")
 	}
 
-	// Look up the user to find their org.
-	user, err := cfg.Users.GetByID(ctx, ac.UserID)
-	if err != nil {
-		return ErrForbidden("user not found")
-	}
-
-	// Look up the org to find its namespace.
-	org, err := cfg.Orgs.GetByID(ctx, user.OrgID)
-	if err != nil {
-		return ErrForbidden("org not found")
-	}
-
-	// Look up the org namespace to get its path.
-	orgNS, err := cfg.Namespaces.GetByID(ctx, org.NamespaceID)
-	if err != nil {
-		return ErrForbidden("org namespace not found")
+	// Resolve the caller's org namespace path.
+	orgNSPath, apiErr := resolveCallerOrgNSPath(ctx, cfg, ac)
+	if apiErr != nil {
+		return apiErr
 	}
 
 	// Look up the project namespace to get its path.
@@ -92,8 +80,79 @@ func CheckProjectOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *aut
 
 	// The project is in the user's org if the project's namespace path
 	// starts with the org's namespace path.
-	if !strings.HasPrefix(projectNS.Path, orgNS.Path) {
+	if !strings.HasPrefix(projectNS.Path, orgNSPath) {
 		return ErrForbidden("access denied: project belongs to a different organization")
+	}
+
+	return nil
+}
+
+// resolveCallerOrgNSPath resolves the namespace path of the organization that
+// the caller belongs to (user → org → org namespace). It is the shared identity
+// half of the org-ownership check: CheckProjectOrgAccess and
+// CheckNamespaceOrgAccess both call it, then compare their own target path
+// against the returned org path with strings.HasPrefix.
+//
+// Callers must handle the nil-ac and administrator cases before calling; this
+// helper assumes a non-nil, non-administrator ac. On any lookup failure it
+// returns the matching *APIError.
+func resolveCallerOrgNSPath(ctx context.Context, cfg ProjectAccessConfig, ac *auth.AuthContext) (string, *APIError) {
+	// Look up the user to find their org.
+	user, err := cfg.Users.GetByID(ctx, ac.UserID)
+	if err != nil {
+		return "", ErrForbidden("user not found")
+	}
+
+	// Look up the org to find its namespace.
+	org, err := cfg.Orgs.GetByID(ctx, user.OrgID)
+	if err != nil {
+		return "", ErrForbidden("org not found")
+	}
+
+	// Look up the org namespace to get its path.
+	orgNS, err := cfg.Namespaces.GetByID(ctx, org.NamespaceID)
+	if err != nil {
+		return "", ErrForbidden("org namespace not found")
+	}
+
+	return orgNS.Path, nil
+}
+
+// CheckNamespaceOrgAccess enforces the org-level ownership rule for a single
+// namespace: administrators are always allowed; every other role is allowed only
+// when the target namespace's path begins with the caller's org namespace path
+// (i.e. the namespace belongs to the same org). It returns nil on success, an
+// *APIError (ErrNotFound when the namespace is missing, ErrForbidden otherwise)
+// on failure.
+//
+// This mirrors CheckProjectOrgAccess for scopes that identify a namespace
+// directly (e.g. the "namespace:<uuid>" scope carried by enrichment job events).
+func CheckNamespaceOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *auth.AuthContext, namespaceID uuid.UUID) *APIError {
+	if ac == nil {
+		return ErrForbidden("unauthorized")
+	}
+
+	// Administrators have global access.
+	if ac.Role == auth.RoleAdministrator {
+		return nil
+	}
+
+	// Look up the target namespace to get its path.
+	targetNS, err := cfg.Namespaces.GetByID(ctx, namespaceID)
+	if err != nil {
+		return ErrNotFound("namespace not found")
+	}
+
+	// Resolve the caller's org namespace path.
+	orgNSPath, apiErr := resolveCallerOrgNSPath(ctx, cfg, ac)
+	if apiErr != nil {
+		return apiErr
+	}
+
+	// The namespace belongs to the user's org if its path starts with the
+	// org's namespace path.
+	if !strings.HasPrefix(targetNS.Path, orgNSPath) {
+		return ErrForbidden("access denied: namespace belongs to a different organization")
 	}
 
 	return nil
