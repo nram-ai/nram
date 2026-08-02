@@ -194,6 +194,116 @@ func TestAdminSettingsListSettingsWithScope(t *testing.T) {
 	}
 }
 
+// secretSchemas is the schema set used by the secret-masking tests: one
+// secret-typed key, one plain string key, and a second secret key used to check
+// the empty-value path.
+func secretSchemas() []SettingSchema {
+	return []SettingSchema{
+		{Key: "qdrant.api_key", Type: "secret"},
+		{Key: "qdrant.addr", Type: "string"},
+		{Key: "empty.secret", Type: "secret"},
+	}
+}
+
+func TestAdminSettingsListSettings_MasksSecretValues(t *testing.T) {
+	store := &mockSettingsAdminStore{
+		settings: []model.Setting{
+			{Key: "qdrant.api_key", Value: json.RawMessage(`"super-secret-plaintext"`), Scope: "global"},
+			{Key: "qdrant.addr", Value: json.RawMessage(`"vector-host:6334"`), Scope: "global"},
+			{Key: "empty.secret", Value: json.RawMessage(`""`), Scope: "global"},
+		},
+		schemas: secretSchemas(),
+	}
+
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/settings", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	// The plaintext secret must never appear anywhere in the response body.
+	if strings.Contains(w.Body.String(), "super-secret-plaintext") {
+		t.Fatalf("plaintext secret leaked in response: %s", w.Body.String())
+	}
+
+	var resp model.PaginatedResponse[model.Setting]
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byKey := map[string]json.RawMessage{}
+	for _, s := range resp.Data {
+		byKey[s.Key] = s.Value
+	}
+	if got := string(byKey["qdrant.api_key"]); got != `"__redacted__"` {
+		t.Errorf("secret value should be masked to the sentinel, got %s", got)
+	}
+	if got := string(byKey["qdrant.addr"]); got != `"vector-host:6334"` {
+		t.Errorf("non-secret value must be returned verbatim, got %s", got)
+	}
+	if got := string(byKey["empty.secret"]); got != `""` {
+		t.Errorf("empty secret must stay empty (unset), got %s", got)
+	}
+}
+
+func TestAdminSettingsUpdate_RejectsSecretRedactionSentinel(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: secretSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"qdrant.api_key","value":"__redacted__","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "" {
+		t.Error("UpdateSetting must not be called when the sentinel is rejected")
+	}
+	if !strings.Contains(w.Body.String(), "redaction placeholder") {
+		t.Errorf("error should explain the placeholder rejection; got %s", w.Body.String())
+	}
+}
+
+func TestAdminSettingsUpdate_AcceptsSecretRealValue(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: secretSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"qdrant.api_key","value":"real-new-key","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "qdrant.api_key" {
+		t.Errorf("expected UpdateSetting called for qdrant.api_key, got %q", store.updatedKey)
+	}
+	if string(store.updatedValue) != `"real-new-key"` {
+		t.Errorf("expected the real value persisted, got %s", store.updatedValue)
+	}
+}
+
+func TestAdminSettingsUpdate_SecretEmptyClears(t *testing.T) {
+	store := &mockSettingsAdminStore{schemas: secretSchemas()}
+	h := NewAdminSettingsHandler(SettingsAdminConfig{Store: store})
+	body := `{"key":"qdrant.api_key","value":"","scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/admin/settings", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (empty clears the secret), got %d; body: %s", w.Code, w.Body.String())
+	}
+	if store.updatedKey != "qdrant.api_key" || string(store.updatedValue) != `""` {
+		t.Errorf("expected empty value persisted to clear the secret, got key=%q value=%s", store.updatedKey, store.updatedValue)
+	}
+}
+
 func TestAdminSettingsGetSchema(t *testing.T) {
 	store := &mockSettingsAdminStore{
 		schemas: []SettingSchema{

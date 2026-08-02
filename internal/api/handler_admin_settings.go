@@ -27,6 +27,19 @@ import (
 // both sides have to grow together.
 const settingsListMaxLimit = 500
 
+// secretRedactionSentinel is returned in place of a configured secret-typed
+// setting's value on GET /admin/settings. It is non-empty so the UI still
+// renders the field as "configured", but it reveals nothing about the stored
+// secret. A PUT carrying this exact value is rejected (see
+// validateValueAgainstSchema) so a client that echoes a masked read cannot
+// clobber the stored secret with the placeholder.
+const secretRedactionSentinel = "__redacted__"
+
+// secretRedactionValue is the JSON-encoded form of secretRedactionSentinel,
+// substituted for a secret setting's Value before serialization. Derived from
+// the sentinel so the string form and the JSON form can never drift.
+var secretRedactionValue = json.RawMessage(strconv.Quote(secretRedactionSentinel))
+
 // SettingsAdminStore abstracts storage operations for the settings admin API.
 type SettingsAdminStore interface {
 	CountSettings(ctx context.Context, scope string) (int, error)
@@ -303,6 +316,28 @@ func handleListSettings(w http.ResponseWriter, r *http.Request, cfg SettingsAdmi
 		settings = []model.Setting{}
 	}
 
+	// Redact secret-typed values before they reach the wire. The set of secret
+	// keys is derived from the schema (Type == "secret"), so a newly registered
+	// secret key is covered automatically rather than by a hardcoded list. Fail
+	// closed: if the schema cannot be read we cannot tell which keys are secret,
+	// so we refuse to serialize rather than risk leaking one.
+	schemas, err := cfg.Store.GetSettingsSchema(r.Context())
+	if err != nil {
+		WriteError(w, mapSettingsError(err))
+		return
+	}
+	secretKeys := make(map[string]struct{})
+	for i := range schemas {
+		if schemas[i].Type == "secret" {
+			secretKeys[schemas[i].Key] = struct{}{}
+		}
+	}
+	for i := range settings {
+		if _, ok := secretKeys[settings[i].Key]; ok && isNonEmptyJSONString(settings[i].Value) {
+			settings[i].Value = secretRedactionValue
+		}
+	}
+
 	writeJSON(w, http.StatusOK, model.PaginatedResponse[model.Setting]{
 		Data: settings,
 		Pagination: model.Pagination{
@@ -414,6 +449,16 @@ func validateValueAgainstSchema(ctx context.Context, store SettingsAdminStore, k
 		return nil
 	}
 	switch entry.Type {
+	case "secret":
+		// Reject the redaction placeholder so a client that echoes a masked
+		// read (GET returns secretRedactionSentinel in place of the value)
+		// cannot overwrite the stored secret with the placeholder. An empty
+		// string stays legal: it clears the secret, matching the provider
+		// clear_api_key semantics.
+		if isJSONStringEqual(value, secretRedactionSentinel) {
+			return fmt.Errorf("setting %q: refusing to store the redaction placeholder; re-enter the secret to change it", key)
+		}
+		return nil
 	case "json":
 		return validateJSONSettingValue(entry.Key, value)
 	case "number":
@@ -527,6 +572,32 @@ func validateCostRatesValue(value json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// decodeJSONString decodes raw as a JSON string, returning the value and
+// ok=true; ok=false for any non-string shape. The string analog of
+// decodeNumeric.
+func decodeJSONString(raw json.RawMessage) (string, bool) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// isNonEmptyJSONString reports whether raw is a JSON string with a non-empty
+// value. Used to decide whether a secret setting is configured (mask it) versus
+// unset/empty (leave it as-is). A non-string shape returns false so only real
+// string secrets are masked.
+func isNonEmptyJSONString(raw json.RawMessage) bool {
+	s, ok := decodeJSONString(raw)
+	return ok && s != ""
+}
+
+// isJSONStringEqual reports whether raw is a JSON string equal to want.
+func isJSONStringEqual(raw json.RawMessage, want string) bool {
+	s, ok := decodeJSONString(raw)
+	return ok && s == want
 }
 
 // decodeNumeric tolerates both bare JSON numbers (`0.5`) and JSON-encoded

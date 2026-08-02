@@ -356,6 +356,7 @@ function renderValueInput({
         value={editValue}
         onChange={onChange}
         onKeyDown={onKeyDown}
+        placeholder="Enter a new value to replace it; leave blank to keep the current secret"
         className={INPUT_CLASS}
       />
     );
@@ -523,9 +524,13 @@ function InlineSettingEditor({
   }, [currentValue, schema.default_value]);
 
   const startEdit = useCallback(() => {
-    setEditValue(formatValue(currentValue));
+    // Secret fields never echo their (masked) current value into the input: the
+    // server returns only a redaction sentinel, and pre-filling it would let a
+    // save round-trip the sentinel back over the real secret. Start blank; a
+    // blank submit is treated as "keep the current value".
+    setEditValue(schema.type === "secret" ? "" : formatValue(currentValue));
     setEditing(true);
-  }, [currentValue]);
+  }, [currentValue, schema.type]);
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -534,6 +539,13 @@ function InlineSettingEditor({
   }, [editing]);
 
   const handleSave = useCallback(() => {
+    // A blank submit on a secret means "leave the stored value unchanged": the
+    // input starts empty, so saving without typing must not clear or clobber
+    // the configured secret. (Clearing a secret is done via Reset.)
+    if (schema.type === "secret" && editValue.trim() === "") {
+      setEditing(false);
+      return;
+    }
     const parsed = parseValue(editValue, schema.type);
     onSave(schema.key, parsed);
     setEditing(false);
@@ -642,6 +654,15 @@ function InlineSettingEditor({
 
   // Display mode
   if (!editing) {
+    const formatted = formatValue(currentValue);
+    const displayText =
+      schema.type === "secret"
+        ? formatted.length > 0
+          ? "••••••••"
+          : "(not set)"
+        : formatted.length > 60
+          ? formatted.slice(0, 60) + "..."
+          : formatted;
     return (
       <div className={`flex items-start justify-between py-3 gap-4 ${rowAccent}`}>
         <div className="flex-1 min-w-0">
@@ -663,13 +684,7 @@ function InlineSettingEditor({
                 : "font-mono"
             }`}
           >
-            {schema.type === "secret" && formatValue(currentValue).length > 0
-              ? formatValue(currentValue).length > 4
-                ? "••••••••" + formatValue(currentValue).slice(-4)
-                : "••••••••"
-              : formatValue(currentValue).length > 60
-                ? formatValue(currentValue).slice(0, 60) + "..."
-                : formatValue(currentValue)}
+            {displayText}
           </code>
           <button
             type="button"

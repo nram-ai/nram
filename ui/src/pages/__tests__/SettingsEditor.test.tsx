@@ -244,6 +244,93 @@ describe("SettingsEditor tabs + search", () => {
     expect(defaultRow).not.toHaveTextContent("Modified");
   });
 
+  // --- Secret-typed settings ---
+  //
+  // The server masks secret values on read (returns a redaction sentinel, not
+  // the real value). The editor must render "configured" without leaking the
+  // sentinel, start the edit input blank, treat a blank save as "keep", and
+  // send a newly typed value on save.
+  // Category "auth" carries no trailing operator block (unlike "qdrant", which
+  // renders VectorMigrationBlock and would need a QueryClientProvider), so the
+  // secret-input behavior is exercised in isolation.
+  const SECRET_SCHEMA = {
+    key: "qdrant.api_key",
+    type: "secret",
+    default_value: "",
+    description: "API key for authenticating to Qdrant.",
+    category: "auth",
+  };
+  const SECRET_GROUP = {
+    id: "auth",
+    label: "Authentication",
+    subsections: [{ category: "auth", label: "Auth" }],
+  };
+  function mockConfiguredSecret() {
+    useSettingsSchemaMock.mockReturnValue(loaded({ data: [SECRET_SCHEMA] }));
+    useSettingGroupsMock.mockReturnValue(loaded({ data: [SECRET_GROUP] }));
+    // Value is the sentinel the server returns for a configured secret.
+    useSettingsMock.mockReturnValue(
+      loaded({
+        data: [
+          {
+            key: "qdrant.api_key",
+            value: "__redacted__",
+            scope: "global",
+            updated_at: "2026-06-01T00:00:00Z",
+          },
+        ],
+      }),
+    );
+  }
+
+  it("renders a configured secret as masked dots, never the value the server sent", () => {
+    mockConfiguredSecret();
+    renderPage("/settings?group=auth");
+
+    expect(screen.getByText("qdrant.api_key")).toBeInTheDocument();
+    expect(screen.getByText("••••••••")).toBeInTheDocument();
+    // The (already masked) sentinel value must not appear in the DOM.
+    expect(screen.queryByText("__redacted__")).not.toBeInTheDocument();
+  });
+
+  it("starts the secret edit input blank and a blank save does not call the update mutation", () => {
+    const mutate = vi.fn();
+    useUpdateSettingMock.mockReturnValue({ mutate, isPending: false } as never);
+    mockConfiguredSecret();
+    renderPage("/settings?group=auth");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const input = document.querySelector(
+      'input[type="password"]',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    // Never pre-filled with the masked value: a blank field can't clobber the secret.
+    expect(input!.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("saves a newly typed secret value", () => {
+    const mutate = vi.fn();
+    useUpdateSettingMock.mockReturnValue({ mutate, isPending: false } as never);
+    mockConfiguredSecret();
+    renderPage("/settings?group=auth");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const input = document.querySelector(
+      'input[type="password"]',
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "new-api-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0][0]).toMatchObject({
+      key: "qdrant.api_key",
+      value: "new-api-key",
+    });
+  });
+
   // A category can carry an operator action block beneath its setting rows
   // (GraphMaintenanceBlock under lifecycle, QueryAugmentBackfillBlock under
   // enrichment_query_augment). These must render regardless of which
