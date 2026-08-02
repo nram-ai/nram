@@ -745,6 +745,68 @@ func TestTokenHandler_AuthCodeGrant_ValidPKCE(t *testing.T) {
 	}
 }
 
+func TestTokenHandler_AuthCodeGrant_ClientIDMismatch(t *testing.T) {
+	env := setupOAuthEnv(t)
+	codeVerifier := "verifier_for_client_binding_test"
+	code := createAuthCodeForTokenTest(t, env, codeVerifier)
+
+	// The code was issued to env.client; present a different client_id. RFC 6749
+	// §4.1.3/§5.2 requires the code to be bound to the requesting client.
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://example.com/callback")
+	form.Set("client_id", env.client.ClientID+"-not-me")
+	form.Set("code_verifier", codeVerifier)
+
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	env.server.TokenHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp oauthError
+	_ = json.NewDecoder(rec.Body).Decode(&errResp)
+	if errResp.Error != "invalid_grant" {
+		t.Fatalf("expected error=invalid_grant, got %q", errResp.Error)
+	}
+}
+
+func TestTokenHandler_AuthCodeGrant_NoClientID(t *testing.T) {
+	env := setupOAuthEnv(t)
+	codeVerifier := "verifier_for_no_client_id_test"
+	code := createAuthCodeForTokenTest(t, env, codeVerifier)
+
+	// Omitting client_id entirely must still succeed: PKCE-only public clients
+	// (and the existing dynamically registered MCP clients) may not send it, so
+	// the §4.1.3 binding is enforced only when a client_id is present.
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", "https://example.com/callback")
+	form.Set("code_verifier", codeVerifier)
+
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	env.server.TokenHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp tokenResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode token response: %v", err)
+	}
+	if resp.AccessToken == "" {
+		t.Fatal("expected non-empty access_token")
+	}
+}
+
 func TestTokenHandler_AuthCodeGrant_InvalidPKCE(t *testing.T) {
 	env := setupOAuthEnv(t)
 	codeVerifier := "correct_verifier_string_for_challenge"

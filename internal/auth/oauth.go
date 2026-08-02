@@ -293,6 +293,18 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// RFC 6749 §4.1.3 / §5.2: bind the code to the requesting client. When a
+	// client_id is presented it MUST match the client the code was issued to;
+	// a mismatch means the code was issued to another client. PKCE already binds
+	// the verifier to the code, so this is the explicit spec binding and a
+	// defense-in-depth check. client_id stays optional: confidential clients may
+	// instead authenticate via client_secret below, and existing dynamically
+	// registered MCP clients rely on PKCE and may omit it.
+	if req.ClientID != "" && req.ClientID != authCode.ClientID {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code was issued to a different client")
+		return
+	}
+
 	// Validate client_secret if provided (client_secret_post auth method)
 	if req.ClientSecret != "" {
 		client, err := s.oauthRepo.GetClientByID(r.Context(), authCode.ClientID)
