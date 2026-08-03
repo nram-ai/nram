@@ -287,7 +287,11 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 		return
 	}
 
-	authCode, err := s.oauthRepo.GetAuthCode(r.Context(), req.Code)
+	// Codes are stored hashed (see mintCode); hash the presented code before
+	// every repo lookup / consume so it matches the stored digest.
+	codeHash := hashSecret(req.Code)
+
+	authCode, err := s.oauthRepo.GetAuthCode(r.Context(), codeHash)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "invalid or expired authorization code")
 		return
@@ -321,7 +325,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	// Check expiration
 	if time.Now().UTC().After(authCode.ExpiresAt) {
 		// Consume the expired code
-		_ = s.oauthRepo.ConsumeAuthCode(r.Context(), req.Code)
+		_ = s.oauthRepo.ConsumeAuthCode(r.Context(), codeHash)
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code expired")
 		return
 	}
@@ -358,7 +362,7 @@ func (s *OAuthServer) handleAuthorizationCodeGrant(w http.ResponseWriter, r *htt
 	}
 
 	// Consume the authorization code (single-use)
-	if err := s.oauthRepo.ConsumeAuthCode(r.Context(), req.Code); err != nil {
+	if err := s.oauthRepo.ConsumeAuthCode(r.Context(), codeHash); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code already consumed")
 		return
 	}
@@ -712,6 +716,15 @@ func generateRandomString(byteLen int) string {
 func hashSecret(secret string) string {
 	h := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(h[:])
+}
+
+// HashSecret returns the at-rest hash used for OAuth client secrets and
+// authorization codes. It is exported so callers outside package auth (the
+// self-service OAuth-client handler in package api) store the exact digest the
+// token endpoint compares against, rather than a raw secret that could never
+// authenticate.
+func HashSecret(secret string) string {
+	return hashSecret(secret)
 }
 
 // containsString checks if a string slice contains a specific value.

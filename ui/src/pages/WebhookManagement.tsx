@@ -27,20 +27,21 @@ interface WebhookFormData {
 // Constants
 // ---------------------------------------------------------------------------
 
+// These are exactly the event types the server actually publishes to the event
+// bus (see internal/events/event.go emit sites). Advertising names the backend
+// never emits (the previous memory.stored / memory.recalled / memory.forgotten
+// and the entity.* / relationship.created entries) produced webhook
+// subscriptions that silently never fired.
 const ALL_EVENT_TYPES = [
-  { value: "memory.stored", label: "memory.stored", group: "Memory" },
+  { value: "memory.created", label: "memory.created", group: "Memory" },
   { value: "memory.updated", label: "memory.updated", group: "Memory" },
   { value: "memory.deleted", label: "memory.deleted", group: "Memory" },
-  { value: "memory.recalled", label: "memory.recalled", group: "Memory" },
   { value: "memory.enriched", label: "memory.enriched", group: "Memory" },
-  { value: "memory.forgotten", label: "memory.forgotten", group: "Memory" },
-  { value: "entity.created", label: "entity.created", group: "Entity" },
-  { value: "entity.updated", label: "entity.updated", group: "Entity" },
-  { value: "relationship.created", label: "relationship.created", group: "Relationship" },
-  { value: "relationship.updated", label: "relationship.updated", group: "Relationship" },
+  { value: "memory.reinforced", label: "memory.reinforced", group: "Memory" },
+  { value: "relationship.reinforced", label: "relationship.reinforced", group: "Relationship" },
 ];
 
-const EVENT_GROUPS = ["Memory", "Entity", "Relationship"] as const;
+const EVENT_GROUPS = ["Memory", "Relationship"] as const;
 
 const EVENT_CHIP_COLORS: Record<string, string> = {
   Memory: "bg-info/10 text-info",

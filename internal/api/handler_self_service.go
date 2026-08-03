@@ -278,10 +278,15 @@ func handleCreateOAuthClient(w http.ResponseWriter, r *http.Request, clients OAu
 		WriteError(w, ErrInternal("failed to generate client secret"))
 		return
 	}
+	// Store the hash, never the raw secret: the token endpoint compares
+	// auth.HashSecret(presented) against the stored value, so a raw secret at
+	// rest could never authenticate (and would sit in the DB in plaintext).
+	// This mirrors the dynamic-registration path in internal/auth/oauth.go.
+	hashedSecret := auth.HashSecret(clientSecret)
 
 	client := &model.OAuthClient{
 		ClientID:     clientID,
-		ClientSecret: &clientSecret,
+		ClientSecret: &hashedSecret,
 		Name:         body.Name,
 		RedirectURIs: body.RedirectURIs,
 		GrantTypes:   body.GrantTypes,

@@ -770,6 +770,11 @@ const (
 	// one protocol or route. Hot-reloadable. See server.HostGuardMiddleware
 	// for the policy and the reason for the default.
 	SettingServerHostRebindingProtection = "server.host_rebinding_protection"
+
+	// SettingServerSecureCookies forces the Secure attribute on the short-lived
+	// nram_session cookie regardless of request-time TLS detection. Resolved
+	// once at process start (cmd/server/main.go), so it requires a restart.
+	SettingServerSecureCookies = "server.secure_cookies"
 )
 
 // Reconsolidation mode values. Default is shadow so the first real deployment
@@ -1467,6 +1472,7 @@ var settingDefaults = map[string]string{
 	// on a single tool call. Operators tune via /admin/settings.
 	SettingMCPMaxResultTokens:            "22000",
 	SettingServerHostRebindingProtection: "false",
+	SettingServerSecureCookies:           "false",
 
 	// Display-only keys: registered in the admin schema for UI completeness
 	// but not yet wired to any consumer. Listed here so the init-time

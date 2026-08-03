@@ -458,6 +458,64 @@ func TestEntityRepo_FindBySimilarity_MultiWordIsLiteral(t *testing.T) {
 	})
 }
 
+// TestEntityRepo_FindBySimilarity_EscapesWildcards pins SEC-22: a caller-
+// supplied SQL LIKE wildcard (% or _) must match literally, not broaden the
+// scan. Without escapeLike + ESCAPE '\', "a_b" would match "axb" and "50%"
+// would match every "50..." name.
+func TestEntityRepo_FindBySimilarity_EscapesWildcards(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewEntityRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		names := func(es []model.Entity) []string {
+			out := make([]string, len(es))
+			for i, e := range es {
+				out[i] = e.Name
+			}
+			return out
+		}
+
+		for _, e := range []*model.Entity{
+			{NamespaceID: nsID, Name: "a_b", Canonical: "a_b", EntityType: "thing", MentionCount: 1},
+			{NamespaceID: nsID, Name: "axb", Canonical: "axb", EntityType: "thing", MentionCount: 1},
+			{NamespaceID: nsID, Name: "50% off", Canonical: "50% off", EntityType: "thing", MentionCount: 1},
+			{NamespaceID: nsID, Name: "50 dollars off", Canonical: "50 dollars off", EntityType: "thing", MentionCount: 1},
+		} {
+			if err := repo.Create(ctx, e); err != nil {
+				t.Fatalf("create %q: %v", e.Name, err)
+			}
+		}
+
+		// "_" is literal, so "a_b" must not match "axb".
+		got, err := repo.FindBySimilarity(ctx, nsID, "a_b", "", 10)
+		if err != nil {
+			t.Fatalf("FindBySimilarity(a_b): %v", err)
+		}
+		if len(got) != 1 || got[0].Name != "a_b" {
+			t.Fatalf(`"a_b" must match only [a_b], got %v`, names(got))
+		}
+
+		// "%" is literal, so "50%" must not match "50 dollars off".
+		got, err = repo.FindBySimilarity(ctx, nsID, "50%", "", 10)
+		if err != nil {
+			t.Fatalf("FindBySimilarity(50%%): %v", err)
+		}
+		if len(got) != 1 || got[0].Name != "50% off" {
+			t.Fatalf(`"50%%" must match only [50%% off], got %v`, names(got))
+		}
+
+		// The multi-token path (SearchEntities) escapes per token too.
+		got, err = repo.SearchEntities(ctx, nsID, "a_b", "", 10)
+		if err != nil {
+			t.Fatalf("SearchEntities(a_b): %v", err)
+		}
+		if len(got) != 1 || got[0].Name != "a_b" {
+			t.Fatalf(`SearchEntities "a_b" must match only [a_b], got %v`, names(got))
+		}
+	})
+}
+
 // TestEntityRepo_SearchEntities_MultiToken pins the agent-facing matcher.
 // SearchEntities tokenizes on whitespace and ORs LIKE clauses across
 // tokens, ranking by name-token-match-count DESC.

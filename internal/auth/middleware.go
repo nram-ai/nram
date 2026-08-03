@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -294,9 +295,22 @@ func writeUnauthorized(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Error(w, msg, http.StatusUnauthorized)
 }
 
-// RequestIsSecure returns true if the request is over TLS or behind an HTTPS proxy.
+// forceSecureCookies, when set, makes RequestIsSecure report true for every
+// request so the nram_session cookie always carries the Secure attribute. It is
+// driven by the server.secure_cookies setting, resolved once at process start.
+var forceSecureCookies atomic.Bool
+
+// SetForceSecureCookies configures whether the Secure cookie attribute is forced
+// on unconditionally (production served over HTTPS) rather than derived per
+// request from TLS / X-Forwarded-Proto. Called once at startup.
+func SetForceSecureCookies(v bool) {
+	forceSecureCookies.Store(v)
+}
+
+// RequestIsSecure returns true if the request is over TLS, behind an HTTPS
+// proxy, or the operator has forced Secure cookies on via server.secure_cookies.
 func RequestIsSecure(r *http.Request) bool {
-	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	return forceSecureCookies.Load() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 // baseURL derives the external base URL from the request's Host header.

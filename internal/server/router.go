@@ -307,6 +307,7 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 	r.Use(api.ErrorMiddleware)
 	r.Use(RequestIDMiddleware)
 	r.Use(SecurityHeadersMiddleware)
+	r.Use(BodyLimitMiddleware)
 	if config.Metrics != nil {
 		r.Use(metrics.Middleware(config.Metrics))
 	}
@@ -447,8 +448,12 @@ func NewRouter(config RouterConfig, handlers Handlers) *chi.Mux {
 			r.Use(CORSMiddleware)
 			r.HandleFunc("/userinfo", handler(handlers.OAuthUserInfo))
 			if handlers.MCP != nil {
-				r.Handle("/mcp", handlers.MCP)
-				r.Handle("/mcp/*", handlers.MCP)
+				// The MCP transport is exempt from the default body limiter
+				// (BodyLimitMiddleware) so it can carry bulk store_batch payloads;
+				// give it an explicit larger cap instead of leaving it unbounded.
+				mcpHandler := MaxBytesHandler(handlers.MCP, bulkMaxBodyBytes)
+				r.Handle("/mcp", mcpHandler)
+				r.Handle("/mcp/*", mcpHandler)
 			}
 		})
 

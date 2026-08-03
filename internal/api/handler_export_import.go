@@ -22,6 +22,11 @@ type ImportServicer interface {
 	Import(ctx context.Context, req *service.ImportRequest) (*service.ImportResponse, error)
 }
 
+// importMaxBodyBytes caps the memory-import upload stream. Import is a bulk
+// endpoint, exempt from the default request-body limiter, so it sets its own
+// (larger) ceiling to keep a single upload from exhausting memory.
+const importMaxBodyBytes int64 = 64 * 1024 * 1024 // 64 MiB
+
 // NewExportHandler returns an http.HandlerFunc that serves
 // GET /v1/projects/{project_id}/memories/export.
 // Supports JSON (default) and NDJSON formats via the ?format= query parameter
@@ -114,6 +119,10 @@ func NewImportHandler(svc ImportServicer) http.HandlerFunc {
 				return
 			}
 		}
+
+		// Cap the streamed import body (this route is exempt from the default
+		// body limiter so it can accept a large export, but not an unbounded one).
+		r.Body = http.MaxBytesReader(w, r.Body, importMaxBodyBytes)
 
 		req := &service.ImportRequest{
 			ProjectID: projectID,

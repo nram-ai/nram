@@ -313,6 +313,54 @@ func TestAuthorizeHandler_ValidPKCE_RedirectsWithCode(t *testing.T) {
 	}
 }
 
+// TestAuthorizeHandler_StoresHashedCode pins SEC-17: the authorization code is
+// stored hashed, so a database read of an unconsumed code cannot be replayed.
+// The raw code goes to the client in the redirect; storage is keyed on its hash.
+func TestAuthorizeHandler_StoresHashedCode(t *testing.T) {
+	env := setupOAuthEnv(t)
+
+	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	codeChallenge := generateCodeChallenge(codeVerifier)
+
+	form := url.Values{}
+	form.Set("client_id", env.client.ClientID)
+	form.Set("redirect_uri", "https://example.com/callback")
+	form.Set("response_type", "code")
+	form.Set("code_challenge", codeChallenge)
+	form.Set("code_challenge_method", "S256")
+	form.Set("state", "xyz123")
+	form.Set("auth_mode", "account")
+	form.Set("decision", "approve")
+
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = req.WithContext(WithContext(req.Context(), &AuthContext{UserID: env.user.ID, Role: env.user.Role}))
+	rec := httptest.NewRecorder()
+
+	env.server.AuthorizeHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("invalid Location header: %v", err)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("expected code in redirect URL")
+	}
+
+	ctx := context.Background()
+	// The raw code must NOT be the stored lookup key.
+	if _, err := env.oauthRepo.GetAuthCode(ctx, code); err == nil {
+		t.Fatal("raw authorization code must not be found by its raw value (it must be stored hashed)")
+	}
+	// The hashed code IS the stored lookup key.
+	if _, err := env.oauthRepo.GetAuthCode(ctx, hashSecret(code)); err != nil {
+		t.Fatalf("hashed authorization code should be found in storage: %v", err)
+	}
+}
+
 // The pre-render validation that used to back GET /authorize now lives at
 // GET /v1/oauth/authorize/context. The React consent page calls it on
 // mount; the tests below exercise the same validation pathway against

@@ -117,10 +117,12 @@ func TestSettingsSchemaRequiresRestart(t *testing.T) {
 		// Per-user and pre-auth per-IP throttle rps/burst: all resolved once at
 		// startup in cmd/server/main.go (auth.NewRateLimiter / NewIPRateLimiter),
 		// so a live edit needs a restart to take effect.
-		service.SettingAPIRateLimitRPS:            {},
-		service.SettingAPIRateLimitBurst:          {},
-		service.SettingAPIAuthRateLimitRPS:        {},
-		service.SettingAPIAuthRateLimitBurst:      {},
+		service.SettingAPIRateLimitRPS:       {},
+		service.SettingAPIRateLimitBurst:     {},
+		service.SettingAPIAuthRateLimitRPS:   {},
+		service.SettingAPIAuthRateLimitBurst: {},
+		// Resolved once at startup into auth.SetForceSecureCookies.
+		service.SettingServerSecureCookies:        {},
 		service.SettingEventsSubscriberBufferSize: {},
 		service.SettingEventsReplayCapacity:       {},
 		service.SettingEventsSSEKeepaliveSeconds:  {},

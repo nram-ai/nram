@@ -615,10 +615,7 @@ func (s *RecallService) Recall(ctx context.Context, req *RecallRequest) (*Recall
 		return s.singleRecall(ctx, req)
 	}
 
-	limit := req.Limit
-	if limit <= 0 {
-		limit = s.recallDefaultLimit(ctx)
-	}
+	limit := s.recallEffectiveLimit(ctx, req.Limit)
 
 	// Assemble the final response from the original query's response (its graph,
 	// coverage gaps, and query embedding), swapping in the interleaved memory list,
@@ -826,10 +823,7 @@ func (s *RecallService) recallSingle(ctx context.Context, req *RecallRequest) (*
 
 	// Apply defaults from the registry (with in-code fallback when settings
 	// hasn't been wired, preserves the test-only constructor path).
-	limit := req.Limit
-	if limit <= 0 {
-		limit = s.recallDefaultLimit(ctx)
-	}
+	limit := s.recallEffectiveLimit(ctx, req.Limit)
 	threshold := req.Threshold
 	graphDepth := req.GraphDepth
 	if graphDepth <= 0 {
@@ -1928,6 +1922,32 @@ func (s *RecallService) recallDefaultLimit(ctx context.Context) int {
 		return GetDefaultInt(SettingRecallDefaultLimit)
 	}
 	return s.settings.ResolveIntWithDefault(ctx, SettingRecallDefaultLimit, "global")
+}
+
+// recallMaxLimit returns the ceiling on how many results one recall may return
+// (recall.max_limit). Falls back to the registered default when settings is nil.
+func (s *RecallService) recallMaxLimit(ctx context.Context) int {
+	if s.settings == nil {
+		return GetDefaultInt(SettingRecallMaxLimit)
+	}
+	return s.settings.ResolveIntWithDefault(ctx, SettingRecallMaxLimit, "global")
+}
+
+// recallEffectiveLimit resolves the page size for a recall: it applies the
+// configured default when the caller passes a non-positive value, then caps the
+// result at recall.max_limit. This is enforced here in the service so both REST
+// recall endpoints are bounded, matching the cap the MCP recall tool already
+// applies at its own layer; an unclamped caller could otherwise request an
+// arbitrarily large page.
+func (s *RecallService) recallEffectiveLimit(ctx context.Context, requested int) int {
+	limit := requested
+	if limit <= 0 {
+		limit = s.recallDefaultLimit(ctx)
+	}
+	if maxLimit := s.recallMaxLimit(ctx); maxLimit > 0 && limit > maxLimit {
+		limit = maxLimit
+	}
+	return limit
 }
 
 // recallGraphDefaultDepth returns the default graph traversal depth when

@@ -16,3 +16,21 @@ export function sameOriginPath(raw: string | null | undefined): string | null {
     return null;
   }
 }
+
+// safeExternalUrl validates a server-supplied ABSOLUTE navigation target (an
+// OAuth redirect_to / callback_url) and returns its normalized href, or null.
+// Unlike sameOriginPath it permits cross-origin targets, because loopback
+// client callbacks are legitimately off-origin; what it enforces is the scheme:
+// only http: and https: are allowed, blocking javascript:, data:, blob:, file:,
+// and other scheme-based XSS / exfiltration vectors. Callers navigate only when
+// this returns non-null and fall back to a manual path otherwise.
+export function safeExternalUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}

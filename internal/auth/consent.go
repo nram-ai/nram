@@ -742,7 +742,12 @@ func (s *OAuthServer) mintCode(ctx context.Context, params authorizeRequestParam
 	code := generateAuthCode()
 	codeChallenge := params.CodeChallenge
 	authCode := &model.OAuthAuthorizationCode{
-		Code:                code,
+		// Store the SHA-256 hash, never the raw code: a database read of an
+		// unconsumed code must not yield a replayable credential. The raw code
+		// is returned to the client below (redirect query + outcome); the token
+		// endpoint hashes the presented code before lookup. Mirrors the
+		// refresh-token handling.
+		Code:                hashSecret(code),
 		ClientID:            params.ClientID,
 		UserID:              userID,
 		RedirectURI:         params.RedirectURI,

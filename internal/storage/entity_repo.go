@@ -636,28 +636,30 @@ func (r *EntityRepo) mergeAliasesToEntity(ctx context.Context, stubID, realID st
 // queries that need tokenized + alias-aware search, use
 // `SearchEntities` instead.
 func (r *EntityRepo) FindBySimilarity(ctx context.Context, namespaceID uuid.UUID, name string, kind string, limit int) ([]model.Entity, error) {
-	pattern := "%" + name + "%"
+	// Escape LIKE/ILIKE wildcards so a caller-supplied % or _ matches literally
+	// rather than broadening the scan; pair with an explicit ESCAPE '\' clause.
+	pattern := "%" + escapeLike(name) + "%"
 
 	var query string
 	var args []any
 
 	if kind != "" {
 		query = selectEntityColumns + ` FROM entities
-			WHERE namespace_id = ? AND entity_type = ? AND name LIKE ? COLLATE NOCASE
+			WHERE namespace_id = ? AND entity_type = ? AND name LIKE ? COLLATE NOCASE ESCAPE '\'
 			ORDER BY mention_count DESC, created_at DESC LIMIT ?`
 		if r.db.Backend() == BackendPostgres {
 			query = selectEntityColumns + ` FROM entities
-				WHERE namespace_id = $1 AND entity_type = $2 AND name ILIKE $3
+				WHERE namespace_id = $1 AND entity_type = $2 AND name ILIKE $3 ESCAPE '\'
 				ORDER BY mention_count DESC, created_at DESC LIMIT $4`
 		}
 		args = []any{namespaceID.String(), kind, pattern, limit}
 	} else {
 		query = selectEntityColumns + ` FROM entities
-			WHERE namespace_id = ? AND name LIKE ? COLLATE NOCASE
+			WHERE namespace_id = ? AND name LIKE ? COLLATE NOCASE ESCAPE '\'
 			ORDER BY mention_count DESC, created_at DESC LIMIT ?`
 		if r.db.Backend() == BackendPostgres {
 			query = selectEntityColumns + ` FROM entities
-				WHERE namespace_id = $1 AND name ILIKE $2
+				WHERE namespace_id = $1 AND name ILIKE $2 ESCAPE '\'
 				ORDER BY mention_count DESC, created_at DESC LIMIT $3`
 		}
 		args = []any{namespaceID.String(), pattern, limit}
@@ -747,9 +749,11 @@ func splitQueryTokens(name string) []string {
 func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID uuid.UUID, tokens []string, kind string, limit int) ([]model.Entity, error) {
 	isPg := r.db.Backend() == BackendPostgres
 
+	// Escape LIKE/ILIKE wildcards in each token so an agent-supplied % or _
+	// matches literally; every token clause below pairs this with ESCAPE '\'.
 	patterns := make([]string, len(tokens))
 	for i, t := range tokens {
-		patterns[i] = "%" + t + "%"
+		patterns[i] = "%" + escapeLike(t) + "%"
 	}
 
 	var sb strings.Builder
@@ -763,6 +767,16 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 			return fmt.Sprintf("$%d", len(args))
 		}
 		return "?"
+	}
+
+	// matchSuffix writes the collation (SQLite only) and the LIKE escape clause
+	// shared by every token match clause in this builder, so an agent-supplied
+	// % or _ in a token matches literally.
+	matchSuffix := func() {
+		if !isPg {
+			sb.WriteString(" COLLATE NOCASE")
+		}
+		sb.WriteString(` ESCAPE '\'`)
 	}
 
 	args = append(args, namespaceID.String())
@@ -790,9 +804,7 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 			sb.WriteString(" OR ")
 		}
 		fmt.Fprintf(&sb, "e.name %s %s", nameOp, ph())
-		if !isPg {
-			sb.WriteString(" COLLATE NOCASE")
-		}
+		matchSuffix()
 	}
 
 	// Alias EXISTS clause.
@@ -803,9 +815,7 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 			sb.WriteString(" OR ")
 		}
 		fmt.Fprintf(&sb, "ea.alias %s %s", nameOp, ph())
-		if !isPg {
-			sb.WriteString(" COLLATE NOCASE")
-		}
+		matchSuffix()
 	}
 	sb.WriteString(`))`)
 
@@ -819,9 +829,7 @@ func (r *EntityRepo) searchEntitiesMultiToken(ctx context.Context, namespaceID u
 			sb.WriteString(" + ")
 		}
 		fmt.Fprintf(&sb, "(CASE WHEN e.name %s %s", nameOp, ph())
-		if !isPg {
-			sb.WriteString(" COLLATE NOCASE")
-		}
+		matchSuffix()
 		sb.WriteString(" THEN 1 ELSE 0 END)")
 	}
 	sb.WriteString(`) DESC, e.mention_count DESC, e.created_at DESC LIMIT `)

@@ -12,6 +12,7 @@ import {
 import { AuthBrand } from "../components/AuthBrand";
 import { CopyButton } from "../components/CopyButton";
 import { probeReachable } from "../lib/loopbackProbe";
+import { safeExternalUrl } from "../lib/safeRedirect";
 
 type AuthorizeContextState =
   | { status: "loading" }
@@ -116,7 +117,15 @@ function Authorize() {
       .then((result) => {
         if (cancelled) return;
         if ("redirect_to" in result) {
-          window.location.replace(result.redirect_to);
+          const target = safeExternalUrl(result.redirect_to);
+          if (target) {
+            window.location.replace(target);
+          } else {
+            setState({
+              status: "error",
+              message: "The authorization server returned an invalid redirect target.",
+            });
+          }
           return;
         }
         setState({ status: "ready", context: result });
@@ -332,15 +341,15 @@ function AuthorizeReady({ context }: { context: AuthorizeContextResponse }) {
       const result = await oauthAPI.completeAuthorize(
         buildCompleteRequest(mode, "approve", shareToken),
       );
-      let origin = "";
-      try {
-        origin = new URL(result.callback_url).origin;
-      } catch {
-        origin = "";
-      }
+      // Only auto-navigate to a scheme-safe absolute URL (http/https); a
+      // javascript:/data:/etc. callback_url falls through to manual completion.
+      // safeExternalUrl returns a normalized, parseable href (or null), so the
+      // URL parse below cannot throw when safeCallback is non-null.
+      const safeCallback = safeExternalUrl(result.callback_url);
+      const origin = safeCallback ? new URL(safeCallback).origin : "";
       const reachable = origin ? await probeReachable(origin) : false;
-      if (reachable) {
-        window.location.assign(result.callback_url);
+      if (safeCallback && reachable) {
+        window.location.assign(safeCallback);
         return;
       }
       setCompletion({ kind: "manual", result });

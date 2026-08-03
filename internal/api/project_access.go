@@ -78,9 +78,9 @@ func CheckProjectOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *aut
 		return ErrForbidden("project namespace not found")
 	}
 
-	// The project is in the user's org if the project's namespace path
-	// starts with the org's namespace path.
-	if !strings.HasPrefix(projectNS.Path, orgNSPath) {
+	// The project is in the user's org if the project's namespace path is the
+	// org namespace path itself or a descendant of it.
+	if !pathWithinOrg(projectNS.Path, orgNSPath) {
 		return ErrForbidden("access denied: project belongs to a different organization")
 	}
 
@@ -118,6 +118,20 @@ func resolveCallerOrgNSPath(ctx context.Context, cfg ProjectAccessConfig, ac *au
 	return orgNS.Path, nil
 }
 
+// pathWithinOrg reports whether a namespace path is the org namespace path
+// itself or a descendant of it, using a separator-aware boundary. A bare
+// strings.HasPrefix would let one org's path pass as a prefix of a sibling
+// org's when org paths are variable-length slugs (e.g. "acme" prefixing
+// "acmecorp"), granting cross-org access; requiring an exact match or a "/"
+// segment boundary removes that class entirely. The separator is normalized so
+// the check holds whether or not the org path already carries a trailing slash.
+func pathWithinOrg(nsPath, orgNSPath string) bool {
+	if nsPath == orgNSPath {
+		return true
+	}
+	return strings.HasPrefix(nsPath, strings.TrimSuffix(orgNSPath, "/")+"/")
+}
+
 // CheckNamespaceOrgAccess enforces the org-level ownership rule for a single
 // namespace: administrators are always allowed; every other role is allowed only
 // when the target namespace's path begins with the caller's org namespace path
@@ -149,9 +163,9 @@ func CheckNamespaceOrgAccess(ctx context.Context, cfg ProjectAccessConfig, ac *a
 		return apiErr
 	}
 
-	// The namespace belongs to the user's org if its path starts with the
-	// org's namespace path.
-	if !strings.HasPrefix(targetNS.Path, orgNSPath) {
+	// The namespace belongs to the user's org if its path is the org namespace
+	// path itself or a descendant of it.
+	if !pathWithinOrg(targetNS.Path, orgNSPath) {
 		return ErrForbidden("access denied: namespace belongs to a different organization")
 	}
 

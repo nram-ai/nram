@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sameOriginPath } from "./safeRedirect";
+import { sameOriginPath, safeExternalUrl } from "./safeRedirect";
 
 describe("sameOriginPath", () => {
   const origin = window.location.origin;
@@ -43,6 +43,31 @@ describe("sameOriginPath", () => {
     expect(sameOriginPath(`${origin}/settings`)).toBe("/settings");
     expect(sameOriginPath(`${origin}/settings?group=auth#top`)).toBe(
       "/settings?group=auth#top",
+    );
+  });
+});
+
+describe("safeExternalUrl", () => {
+  it("rejects non-http(s) schemes (SEC-28)", () => {
+    expect(safeExternalUrl("javascript:alert(1)")).toBeNull();
+    expect(safeExternalUrl("data:text/html,<script>alert(1)</script>")).toBeNull();
+    expect(safeExternalUrl("blob:https://x/y")).toBeNull();
+    expect(safeExternalUrl("file:///etc/passwd")).toBeNull();
+  });
+
+  it("rejects empty / nullish / non-absolute input", () => {
+    expect(safeExternalUrl("")).toBeNull();
+    expect(safeExternalUrl(null)).toBeNull();
+    expect(safeExternalUrl(undefined)).toBeNull();
+    expect(safeExternalUrl("/relative/path")).toBeNull();
+  });
+
+  it("accepts absolute http/https URLs, including cross-origin loopback callbacks", () => {
+    expect(safeExternalUrl("https://example.com/cb?code=1")).toBe(
+      "https://example.com/cb?code=1",
+    );
+    expect(safeExternalUrl("http://127.0.0.1:52001/callback?code=abc")).toBe(
+      "http://127.0.0.1:52001/callback?code=abc",
     );
   });
 });

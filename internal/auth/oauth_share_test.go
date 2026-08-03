@@ -151,7 +151,9 @@ func TestSharePasteConsent_MintsCodeWithShareID(t *testing.T) {
 		t.Fatal("share consent: no code in redirect URL")
 	}
 
-	authCode, err := f.env.oauthRepo.GetAuthCode(ctx, codeValue)
+	// Codes are stored hashed (SEC-17); look up by the hash of the raw code
+	// that was handed to the client in the redirect.
+	authCode, err := f.env.oauthRepo.GetAuthCode(ctx, hashSecret(codeValue))
 	if err != nil {
 		t.Fatalf("load auth code: %v", err)
 	}

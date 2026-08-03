@@ -1,7 +1,7 @@
 {
   "name": "nram-ui",
   "private": true,
-  "version": "0.18.67",
+  "version": "0.18.68",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,8 +16,6 @@
     "@fontsource/instrument-serif": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fortawesome/fontawesome-svg-core": "^7.2.0",
-    "@fortawesome/free-brands-svg-icons": "^7.2.0",
-    "@fortawesome/free-regular-svg-icons": "^7.2.0",
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-fontawesome": "^3.3.1",
     "@scalar/api-reference": "^1.58.0",

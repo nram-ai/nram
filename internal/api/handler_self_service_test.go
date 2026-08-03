@@ -438,6 +438,54 @@ func TestMeOAuthClients_CreateSuccess(t *testing.T) {
 	}
 }
 
+// TestMeOAuthClients_CreateStoresHashedSecret pins SEC-13: the self-service
+// handler must store the SHA-256 hash of the client secret (so it matches the
+// token endpoint's comparison and never sits in plaintext at rest) while
+// returning the raw secret to the caller exactly once.
+func TestMeOAuthClients_CreateStoresHashedSecret(t *testing.T) {
+	userID := uuid.New()
+	var storedSecret string
+	clients := &mockOAuthClientManager{
+		createClientFn: func(ctx context.Context, client *model.OAuthClient) error {
+			if client.ClientSecret == nil {
+				t.Fatal("expected client_secret on the stored client")
+			}
+			storedSecret = *client.ClientSecret
+			client.ID = uuid.New()
+			client.CreatedAt = time.Now().UTC()
+			return nil
+		},
+	}
+
+	handler := NewMeOAuthClientsHandler(clients)
+	ac := &auth.AuthContext{UserID: userID, Role: "user"}
+	body := map[string]any{
+		"name":          "My App",
+		"redirect_uris": []string{"http://localhost:3000/callback"},
+		"grant_types":   []string{"authorization_code"},
+	}
+
+	w := doSelfServiceRequest(handler, http.MethodPost, "/v1/me/oauth-clients", body, ac)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp createOAuthClientResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.ClientSecret == nil {
+		t.Fatal("expected raw client_secret in response")
+	}
+	raw := *resp.ClientSecret
+	if storedSecret == raw {
+		t.Fatal("stored secret must be hashed, not the raw returned secret")
+	}
+	if storedSecret != auth.HashSecret(raw) {
+		t.Fatalf("stored secret must equal auth.HashSecret(raw)\n stored=%q\n want  =%q", storedSecret, auth.HashSecret(raw))
+	}
+}
+
 func TestMeOAuthClients_DeleteSuccess(t *testing.T) {
 	userID := uuid.New()
 	clientUUID := uuid.New()

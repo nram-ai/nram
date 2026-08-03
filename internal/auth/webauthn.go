@@ -68,6 +68,13 @@ func (u *webauthnUser) WebAuthnCredentials() []webauthn.Credential {
 	return u.creds
 }
 
+// authenticatorCloned reports whether go-webauthn flagged a signature-counter
+// regression on a finished login (a possibly-cloned authenticator). Extracted
+// so the clone-rejection decision is unit-testable without a full ceremony.
+func authenticatorCloned(cred *webauthn.Credential) bool {
+	return cred != nil && cred.Authenticator.CloneWarning
+}
+
 // challengeEntry stores a WebAuthn session between begin/finish.
 type challengeEntry struct {
 	Session   *webauthn.SessionData
@@ -532,6 +539,16 @@ func (h *WebAuthnHandler) LoginFinishHandler() http.HandlerFunc {
 		credential, err := wa.FinishLogin(waUser, *session, r)
 		if err != nil {
 			http.Error(w, "authentication failed: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		// Clone detection (WebAuthn L3 §7.2 step 22): go-webauthn raises
+		// CloneWarning when the presented signature counter did not advance
+		// beyond the stored value while both are non-zero, which indicates a
+		// possibly-cloned authenticator. Reject the login instead of silently
+		// overwriting the stored counter with the regressed value.
+		if authenticatorCloned(credential) {
+			http.Error(w, "authentication failed: authenticator signature counter regression", http.StatusUnauthorized)
 			return
 		}
 

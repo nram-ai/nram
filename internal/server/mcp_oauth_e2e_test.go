@@ -2442,10 +2442,11 @@ func TestE2E_OAuth_ExpiredAuthCode(t *testing.T) {
 	// Get an auth code
 	parts := e2eGetAuthCode(t, env, "Expired Code Test", "http://localhost:3000/callback")
 
-	// Directly update the DB to expire the auth code
+	// Directly update the DB to expire the auth code. Codes are stored hashed
+	// (SEC-17), so key the update on the hash of the raw code.
 	_, err := env.DB.DB().ExecContext(context.Background(),
 		"UPDATE oauth_authorization_codes SET expires_at = ? WHERE code = ?",
-		time.Now().UTC().Add(-1*time.Hour).Format(time.RFC3339), parts.Code)
+		time.Now().UTC().Add(-1*time.Hour).Format(time.RFC3339), auth.HashSecret(parts.Code))
 	if err != nil {
 		t.Fatalf("failed to expire auth code in DB: %v", err)
 	}

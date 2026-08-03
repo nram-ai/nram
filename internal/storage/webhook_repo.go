@@ -22,9 +22,38 @@ func NewWebhookRepo(db DB) *WebhookRepo {
 	return &WebhookRepo{db: db}
 }
 
+// isSafeEventName reports whether an event name contains only unreserved
+// identifier characters. The Postgres path builds a text[] array literal by
+// hand ({a,b,c}); a name carrying a comma, brace, quote, backslash, or
+// whitespace would corrupt that literal or inject extra elements. Restricting
+// names to [A-Za-z0-9._-] closes that class at the storage boundary (the
+// bound-parameter binding already prevents SQL injection; this prevents array
+// corruption). Every event the server emits fits this shape.
+func isSafeEventName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // encodeEvents serializes events for storage.
 // SQLite: JSON array string. Postgres: TEXT[] literal {a,b,c}.
 func (r *WebhookRepo) encodeEvents(events []string) (string, error) {
+	for _, e := range events {
+		if !isSafeEventName(e) {
+			return "", fmt.Errorf("webhook: invalid event name %q (allowed: letters, digits, . _ -)", e)
+		}
+	}
 	if r.db.Backend() == BackendPostgres {
 		return "{" + strings.Join(events, ",") + "}", nil
 	}

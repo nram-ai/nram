@@ -1590,6 +1590,11 @@ func main() {
 		rlCleanup, rlStale)
 	defer authRateLimiter.Stop()
 
+	// Force the Secure attribute on the session cookie when the operator has
+	// enabled it (production over HTTPS), rather than deriving it per-request.
+	auth.SetForceSecureCookies(
+		settingsSvc.ResolveBoolWithDefault(context.Background(), service.SettingServerSecureCookies, "global"))
+
 	routerCfg := buildRouterConfig(routerDeps{
 		Metrics:             promMetrics,
 		AuthMiddleware:      authMiddleware,
@@ -1604,10 +1609,7 @@ func main() {
 	r := server.NewRouter(routerCfg, handlers)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
-	}
+	srv := newHTTPServer(addr, r)
 
 	// Run the server under the kardianos service runtime. Interactively this
 	// installs a SIGINT/SIGTERM handler and drives Start/Stop (graceful
@@ -1622,6 +1624,21 @@ func main() {
 	}
 	if err := svc.Run(); err != nil {
 		log.Fatalf("server runtime error: %v", err)
+	}
+}
+
+// newHTTPServer builds the HTTP server with Slowloris-mitigating timeouts
+// (gosec G112). ReadHeaderTimeout bounds slow-header clients and IdleTimeout
+// bounds idle keep-alive connections. ReadTimeout and WriteTimeout are left at
+// 0 on purpose: a non-zero WriteTimeout would sever the long-lived Server-Sent
+// Events streams on /v1/events, and header+idle bounds are enough to close the
+// slow-drip connection classes without a per-route timeout scheme.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 

@@ -515,3 +515,45 @@ func TestWebhookRepo_ListAll(t *testing.T) {
 		}
 	})
 }
+
+// TestIsSafeEventName / TestWebhookRepo_RejectsUnsafeEventNames pin SEC-23: an
+// event name carrying an array metacharacter (comma, brace, quote, backslash)
+// or whitespace must be rejected before it can corrupt the hand-built Postgres
+// text[] literal.
+func TestIsSafeEventName(t *testing.T) {
+	valid := []string{"memory.created", "relationship.reinforced", "a-b_c.d", "ABC123"}
+	invalid := []string{"", "a,b", "a{b}", `a"b`, "a b", `a\b`, "a\tb", "a/b"}
+	for _, v := range valid {
+		if !isSafeEventName(v) {
+			t.Errorf("isSafeEventName(%q) = false, want true", v)
+		}
+	}
+	for _, iv := range invalid {
+		if isSafeEventName(iv) {
+			t.Errorf("isSafeEventName(%q) = true, want false", iv)
+		}
+	}
+}
+
+func TestWebhookRepo_RejectsUnsafeEventNames(t *testing.T) {
+	forEachDB(t, func(t *testing.T, db DB) {
+		ctx := context.Background()
+		repo := NewWebhookRepo(db)
+		nsID := createTestNamespace(t, ctx, db)
+
+		for _, bad := range []string{"memory.created,extra", "evt{x}", `a"b`, "has space", `back\slash`} {
+			wh := newTestWebhook(nsID)
+			wh.Events = []string{bad}
+			if err := repo.Create(ctx, wh); err == nil {
+				t.Errorf("Create with event name %q: expected error, got nil", bad)
+			}
+		}
+
+		// A valid dotted name still stores fine.
+		wh := newTestWebhook(nsID)
+		wh.Events = []string{"memory.created", "relationship.reinforced"}
+		if err := repo.Create(ctx, wh); err != nil {
+			t.Fatalf("Create with valid events: %v", err)
+		}
+	})
+}
